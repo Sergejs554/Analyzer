@@ -10,3 +10,4 @@ numpy
 resampy
 ffmpeg-python
 aiohttp
+pydub
