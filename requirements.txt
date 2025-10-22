@@ -6,3 +6,4 @@ soundfile
 matplotlib
 pandas
 numpy
+resampy
