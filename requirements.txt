@@ -8,3 +8,5 @@ matplotlib
 pandas
 numpy
 resampy
+ffmpeg-python
+aiohttp
