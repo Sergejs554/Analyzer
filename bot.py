@@ -7,7 +7,28 @@ from aiogram.filters import Command
 
 import numpy as np
 import librosa, pyloudnorm as pyln
+import os, re, sys
 
+# 1) читаем из окружения только BOT_TOKEN
+raw_token = os.getenv("BOT_TOKEN") or ""
+# 2) убираем невидимые символы (zero-width, NBSP, BOM) и пробелы по краям
+clean_token = (raw_token
+               .strip()
+               .replace("\ufeff", "")   # BOM
+               .replace("\u200b", "")   # zero width space
+               .replace("\u2060", "")   # word joiner
+               .replace("\xa0", ""))    # NBSP
+
+# 3) быстрый дебаг в логи (покажем длину и repr, чтобы увидеть лишние символы)
+print(f"[DEBUG] BOT_TOKEN len={len(clean_token)} repr={repr(clean_token)}", flush=True)
+
+# 4) валидируем формат телеграмного токена
+if not re.fullmatch(r"\d+:[A-Za-z0-9_\-]{35,}", clean_token):
+    print("[FATAL] Invalid BOT_TOKEN. Fix env var BOT_TOKEN in Railway.", flush=True)
+    sys.exit(1)
+
+from aiogram import Bot
+bot = Bot(clean_token)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 dp = Dispatcher()
 bot = Bot(BOT_TOKEN)
