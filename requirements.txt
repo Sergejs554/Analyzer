@@ -1,0 +1,8 @@
+flask
+requests
+librosa
+pyloudnorm
+soundfile
+matplotlib
+pandas
+numpy
