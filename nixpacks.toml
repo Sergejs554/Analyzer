@@ -1,3 +1,8 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "python312", "gcc", "libffi", "zlib"]
-[variables]
+nixPkgs = [
+  "ffmpeg",
+  "python312",
+  "gcc",
+  "libffi",
+  "zlib"
+]
