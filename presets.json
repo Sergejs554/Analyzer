@@ -1,0 +1,72 @@
+{
+  "intensity": {
+    "low": {
+      "I": -15.4,
+      "TP": -0.3,
+      "LRA": 6.0,
+      "comp": {
+        "ratio": 1.7,
+        "attack": 25,
+        "release": 160,
+        "threshold_db": -18
+      }
+    },
+    "balanced": {
+      "I": -14.0,
+      "TP": -0.3,
+      "LRA": 6.0,
+      "comp": {
+        "ratio": 2.5,
+        "attack": 20,
+        "release": 140,
+        "threshold_db": -20
+      }
+    },
+    "high": {
+      "I": -12.5,
+      "TP": -0.3,
+      "LRA": 6.0,
+      "comp": {
+        "ratio": 3.2,
+        "attack": 10,
+        "release": 120,
+        "threshold_db": -22
+      }
+    }
+  },
+  "tone": {
+    "warm": {
+      "low_shelf": {
+        "f": 250,
+        "g": 1.0,
+        "width": 1.0
+      },
+      "high_shelf": {
+        "f": 12000,
+        "g": -1.5,
+        "width": 2.0
+      }
+    },
+    "balanced": {
+      "low_shelf": null,
+      "high_shelf": null
+    },
+    "bright": {
+      "low_shelf": {
+        "f": 250,
+        "g": -1.0,
+        "width": 1.0
+      },
+      "high_shelf": {
+        "f": 11000,
+        "g": 2.3,
+        "width": 2.0
+      }
+    }
+  },
+  "defaults": {
+    "intensity": "balanced",
+    "tone": "balanced",
+    "format": "wav16"
+  }
+}
