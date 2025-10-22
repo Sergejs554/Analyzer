@@ -1,4 +1,4 @@
-flask
+aiogram==3.4.1
 requests
 librosa
 pyloudnorm
