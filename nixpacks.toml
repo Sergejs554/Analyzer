@@ -1,2 +1,4 @@
 [phases.setup]
 aptPkgs = ["ffmpeg"]
+[variables]
+PYTHON_VERSION = "3.12.6"
