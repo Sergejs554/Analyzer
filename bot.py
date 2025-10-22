@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os, re, sys, shlex, json, asyncio, tempfile, math
+import os, re, sys, shlex, json, asyncio, tempfile
 from typing import Optional
+
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import Command
 import aiohttp
 
@@ -17,14 +18,15 @@ token = (raw_token.strip()
          .replace("\u2060","").replace("\xa0",""))
 print(f"[DEBUG] BOT_TOKEN len={len(token)} repr={repr(token)}", flush=True)
 if not re.fullmatch(r"\d+:[A-Za-z0-9_\-]{35,}", token):
-    print("[FATAL] Invalid BOT_TOKEN. Fix env var BOT_TOKEN.", flush=True); sys.exit(1)
+    print("[FATAL] Invalid BOT_TOKEN. Fix env var BOT_TOKEN.", flush=True)
+    sys.exit(1)
 
 bot = Bot(token)
 dp = Dispatcher()
 
 # -------- SETTINGS --------
-MAX_TG_FILE_MB = int(os.getenv("MAX_TG_FILE_MB", "19"))        # лимит на скачивание из TG
-MAX_TG_SEND_MB = int(os.getenv("MAX_TG_SEND_MB", "49"))        # лимит на отправку документа в TG
+MAX_TG_FILE_MB = int(os.getenv("MAX_TG_FILE_MB", "19"))   # входящий файл из TG
+MAX_TG_SEND_MB = int(os.getenv("MAX_TG_SEND_MB", "49"))   # исходящий документ в TG
 ALLOWED_EXT = (".mp3", ".wav")
 
 ROOT = os.path.dirname(__file__)
@@ -95,8 +97,7 @@ def choose_presets_auto(I:float, tilt:float):
 # -------- FFMPEG CHAIN --------
 def build_ffmpeg_chain(inten_key: str, tone_key: str):
     """
-    EQ полками (bass/treble) -> компрессор без makeup -> loudnorm.
-    Attack/release в мс, threshold в dB (с 'dB'), ratio > 1.
+    Полки bass/treble -> компрессор (без makeup) -> loudnorm.
     """
     inten = PRESETS["intensity"][inten_key]
     tone  = PRESETS["tone"][tone_key]
@@ -108,24 +109,18 @@ def build_ffmpeg_chain(inten_key: str, tone_key: str):
     if tone.get("high_shelf"):
         hf = tone["high_shelf"]  # {f, width, g}
         eq_parts.append(f"treble=g={hf['g']}:f={hf['f']}:w={hf['width']}")
-
     eq_chain = ",".join(eq_parts) if eq_parts else "anull"
 
-    # ВНИМАНИЕ: без makeup (или makeup=1). Это фикс ошибки.
     comp = inten["comp"]  # {ratio, threshold_db, attack, release}
     acompressor = (
-        f"acompressor="
-        f"ratio={comp['ratio']}:"
+        f"acompressor=ratio={comp['ratio']}:"
         f"threshold={comp['threshold_db']}dB:"
         f"attack={comp['attack']}:"
         f"release={comp['release']}"
     )
-
-    loudnorm = (
-        f"loudnorm=I={inten['I']}:TP={inten['TP']}:LRA={inten['LRA']}:print_format=summary"
-    )
-
+    loudnorm = f"loudnorm=I={inten['I']}:TP={inten['TP']}:LRA={inten['LRA']}:print_format=summary"
     return f"{eq_chain},{acompressor},{loudnorm}"
+
 def output_args(fmt_key:str):
     if fmt_key=="wav16":   return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav"
     if fmt_key=="wav24":   return "-ar 48000 -ac 2 -c:a pcm_s24le", "mastered_uhd.wav"
@@ -133,7 +128,6 @@ def output_args(fmt_key:str):
     return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav"
 
 async def process_audio(in_path: str, out_path: str, intensity: str, tone: str, fmt_key: str):
-    # проверим ffmpeg
     from shutil import which
     if which("ffmpeg") is None:
         raise RuntimeError("ffmpeg not found. Add it in nixpacks.toml (nixPkgs=['ffmpeg']).")
@@ -156,11 +150,9 @@ def gdrive_direct(url:str)->Optional[str]:
     m = GDRIVE_RX.search(url)
     if not m: return None
     file_id = m.group(1)
-    # прямой линк с принудительным скачиванием
     return f"https://drive.google.com/uc?export=download&id={file_id}"
 
 async def http_download(session:aiohttp.ClientSession, url:str, dst_path:str, max_mb:int=256)->int:
-    """Скачивает по HTTP в файл. Возвращает размер в байтах. Ограничим до max_mb."""
     total = 0
     async with session.get(url, timeout=120) as r:
         r.raise_for_status()
@@ -173,18 +165,24 @@ async def http_download(session:aiohttp.ClientSession, url:str, dst_path:str, ma
                 f.write(chunk)
     return total
 
+def _too_big(bytes_size:int, mb:int)->bool:
+    return bytes_size > mb*1024*1024
+
 # -------- HANDLERS --------
 @dp.message(Command("start"))
 async def start(m: Message):
-    USER_STATE[m.from_user.id] = {"intensity": PRESETS["defaults"]["intensity"],
-                                  "tone": PRESETS["defaults"]["tone"],
-                                  "format": PRESETS["defaults"]["format"],
-                                  "auto": True}
+    USER_STATE[m.from_user.id] = {
+        "intensity": PRESETS["defaults"]["intensity"],
+        "tone": PRESETS["defaults"]["tone"],
+        "format": PRESETS["defaults"]["format"],
+        "auto": True
+    }
     await m.answer(
         "Йо! Я — Mr Mastering.\n"
         "Пришли трек **.mp3** или **.wav** (до ~19 MB в Telegram), либо **ссылку** на Google Drive/Dropbox.\n"
         "Форматы вывода: WAV16 / MP3 320 / WAV24.\n"
-        "Auto — включён.", reply_markup=kb_main(m.from_user.id)
+        "Auto — включён.",
+        reply_markup=kb_main(m.from_user.id)
     )
 
 @dp.callback_query(F.data == "menu_intensity")
@@ -222,13 +220,12 @@ async def set_fmt(c):
 @dp.callback_query(F.data == "toggle_auto")
 async def toggle_auto(c):
     st = USER_STATE.get(c.from_user.id, PRESETS["defaults"])
-    st["auto"] = not st.get("auto", False); USER_STATE[c.from_user.id] = st
+    st["auto"] = not st.get("auto", False)
+    USER_STATE[c.from_user.id] = st
     await c.message.edit_text(("🤖 Auto включён. Пришли аудио — выберу Intensity/Tone сам."
                                if st["auto"] else "🤖 Auto выключен. Выбери пресеты и пришли аудио."),
-                              reply_markup=kb_main(c.from_user.id)); await c.answer()
-
-def _too_big(bytes_size:int, mb:int)->bool:
-    return bytes_size > mb*1024*1024
+                              reply_markup=kb_main(c.from_user.id))
+    await c.answer()
 
 @dp.message(F.audio | F.document)
 async def on_audio(m: Message):
@@ -236,14 +233,14 @@ async def on_audio(m: Message):
     if not file: return
     name = (file.file_name or "input").lower()
     if not name.endswith(ALLOWED_EXT):
-        await m.reply("Пришли файл с расширением **.mp3** или **.wav** 🙏"); return
+        await m.reply("Пришли файл с расширением **.mp3** или **.wav** 🙏")
+        return
 
-    # защита от лимита Telegram на скачивание
     size = file.file_size or 0
     if _too_big(size, MAX_TG_FILE_MB):
         await m.reply(
             f"⚠️ Файл **{round(size/1024/1024,1)} MB** слишком большой для Telegram-скачивания.\n"
-            f"Кинь **ссылку** на Google Drive/Dropbox/WeTransfer — я скачаю и сделаю мастеринг."
+            f"Кинь **ссылку** на Google Drive/Dropbox — я скачаю и сделаю мастеринг."
         )
         return
 
@@ -255,6 +252,7 @@ async def on_audio(m: Message):
         with tempfile.TemporaryDirectory() as td:
             in_path = os.path.join(td, name)
             out_path = os.path.join(td, ("mastered.wav" if fmtk.startswith("wav") else "mastered.mp3"))
+
             fobj = await bot.get_file(file.file_id)
             await bot.download_file(fobj.file_path, in_path)
 
@@ -264,42 +262,44 @@ async def on_audio(m: Message):
 
             await process_audio(in_path, out_path, inten, tone, fmtk)
 
-            # если итоговый файл слишком большой для отправки — фоллбэк в mp3
+            # Фоллбэк в mp3, если слишком большой для отправки
             out_size = os.path.getsize(out_path)
             if _too_big(out_size, MAX_TG_SEND_MB):
                 mp3_path = os.path.join(td, "mastered_320.mp3")
-                _, _name = output_args("mp3_320")
                 await process_audio(in_path, mp3_path, inten, tone, "mp3_320")
-                await m.reply_document(open(mp3_path, "rb"),
-                    caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format=MP3 320\n"
-                            f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3 фоллбэк)")
+                await m.reply_document(
+                    FSInputFile(mp3_path, filename="mastered_320.mp3"),
+                    caption=(f"Готово ✅  Intensity={inten}, Tone={tone}, Format=MP3 320\n"
+                             f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)")
+                )
                 return
 
-            await m.reply_document(open(out_path, "rb"),
-                                   caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}")
+            await m.reply_document(
+                FSInputFile(out_path, filename=os.path.basename(out_path)),
+                caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}"
+            )
     except Exception as e:
         await m.reply(f"Ошибка: {e}")
 
 @dp.message(F.text)
 async def on_text(m: Message):
     """Приём ссылок (Google Drive, прямые .mp3/.wav)"""
-    url = m.text.strip()
+    url = (m.text or "").strip()
     if not (is_gdrive(url) or DIRECT_RX.match(url)):
         return  # игнорим обычный текст
 
     await m.reply("Окей, скачиваю по ссылке и делаю мастеринг…")
     try:
-        with tempfile.TemporaryDirectory() as td, aiohttp.ClientSession() as session:
-            # определяем имя
-            in_path = os.path.join(td, "input_from_link")
+        with tempfile.TemporaryDirectory() as td:
+            # имя входного файла по расширению
+            ext = ".mp3" if ".mp3" in url.lower() else ".wav"
+            in_path = os.path.join(td, f"input_from_link{ext}")
+
             if is_gdrive(url):
                 url = gdrive_direct(url) or url
-            # добавим расширение по типу ссылки (по крайней мере mp3/wav)
-            ext = ".mp3" if ".mp3" in url.lower() else ".wav"
-            in_path += ext
 
-            # качаем (ограничим до 256MB на всякий)
-            await http_download(session, url, in_path, max_mb=256)
+            async with aiohttp.ClientSession() as session:
+                await http_download(session, url, in_path, max_mb=256)
 
             st = USER_STATE.get(m.from_user.id) or PRESETS["defaults"]
             inten, tone, fmtk, auto = st["intensity"], st["tone"], st["format"], st.get("auto", True)
@@ -315,18 +315,15 @@ async def on_text(m: Message):
             if _too_big(out_size, MAX_TG_SEND_MB):
                 mp3_path = os.path.join(td, "mastered_320.mp3")
                 await process_audio(in_path, mp3_path, inten, tone, "mp3_320")
-                await m.reply_document(open(mp3_path, "rb"),
-                    caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format=MP3 320\n"
-                            f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3 фоллбэк)")
+                await m.reply_document(
+                    FSInputFile(mp3_path, filename="mastered_320.mp3"),
+                    caption=(f"Готово ✅  Intensity={inten}, Tone={tone}, Format=MP3 320\n"
+                             f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)")
+                )
                 return
 
-                await process_audio(in_path, out_path, inten, tone, fmtk)
-
-            from aiogram.types import FSInputFile
-            out_file = FSInputFile(out_path)
-
             await m.reply_document(
-                document=out_file,
+                FSInputFile(out_path, filename=os.path.basename(out_path)),
                 caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}"
             )
     except Exception as e:
