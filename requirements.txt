@@ -1,3 +1,4 @@
+flask==3.0.3
 aiogram==3.4.1
 requests
 librosa
