@@ -324,7 +324,6 @@ async def on_text(m: Message):
 
 out_file = FSInputFile(out_path)
 await m.reply_document(out_file, caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}")
-                                   caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}")
     except Exception as e:
         await m.reply(f"Ошибка при обработке ссылки: {e}")
 
