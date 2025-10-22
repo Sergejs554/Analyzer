@@ -94,19 +94,51 @@ def choose_presets_auto(I:float, tilt:float):
 
 # -------- FFMPEG CHAIN --------
 def build_ffmpeg_chain(inten_key: str, tone_key: str):
+    """
+    Собираем аудио-цепочку:
+      - tone: полки через ffmpeg-фильтры 'bass' (low-shelf) и 'treble' (high-shelf)
+      - компрессор
+      - loudness нормализация
+    Предполагаем, что в presets.json у полок ключи: f (Hz), width (Hz), g (dB)
+    """
     inten = PRESETS["intensity"][inten_key]
     tone  = PRESETS["tone"][tone_key]
-    eq = []
-    if tone.get("low_shelf"):
-        lf = tone["low_shelf"]; eq.append(f"equalizer=f={lf['f']}:t=l:width={lf['width']}:g={lf['g']}")
-    if tone.get("high_shelf"):
-        hf = tone["high_shelf"]; eq.append(f"equalizer=f={hf['f']}:t=h:width={hf['width']}:g={hf['g']}")
-    eq_chain = ",".join(eq) if eq else "anull"
-    comp = inten["comp"]
-    acompressor = f"acompressor=ratio={comp['ratio']}:threshold={comp['threshold_db']}dB:attack={comp['attack']}:release={comp['release']}:makeup=0"
-    loudnorm = f"loudnorm=I={inten['I']}:TP={inten['TP']}:LRA={inten['LRA']}:print_format=summary"
-    return f"{eq_chain},{acompressor},{loudnorm}"
 
+    eq_parts = []
+
+    # LOW-SHELF -> 'bass'
+    if tone.get("low_shelf"):
+        lf = tone["low_shelf"]
+        # w — ширина полки в Гц; g — усиление в дБ; f — частота среза
+        eq_parts.append(
+            f"bass=g={lf['g']}:f={lf['f']}:w={lf['width']}"
+        )
+
+    # HIGH-SHELF -> 'treble'
+    if tone.get("high_shelf"):
+        hf = tone["high_shelf"]
+        eq_parts.append(
+            f"treble=g={hf['g']}:f={hf['f']}:w={hf['width']}"
+        )
+
+    # Если полок нет — оставляем сигнал без эквализации
+    eq_chain = ",".join(eq_parts) if eq_parts else "anull"
+
+    # Компрессор
+    comp = inten["comp"]
+    acompressor = (
+        f"acompressor=ratio={comp['ratio']}:"
+        f"threshold={comp['threshold_db']}dB:"
+        f"attack={comp['attack']}:release={comp['release']}:makeup=0"
+    )
+
+    # Loudness нормализация
+    loudnorm = (
+        f"loudnorm=I={inten['I']}:TP={inten['TP']}:LRA={inten['LRA']}:print_format=summary"
+    )
+
+    # Итоговая цепочка
+    return f"{eq_chain},{acompressor},{loudnorm}"
 def output_args(fmt_key:str):
     if fmt_key=="wav16":   return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav"
     if fmt_key=="wav24":   return "-ar 48000 -ac 2 -c:a pcm_s24le", "mastered_uhd.wav"
