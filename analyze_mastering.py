@@ -28,9 +28,46 @@ def integrated_loudness_lufs(x, sr):
     return meter.integrated_loudness(x)
 
 def loudness_range_lra(x, sr):
+    """
+    LRA (EBU-approx): 95th - 10th percentile of short-term LUFS (3 s),
+    gated относительно интегрированной громкости (I - 20 LU).
+    """
     meter = pyln.Meter(sr)
-    return meter.loudness_range(x)
 
+    # 1) integrated loudness (для гейта)
+    try:
+        I = meter.integrated_loudness(x)
+    except Exception:
+        I = -23.0  # дефолт, если что-то пойдёт не так
+
+    # 2) короткие окна 3s, шаг 1s
+    win = int(3.0 * sr)
+    hop = int(1.0 * sr)
+    sts = []
+    i = 0
+    while i + win <= len(x):
+        seg = x[i:i+win]
+        try:
+            # используем тот же интегрированный как proxy short-term
+            sts.append(meter.integrated_loudness(seg))
+        except Exception:
+            pass
+        i += hop
+
+    if not sts:
+        return 0.0
+
+    sts = np.array(sts, dtype=float)
+
+    # 3) относительный гейт: > (I - 20 LU)
+    gated = sts[sts > (I - 20.0)]
+    if gated.size < 3:
+        gated = sts  # если слишком мало, считаем по всем
+
+    p10 = float(np.percentile(gated, 10))
+    p95 = float(np.percentile(gated, 95))
+    LRA = max(0.0, p95 - p10)
+    return LRA
 def one_third_octave_centers(sr):
     centers, f = [], 20.0
     step = 2 ** (1/3)
