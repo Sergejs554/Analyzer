@@ -48,12 +48,19 @@ def kb_main(uid):
         [InlineKeyboardButton(text=("✅ Auto ON" if st.get("auto") else "🤖 Auto OFF"), callback_data="toggle_auto")]
     ])
 
+def kb_home():
+    # компактная клавиатура с одной кнопкой
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 Домой", callback_data="go_home")]
+    ])
+
 def kb_intensity():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Low", callback_data="set_intensity_low"),
          InlineKeyboardButton(text="Balanced", callback_data="set_intensity_balanced"),
          InlineKeyboardButton(text="High", callback_data="set_intensity_high")],
-        [InlineKeyboardButton(text="← Back", callback_data="back_main")]
+        [InlineKeyboardButton(text="← Back", callback_data="back_main"),
+         InlineKeyboardButton(text="🏠 Домой", callback_data="go_home")]
     ])
 
 def kb_tone():
@@ -61,7 +68,8 @@ def kb_tone():
         [InlineKeyboardButton(text="Warm", callback_data="set_tone_warm"),
          InlineKeyboardButton(text="Balanced", callback_data="set_tone_balanced"),
          InlineKeyboardButton(text="Bright", callback_data="set_tone_bright")],
-        [InlineKeyboardButton(text="← Back", callback_data="back_main")]
+        [InlineKeyboardButton(text="← Back", callback_data="back_main"),
+         InlineKeyboardButton(text="🏠 Домой", callback_data="go_home")]
     ])
 
 def kb_format():
@@ -69,7 +77,8 @@ def kb_format():
         [InlineKeyboardButton(text="WAV 16-bit", callback_data="set_fmt_wav16")],
         [InlineKeyboardButton(text="MP3 320 kbps", callback_data="set_fmt_mp3_320")],
         [InlineKeyboardButton(text="Ultra HD WAV 24-bit", callback_data="set_fmt_wav24")],
-        [InlineKeyboardButton(text="← Back", callback_data="back_main")]
+        [InlineKeyboardButton(text="← Back", callback_data="back_main"),
+         InlineKeyboardButton(text="🏠 Домой", callback_data="go_home")]
     ])
 
 # -------- ANALYZE --------
@@ -185,29 +194,55 @@ async def start(m: Message):
         reply_markup=kb_main(m.from_user.id)
     )
 
+@dp.message(Command("menu"))
+async def menu_cmd(m: Message):
+    await m.answer("Главное меню:", reply_markup=kb_main(m.from_user.id))
+
+@dp.callback_query(F.data == "go_home")
+async def go_home(c):
+    # перейти в главное меню из любого места
+    await c.message.edit_text("Главное меню:", reply_markup=kb_main(c.from_user.id))
+    await c.answer()
+
 @dp.callback_query(F.data == "menu_intensity")
-async def menu_intensity(c): await c.message.edit_text("Выбери Intensity:", reply_markup=kb_intensity()); await c.answer()
+async def menu_intensity(c):
+    await c.message.edit_text("Выбери Intensity:", reply_markup=kb_intensity())
+    await c.answer()
 
 @dp.callback_query(F.data == "menu_tone")
-async def menu_tone(c): await c.message.edit_text("Выбери Tone:", reply_markup=kb_tone()); await c.answer()
+async def menu_tone(c):
+    await c.message.edit_text("Выбери Tone:", reply_markup=kb_tone())
+    await c.answer()
 
 @dp.callback_query(F.data == "menu_format")
-async def menu_format(c): await c.message.edit_text("Выбери формат вывода:", reply_markup=kb_format()); await c.answer()
+async def menu_format(c):
+    await c.message.edit_text("Выбери формат вывода:", reply_markup=kb_format())
+    await c.answer()
 
 @dp.callback_query(F.data == "back_main")
-async def back_main(c): await c.message.edit_text("Главное меню:", reply_markup=kb_main(c.from_user.id)); await c.answer()
+async def back_main(c):
+    await c.message.edit_text("Главное меню:", reply_markup=kb_main(c.from_user.id))
+    await c.answer()
 
 @dp.callback_query(F.data.startswith("set_intensity_"))
 async def set_intensity(c):
     val = c.data.replace("set_intensity_", "")
     USER_STATE[c.from_user.id]["intensity"] = val
-    await c.message.edit_text(f"Intensity = {val}\nКинь аудио или настрой Tone/Format.", reply_markup=kb_main(c.from_user.id)); await c.answer()
+    await c.message.edit_text(
+        f"Intensity = {val}\nКинь аудио или настрой Tone/Format.",
+        reply_markup=kb_main(c.from_user.id)
+    )
+    await c.answer()
 
 @dp.callback_query(F.data.startswith("set_tone_"))
 async def set_tone(c):
     val = c.data.replace("set_tone_", "")
     USER_STATE[c.from_user.id]["tone"] = val
-    await c.message.edit_text(f"Tone = {val}\nКинь аудио или настрой Intensity/Format.", reply_markup=kb_main(c.from_user.id)); await c.answer()
+    await c.message.edit_text(
+        f"Tone = {val}\nКинь аудио или настрой Intensity/Format.",
+        reply_markup=kb_main(c.from_user.id)
+    )
+    await c.answer()
 
 @dp.callback_query(F.data.startswith("set_fmt_"))
 async def set_fmt(c):
@@ -215,16 +250,23 @@ async def set_fmt(c):
     mapping = {"wav16":"wav16","mp3_320":"mp3_320","wav24":"wav24"}
     key = mapping.get(key, "wav16")
     USER_STATE[c.from_user.id]["format"] = key
-    await c.message.edit_text(f"Output = {label_format(key)}\nКинь аудио.", reply_markup=kb_main(c.from_user.id)); await c.answer()
+    await c.message.edit_text(
+        f"Output = {label_format(key)}\nКинь аудио.",
+        reply_markup=kb_main(c.from_user.id)
+    )
+    await c.answer()
 
 @dp.callback_query(F.data == "toggle_auto")
 async def toggle_auto(c):
     st = USER_STATE.get(c.from_user.id, PRESETS["defaults"])
     st["auto"] = not st.get("auto", False)
     USER_STATE[c.from_user.id] = st
-    await c.message.edit_text(("🤖 Auto включён. Пришли аудио — выберу Intensity/Tone сам."
-                               if st["auto"] else "🤖 Auto выключен. Выбери пресеты и пришли аудио."),
-                              reply_markup=kb_main(c.from_user.id))
+    await c.message.edit_text(
+        ("🤖 Auto включён. Пришли аудио — выберу Intensity/Tone сам."
+         if st["auto"] else
+         "🤖 Auto выключен. Выбери пресеты и пришли аудио."),
+        reply_markup=kb_main(c.from_user.id)
+    )
     await c.answer()
 
 @dp.message(F.audio | F.document)
@@ -233,21 +275,22 @@ async def on_audio(m: Message):
     if not file: return
     name = (file.file_name or "input").lower()
     if not name.endswith(ALLOWED_EXT):
-        await m.reply("Пришли файл с расширением **.mp3** или **.wav** 🙏")
+        await m.reply("Пришли файл с расширением **.mp3** или **.wav** 🙏", reply_markup=kb_home())
         return
 
     size = file.file_size or 0
     if _too_big(size, MAX_TG_FILE_MB):
         await m.reply(
             f"⚠️ Файл **{round(size/1024/1024,1)} MB** слишком большой для Telegram-скачивания.\n"
-            f"Кинь **ссылку** на Google Drive/Dropbox — я скачаю и сделаю мастеринг."
+            f"Кинь **ссылку** на Google Drive/Dropbox — я скачаю и сделаю мастеринг.",
+            reply_markup=kb_home()
         )
         return
 
     st = USER_STATE.get(m.from_user.id) or PRESETS["defaults"]
     inten, tone, fmtk, auto = st["intensity"], st["tone"], st["format"], st.get("auto", True)
 
-    await m.reply("Принял файл. " + ("Анализирую и мастерю…" if auto else "Делаю мастеринг…"))
+    await m.reply("Принял файл. " + ("Анализирую и мастерю…" if auto else "Делаю мастеринг…"), reply_markup=kb_home())
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path = os.path.join(td, name)
@@ -270,16 +313,18 @@ async def on_audio(m: Message):
                 await m.reply_document(
                     FSInputFile(mp3_path, filename="mastered_320.mp3"),
                     caption=(f"Готово ✅  Intensity={inten}, Tone={tone}, Format=MP3 320\n"
-                             f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)")
+                             f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)"),
+                    reply_markup=kb_home()
                 )
                 return
 
             await m.reply_document(
                 FSInputFile(out_path, filename=os.path.basename(out_path)),
-                caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}"
+                caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}",
+                reply_markup=kb_home()
             )
     except Exception as e:
-        await m.reply(f"Ошибка: {e}")
+        await m.reply(f"Ошибка: {e}", reply_markup=kb_home())
 
 @dp.message(F.text)
 async def on_text(m: Message):
@@ -288,7 +333,7 @@ async def on_text(m: Message):
     if not (is_gdrive(url) or DIRECT_RX.match(url)):
         return  # игнорим обычный текст
 
-    await m.reply("Окей, скачиваю по ссылке и делаю мастеринг…")
+    await m.reply("Окей, скачиваю по ссылке и делаю мастеринг…", reply_markup=kb_home())
     try:
         with tempfile.TemporaryDirectory() as td:
             # имя входного файла по расширению
@@ -318,16 +363,18 @@ async def on_text(m: Message):
                 await m.reply_document(
                     FSInputFile(mp3_path, filename="mastered_320.mp3"),
                     caption=(f"Готово ✅  Intensity={inten}, Tone={tone}, Format=MP3 320\n"
-                             f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)")
+                             f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)"),
+                    reply_markup=kb_home()
                 )
                 return
 
             await m.reply_document(
                 FSInputFile(out_path, filename=os.path.basename(out_path)),
-                caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}"
+                caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}",
+                reply_markup=kb_home()
             )
     except Exception as e:
-        await m.reply(f"Ошибка при обработке ссылки: {e}")
+        await m.reply(f"Ошибка при обработке ссылки: {e}", reply_markup=kb_home())
 
 # -------- MAIN --------
 def main():
