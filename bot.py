@@ -31,6 +31,7 @@ dp = Dispatcher()
 MAX_TG_FILE_MB = int(os.getenv("MAX_TG_FILE_MB", "19"))
 MAX_TG_SEND_MB = int(os.getenv("MAX_TG_SEND_MB", "49"))
 ALLOWED_EXT = (".mp3", ".wav")
+VERBOSE = os.getenv("VERBOSE_ANALYSIS", "0") == "1"
 
 ROOT = os.path.dirname(__file__)
 with open(os.path.join(ROOT, "presets.json"), "r", encoding="utf-8") as f:
@@ -83,7 +84,7 @@ def kb_format():
          InlineKeyboardButton(text="🏠 Домой", callback_data="go_home")]
     ])
 
-# -------- ANALYZE --------
+# -------- SIMPLE AUTO (оставляем на случай Auto OFF) --------
 def analyze_lufs_and_tilt(path:str, sr_target=48000):
     y, sr = librosa.load(path, sr=sr_target, mono=True)
     y, _ = librosa.effects.trim(y, top_db=40)
@@ -105,7 +106,128 @@ def choose_presets_auto(I:float, tilt:float):
     intensity = "balanced" if I <= -14.5 else "low"
     return intensity, tone
 
-# -------- FFMPEG CHAIN --------
+# -------- AUTO-PRO (под конкретный трек) --------
+def analyze_track_pro(path: str, sr_target=48000):
+    y, sr = librosa.load(path, sr=sr_target, mono=True)
+    y, _ = librosa.effects.trim(y, top_db=40)
+    if len(y) == 0:
+        raise RuntimeError("Empty audio after trim")
+
+    peak = float(np.max(np.abs(y)))
+    rms = float(np.sqrt(np.mean(y**2)))
+    rms_db = 20*np.log10(rms + 1e-12)
+    tp_dbfs = 20*np.log10(peak + 1e-12)
+
+    meter = pyln.Meter(sr)
+    I = float(meter.integrated_loudness(y))
+
+    S = np.abs(librosa.stft(y, n_fft=8192, hop_length=2048, window="hann"))**2
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=8192)
+    psd = np.mean(S, axis=1) + 1e-18
+    def band_db(lo, hi):
+        idx = np.where((freqs>=lo)&(freqs<hi))[0]
+        return float(10*np.log10(np.mean(psd[idx]))) if idx.size>0 else 0.0
+    lo_db = band_db(150, 300)
+    hi_db = band_db(8000, 12000)
+    tilt = hi_db - lo_db
+
+    sub_db = band_db(20, 40)
+    bass_db = band_db(60, 120)
+    sub_excess = (sub_db - bass_db) > 2.0
+
+    return {"sr": sr, "I": I, "rms_db": rms_db, "tp_dbfs": tp_dbfs, "tilt": tilt, "sub_excess": bool(sub_excess)}
+
+def decide_params_from_analysis(A: dict):
+    I = A["I"]; rms_db = A["rms_db"]; tilt = float(np.clip(A["tilt"], -4.0, 4.0)); sub_excess = A["sub_excess"]
+
+    target_I = float(np.clip(np.interp(I, [-22, -16, -12, -10], [-16, -14.5, -13, -12]), -16.5, -12.0))
+    target_TP = -1.2
+    target_LRA = 6.0
+
+    high_g = float(np.interp(tilt, [-4, 0, 4], [ +2.5, 0.0, -2.5 ]))
+    low_g  = float(np.interp(tilt, [-4, 0, 4], [ -1.5, 0.0, +1.0 ]))
+    hpf = bool(sub_excess)
+
+    if rms_db < -24:
+        ratio = 1.4; thr = rms_db + 6
+    elif rms_db < -20:
+        ratio = 1.6; thr = rms_db + 4
+    elif rms_db < -16:
+        ratio = 1.8; thr = rms_db + 2
+    else:
+        ratio = 2.2; thr = rms_db + 1
+
+    comp = {"ratio": round(ratio, 2), "threshold_db": round(thr, 1), "attack": 20, "release": 180}
+    tone = {
+        "low_shelf":  {"g": round(low_g, 2),  "f": 250,  "width": 1.0},
+        "high_shelf": {"g": round(high_g, 2), "f": 6500, "width": 0.8},
+        "hpf": hpf
+    }
+    return {"loudnorm": {"I": round(target_I,2), "TP": target_TP, "LRA": target_LRA}, "tone": tone, "comp": comp}
+
+def build_chain_from_params(P: dict):
+    tone, comp, ln = P["tone"], P["comp"], P["loudnorm"]
+    eq_parts = []
+    if tone.get("hpf"):
+        eq_parts.append("highpass=f=30:width=0.7")
+    if tone.get("low_shelf"):
+        lf = tone["low_shelf"]
+        eq_parts.append(f"bass=g={lf['g']}:f={lf['f']}:w={lf['width']}")
+    if tone.get("high_shelf"):
+        hf = tone["high_shelf"]
+        eq_parts.append(f"treble=g={hf['g']}:f={hf['f']}:w={hf['width']}")
+    eq_chain = ",".join(eq_parts) if eq_parts else "anull"
+
+    acompressor = (
+        f"acompressor=ratio={comp['ratio']}:"
+        f"threshold={comp['threshold_db']}dB:"
+        f"attack={comp['attack']}:release={comp['release']}"
+    )
+    loudnorm = f"loudnorm=I={ln['I']}:TP={ln['TP']}:LRA={ln['LRA']}:print_format=summary"
+    return f"{eq_chain},{acompressor},{loudnorm}"
+
+async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain_with_loudnorm: str, out_args: str, out_path: str):
+    # убеждаемся, что в цепи есть loudnorm
+    if "loudnorm" not in af_chain_with_loudnorm:
+        raise RuntimeError("Chain must end with loudnorm")
+    # PASS 1
+    pass1_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{af_chain_with_loudnorm}" -f null -'
+    p1 = await asyncio.create_subprocess_shell(pass1_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    _, err1 = await p1.communicate()
+    if p1.returncode != 0:
+        raise RuntimeError("ffmpeg pass1 failed: " + err1.decode("utf-8", errors="ignore"))
+
+    text = err1.decode("utf-8", "ignore")
+    # ищем последний JSON-блок в выводе loudnorm
+    m = re.findall(r"\{(?:[^{}]|(?R))*\}", text)  # грубый поиск блоков {...}
+    if not m:
+        pass2_ln = af_chain_with_loudnorm  # fallback: без measured_*
+    else:
+        try:
+            js = json.loads(m[-1])
+            pass2_ln = af_chain_with_loudnorm
+            # заменим loudnorm=... на measured-вариант
+            # соберём measured_* строку
+            measured = (
+                f"loudnorm=I={js.get('input_i','-14')}:TP={js.get('input_tp','-1.2')}:LRA={js.get('input_lra','7')}:"
+                f"measured_I={js.get('input_i','-14')}:"
+                f"measured_LRA={js.get('input_lra','7')}:"
+                f"measured_TP={js.get('input_tp','-1.2')}:"
+                f"measured_thresh={js.get('input_thresh','-26')}:"
+                f"offset={js.get('target_offset','0')}:print_format=summary"
+            )
+            # заменим последнюю подстроку 'loudnorm=...' в цепи
+            pass2_ln = re.sub(r"loudnorm=[^,]*print_format=summary", measured, af_chain_with_loudnorm)
+        except Exception:
+            pass2_ln = af_chain_with_loudnorm
+
+    pass2_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{pass2_ln}" {out_args} {shlex.quote(out_path)}'
+    p2 = await asyncio.create_subprocess_shell(pass2_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    _, err2 = await p2.communicate()
+    if p2.returncode != 0:
+        raise RuntimeError("ffmpeg pass2 failed: " + err2.decode("utf-8", errors="ignore"))
+
+# -------- ПРЕСЕТНЫЙ FFMPEG (когда Auto выключен) --------
 def build_ffmpeg_chain(inten_key: str, tone_key: str):
     inten = PRESETS["intensity"][inten_key]
     tone  = PRESETS["tone"][tone_key]
@@ -186,7 +308,6 @@ async def setup_menu():
         ],
         scope=BotCommandScopeDefault()
     )
-    # Явно включаем кнопку-меню «Commands»
     await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 # -------- HANDLERS --------
@@ -212,36 +333,29 @@ async def menu_cmd(m: Message):
 
 @dp.message(Command("settings"))
 async def settings_cmd(m: Message):
-    # простой ресет
     USER_STATE[m.from_user.id] = PRESETS["defaults"].copy() | {"auto": True}
     await m.answer("Настройки сброшены. Главное меню:", reply_markup=kb_main(m.from_user.id))
 
 @dp.callback_query(F.data == "go_home")
 async def go_home(c):
-    # Не редактируем исходное сообщение (особенно если это document с подписью),
-    # а присылаем новое — так «Домой» всегда срабатывает.
     await c.message.answer("Главное меню:", reply_markup=kb_main(c.from_user.id))
     await c.answer()
 
 @dp.callback_query(F.data == "menu_intensity")
 async def menu_intensity(c):
-    await c.message.edit_text("Выбери Intensity:", reply_markup=kb_intensity())
-    await c.answer()
+    await c.message.edit_text("Выбери Intensity:", reply_markup=kb_intensity()); await c.answer()
 
 @dp.callback_query(F.data == "menu_tone")
 async def menu_tone(c):
-    await c.message.edit_text("Выбери Tone:", reply_markup=kb_tone())
-    await c.answer()
+    await c.message.edit_text("Выбери Tone:", reply_markup=kb_tone()); await c.answer()
 
 @dp.callback_query(F.data == "menu_format")
 async def menu_format(c):
-    await c.message.edit_text("Выбери формат вывода:", reply_markup=kb_format())
-    await c.answer()
+    await c.message.edit_text("Выбери формат вывода:", reply_markup=kb_format()); await c.answer()
 
 @dp.callback_query(F.data == "back_main")
 async def back_main(c):
-    await c.message.edit_text("Главное меню:", reply_markup=kb_main(c.from_user.id))
-    await c.answer()
+    await c.message.edit_text("Главное меню:", reply_markup=kb_main(c.from_user.id)); await c.answer()
 
 @dp.callback_query(F.data.startswith("set_intensity_"))
 async def set_intensity(c):
@@ -250,8 +364,7 @@ async def set_intensity(c):
     await c.message.edit_text(
         f"Intensity = {val}\nКинь аудио или настрой Tone/Format.",
         reply_markup=kb_main(c.from_user.id)
-    )
-    await c.answer()
+    ); await c.answer()
 
 @dp.callback_query(F.data.startswith("set_tone_"))
 async def set_tone(c):
@@ -260,8 +373,7 @@ async def set_tone(c):
     await c.message.edit_text(
         f"Tone = {val}\nКинь аудио или настрой Intensity/Format.",
         reply_markup=kb_main(c.from_user.id)
-    )
-    await c.answer()
+    ); await c.answer()
 
 @dp.callback_query(F.data.startswith("set_fmt_"))
 async def set_fmt(c):
@@ -272,8 +384,7 @@ async def set_fmt(c):
     await c.message.edit_text(
         f"Output = {label_format(key)}\nКинь аудио.",
         reply_markup=kb_main(c.from_user.id)
-    )
-    await c.answer()
+    ); await c.answer()
 
 @dp.callback_query(F.data == "toggle_auto")
 async def toggle_auto(c):
@@ -285,9 +396,9 @@ async def toggle_auto(c):
          if st["auto"] else
          "🤖 Auto выключен. Выбери пресеты и пришли аудио."),
         reply_markup=kb_main(c.from_user.id)
-    )
-    await c.answer()
+    ); await c.answer()
 
+# ---- CORE HANDLER: FILE ----
 @dp.message(F.audio | F.document)
 async def on_audio(m: Message):
     file = m.audio or m.document
@@ -319,18 +430,30 @@ async def on_audio(m: Message):
             await bot.download_file(fobj.file_path, in_path)
 
             if auto:
-                I, tilt = analyze_lufs_and_tilt(in_path)
-                inten, tone = choose_presets_auto(I, tilt)
-
-            await process_audio(in_path, out_path, inten, tone, fmtk)
+                # --- AUTO-PRO ---
+                A = analyze_track_pro(in_path)
+                P = decide_params_from_analysis(A)
+                chain = build_chain_from_params(P)
+                if VERBOSE:
+                    print(f"[ANALYZE] LUFS={A['I']:.1f} | RMS={A['rms_db']:.1f} dBFS | TP={A['tp_dbfs']:.1f} dBFS | tilt={A['tilt']:+.2f} dB | sub_excess={A['sub_excess']} -> {P}", flush=True)
+                fmt_args, _ = output_args(fmtk)
+                await ffmpeg_loudnorm_two_pass(in_path, chain, fmt_args, out_path)
+                analysis_note = (f" | LUFS={A['I']:.1f} | tilt={A['tilt']:+.2f} dB") if VERBOSE else ""
+            else:
+                # --- Ручные пресеты ---
+                await process_audio(in_path, out_path, inten, tone, fmtk)
+                analysis_note = ""
 
             out_size = os.path.getsize(out_path)
             if _too_big(out_size, MAX_TG_SEND_MB):
                 mp3_path = os.path.join(td, "mastered_320.mp3")
-                await process_audio(in_path, mp3_path, inten, tone, "mp3_320")
+                if auto:
+                    await ffmpeg_loudnorm_two_pass(in_path, chain, output_args("mp3_320")[0], mp3_path)
+                else:
+                    await process_audio(in_path, mp3_path, inten, tone, "mp3_320")
                 await m.reply_document(
                     FSInputFile(mp3_path, filename="mastered_320.mp3"),
-                    caption=(f"Готово ✅  Intensity={inten}, Tone={tone}, Format=MP3 320\n"
+                    caption=(f"Готово ✅  Format=MP3 320{analysis_note}\n"
                              f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)"),
                     reply_markup=kb_home()
                 )
@@ -338,12 +461,13 @@ async def on_audio(m: Message):
 
             await m.reply_document(
                 FSInputFile(out_path, filename=os.path.basename(out_path)),
-                caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}",
+                caption=f"Готово ✅  Format={label_format(fmtk)}{analysis_note}",
                 reply_markup=kb_home()
             )
     except Exception as e:
         await m.reply(f"Ошибка: {e}", reply_markup=kb_home())
 
+# ---- CORE HANDLER: LINKS ----
 @dp.message(F.text)
 async def on_text(m: Message):
     url = (m.text or "").strip()
@@ -361,20 +485,31 @@ async def on_text(m: Message):
 
             st = USER_STATE.get(m.from_user.id) or PRESETS["defaults"]
             inten, tone, fmtk, auto = st["intensity"], st["tone"], st["format"], st.get("auto", True)
-            if auto:
-                I, tilt = analyze_lufs_and_tilt(in_path)
-                inten, tone = choose_presets_auto(I, tilt)
 
             out_path = os.path.join(td, ("mastered.wav" if fmtk.startswith("wav") else "mastered.mp3"))
-            await process_audio(in_path, out_path, inten, tone, fmtk)
+            if auto:
+                A = analyze_track_pro(in_path)
+                P = decide_params_from_analysis(A)
+                chain = build_chain_from_params(P)
+                if VERBOSE:
+                    print(f"[ANALYZE] LUFS={A['I']:.1f} | RMS={A['rms_db']:.1f} dBFS | TP={A['tp_dbfs']:.1f} dBFS | tilt={A['tilt']:+.2f} dB | sub_excess={A['sub_excess']} -> {P}", flush=True)
+                fmt_args, _ = output_args(fmtk)
+                await ffmpeg_loudnorm_two_pass(in_path, chain, fmt_args, out_path)
+                analysis_note = (f" | LUFS={A['I']:.1f} | tilt={A['tilt']:+.2f} dB") if VERBOSE else ""
+            else:
+                await process_audio(in_path, out_path, inten, tone, fmtk)
+                analysis_note = ""
 
             out_size = os.path.getsize(out_path)
             if _too_big(out_size, MAX_TG_SEND_MB):
                 mp3_path = os.path.join(td, "mastered_320.mp3")
-                await process_audio(in_path, mp3_path, inten, tone, "mp3_320")
+                if auto:
+                    await ffmpeg_loudnorm_two_pass(in_path, chain, output_args("mp3_320")[0], mp3_path)
+                else:
+                    await process_audio(in_path, mp3_path, inten, tone, "mp3_320")
                 await m.reply_document(
                     FSInputFile(mp3_path, filename="mastered_320.mp3"),
-                    caption=(f"Готово ✅  Intensity={inten}, Tone={tone}, Format=MP3 320\n"
+                    caption=(f"Готово ✅  Format=MP3 320{analysis_note}\n"
                              f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)"),
                     reply_markup=kb_home()
                 )
@@ -382,7 +517,7 @@ async def on_text(m: Message):
 
             await m.reply_document(
                 FSInputFile(out_path, filename=os.path.basename(out_path)),
-                caption=f"Готово ✅  Intensity={inten}, Tone={tone}, Format={label_format(fmtk)}",
+                caption=f"Готово ✅  Format={label_format(fmtk)}{analysis_note}",
                 reply_markup=kb_home()
             )
     except Exception as e:
@@ -390,7 +525,7 @@ async def on_text(m: Message):
 
 # -------- MAIN --------
 async def _runner():
-    await setup_menu()                 # <- ставим команды и включаем кнопку-меню
+    await setup_menu()
     print("Mr Mastering bot is running…")
     await dp.start_polling(bot)
 
