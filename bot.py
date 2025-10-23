@@ -186,11 +186,10 @@ def build_chain_from_params(P: dict):
     loudnorm = f"loudnorm=I={ln['I']}:TP={ln['TP']}:LRA={ln['LRA']}:print_format=summary"
     return f"{eq_chain},{acompressor},{loudnorm}"
 
-# --- helpers to force print_format=json and parse last JSON safely ---
+ # --- helpers to force print_format=json and parse last JSON safely ---
 def _force_print_format_json(chain: str) -> str:
     if "loudnorm=" not in chain:
         return chain
-    # меняем только последнюю конфигурацию loudnorm
     parts = chain.rsplit("loudnorm=", 1)
     tail = parts[-1]
     if "print_format=" in tail:
@@ -220,10 +219,6 @@ def _extract_last_json_block(text: str) -> Optional[dict]:
     return last_obj
 
 def _extract_loudnorm_targets(chain: str):
-    """
-    Из исходной цепочки вынимаем целевые I/TP/LRA.
-    Если их нет — используем безопасные дефолты.
-    """
     mI  = re.search(r"loudnorm=[^,]*\bI=([-\d.]+)", chain)
     mTP = re.search(r"loudnorm=[^,]*\bTP=([-\d.]+)", chain)
     mLR = re.search(r"loudnorm=[^,]*\bLRA=([-\d.]+)", chain)
@@ -239,18 +234,19 @@ def _extract_loudnorm_targets(chain: str):
         LRA = float(mLR.group(1)) if mLR else 7.0
     except Exception:
         LRA = 7.0
-    # TP цели обязан быть в [-9, 0]
-    TP = float(np.clip(TP, -9.0, 0.0))
+    TP = float(np.clip(TP, -9.0, 0.0))  # target TP обязан быть в [-9, 0]
     return I, TP, LRA
 
 async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain_with_loudnorm: str, out_args: str, out_path: str):
     if "loudnorm" not in af_chain_with_loudnorm:
         raise RuntimeError("Chain must end with loudnorm")
 
-    # PASS 1: принуждаем print_format=json, чтобы получить корректный JSON
+    # PASS 1 — принудительно json, чтобы достать корректный measured_*
     pass1_chain = _force_print_format_json(af_chain_with_loudnorm)
     pass1_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{pass1_chain}" -f null -'
-    p1 = await asyncio.create_subprocess_shell(pass1_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    p1 = await asyncio.create_subprocess_shell(
+        pass1_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
     _, err1 = await p1.communicate()
     if p1.returncode != 0:
         raise RuntimeError("ffmpeg pass1 failed: " + err1.decode("utf-8", errors="ignore"))
@@ -258,14 +254,13 @@ async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain_with_loudnorm: str, ou
     text = err1.decode("utf-8", "ignore")
     js = _extract_last_json_block(text)
 
-    # вынимаем целевые из исходной цепочки (или дефолты), клампим TP
+    # цели берём из исходной цепочки
     target_I, target_TP, target_LRA = _extract_loudnorm_targets(af_chain_with_loudnorm)
 
-    # Строим второй проход: цели берём из исходной цепочки, measured_* из JSON
     pass2_ln = af_chain_with_loudnorm
     if js:
-        measured = (
-            f"loudnorm="
+        # ВНИМАНИЕ: без префикса 'loudnorm=' — только аргументы!
+        measured_args = (
             f"I={target_I}:TP={target_TP}:LRA={target_LRA}:"
             f"measured_I={js.get('input_i','-14')}:"
             f"measured_LRA={js.get('input_lra','7')}:"
@@ -273,16 +268,17 @@ async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain_with_loudnorm: str, ou
             f"measured_thresh={js.get('input_thresh','-26')}:"
             f"offset={js.get('target_offset','0')}:print_format=summary"
         )
-        # заменяем последнюю конфигурацию loudnorm
-        parts = af_chain_with_loudnorm.rsplit("loudnorm=", 1)
-        pass2_ln = "loudnorm=".join(parts[:-1] + [re.sub(r"^.*?(?=$)", measured, parts[-1], count=1)])
+        # подменяем всё после последнего 'loudnorm=' на готовые аргументы
+        prefix, _ = af_chain_with_loudnorm.rsplit("loudnorm=", 1)
+        pass2_ln = prefix + "loudnorm=" + measured_args
 
     pass2_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{pass2_ln}" {out_args} {shlex.quote(out_path)}'
-    p2 = await asyncio.create_subprocess_shell(pass2_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    p2 = await asyncio.create_subprocess_shell(
+        pass2_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
     _, err2 = await p2.communicate()
     if p2.returncode != 0:
         raise RuntimeError("ffmpeg pass2 failed: " + err2.decode("utf-8", errors="ignore"))
-
 # -------- ПРЕСЕТНЫЙ FFMPEG (когда Auto выключен) --------
 def build_ffmpeg_chain(inten_key: str, tone_key: str):
     inten = PRESETS["intensity"][inten_key]
