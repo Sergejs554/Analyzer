@@ -186,63 +186,77 @@ def build_chain_from_params(P: dict):
     loudnorm = f"loudnorm=I={ln['I']}:TP={ln['TP']}:LRA={ln['LRA']}:print_format=summary"
     return f"{eq_chain},{acompressor},{loudnorm}"
 
+# --- helpers to force print_format=json and parse last JSON safely ---
+def _force_print_format_json(chain: str) -> str:
+    # заменяем только последний loudnorm=...print_format=*
+    if "loudnorm=" not in chain:
+        return chain
+    # если явно указан print_format, меняем на json
+    if "print_format=" in chain:
+        return re.sub(r"(loudnorm=[^,]*print_format=)(\w+)",
+                      r"\1json", chain, count=1)
+    # если нет, просто добавим
+    return re.sub(r"(loudnorm=[^,]*)$", r"\1:print_format=json", chain, count=1)
+
+def _extract_last_json_block(text: str) -> Optional[dict]:
+    # пробегаемся по тексту и достаём последний валидный JSON по балансировке скобок
+    start = -1
+    depth = 0
+    last_obj = None
+    for i, ch in enumerate(text):
+        if ch == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == '}':
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    chunk = text[start:i+1]
+                    try:
+                        last_obj = json.loads(chunk)
+                    except Exception:
+                        pass
+                    start = -1
+    return last_obj
+
 async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain_with_loudnorm: str, out_args: str, out_path: str):
-    # убеждаемся, что в цепи есть loudnorm
     if "loudnorm" not in af_chain_with_loudnorm:
         raise RuntimeError("Chain must end with loudnorm")
 
-    # PASS 1 — собираем статистику loudnorm
-    pass1_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{af_chain_with_loudnorm}" -f null -'
-    p1 = await asyncio.create_subprocess_shell(
-        pass1_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
+    # PASS 1: принуждаем print_format=json, чтобы получить корректный JSON
+    pass1_chain = _force_print_format_json(af_chain_with_loudnorm)
+    pass1_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{pass1_chain}" -f null -'
+    p1 = await asyncio.create_subprocess_shell(pass1_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     _, err1 = await p1.communicate()
     if p1.returncode != 0:
         raise RuntimeError("ffmpeg pass1 failed: " + err1.decode("utf-8", errors="ignore"))
 
-    # ИЗМЕНЕНО: без (?R). Достаём последний JSON-блок простым, но надёжным способом.
     text = err1.decode("utf-8", "ignore")
-    candidates = re.findall(r"\{[^{}]+\}", text, flags=re.S)  # плоские JSON-объекты loudnorm
-    js = None
-    for block in reversed(candidates):
-        try:
-            data = json.loads(block)
-            # убедимся, что это действительно блок loudnorm
-            if any(k in data for k in ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")):
-                js = data
-                break
-        except Exception:
-            continue
+    js = _extract_last_json_block(text)
 
-    # Формируем цепь для PASS 2
-    if js is None:
-        # на всякий случай — просто повторяем первый фильтр (без measured_*)
-        pass2_ln = af_chain_with_loudnorm
-    else:
+    # PASS 2: если JSON нашли — подставляем measured_*; иначе — оставляем как есть
+    pass2_ln = af_chain_with_loudnorm
+    if js:
         measured = (
-            f"loudnorm=I={js.get('input_i','-14')}:"
-            f"TP={js.get('input_tp','-1.2')}:"
-            f"LRA={js.get('input_lra','7')}:"
+            f"loudnorm="
+            f"I={js.get('target_i', js.get('input_i', '-14'))}:"
+            f"TP={js.get('target_tp', js.get('input_tp', '-1.2'))}:"
+            f"LRA={js.get('target_lra', js.get('input_lra', '7'))}:"
             f"measured_I={js.get('input_i','-14')}:"
             f"measured_LRA={js.get('input_lra','7')}:"
             f"measured_TP={js.get('input_tp','-1.2')}:"
             f"measured_thresh={js.get('input_thresh','-26')}:"
             f"offset={js.get('target_offset','0')}:print_format=summary"
         )
-        # заменим ПОСЛЕДНЕЕ вхождение loudnorm=... на measured-версию
-        pass2_ln = af_chain_with_loudnorm[::-1].replace(
-            "yrammuS=tamrof_tnirp".[::-1] + "..." if False else "", ""  # just to keep structure; no-op
-        )  # no-op line to keep formatting similar
-        pass2_ln = re.sub(r"loudnorm=[^,]*print_format=summary", measured, af_chain_with_loudnorm, count=1)
+        pass2_ln = re.sub(r"loudnorm=[^,]*print_format=\w+", measured, af_chain_with_loudnorm)
 
-    # PASS 2 — финальный рендер
     pass2_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{pass2_ln}" {out_args} {shlex.quote(out_path)}'
-    p2 = await asyncio.create_subprocess_shell(
-        pass2_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
+    p2 = await asyncio.create_subprocess_shell(pass2_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     _, err2 = await p2.communicate()
     if p2.returncode != 0:
         raise RuntimeError("ffmpeg pass2 failed: " + err2.decode("utf-8", errors="ignore"))
+
 # -------- ПРЕСЕТНЫЙ FFMPEG (когда Auto выключен) --------
 def build_ffmpeg_chain(inten_key: str, tone_key: str):
     inten = PRESETS["intensity"][inten_key]
