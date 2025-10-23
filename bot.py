@@ -188,25 +188,24 @@ def build_chain_from_params(P: dict):
 
 # --- helpers to force print_format=json and parse last JSON safely ---
 def _force_print_format_json(chain: str) -> str:
-    # заменяем только последний loudnorm=...print_format=*
     if "loudnorm=" not in chain:
         return chain
-    # если явно указан print_format, меняем на json
-    if "print_format=" in chain:
-        return re.sub(r"(loudnorm=[^,]*print_format=)(\w+)",
-                      r"\1json", chain, count=1)
-    # если нет, просто добавим
-    return re.sub(r"(loudnorm=[^,]*)$", r"\1:print_format=json", chain, count=1)
+    # меняем только последнюю конфигурацию loudnorm
+    parts = chain.rsplit("loudnorm=", 1)
+    tail = parts[-1]
+    if "print_format=" in tail:
+        tail = re.sub(r"(print_format=)(\w+)", r"\1json", tail, count=1)
+    else:
+        tail += ":print_format=json"
+    return "loudnorm=".join(parts[:-1] + [tail])
 
 def _extract_last_json_block(text: str) -> Optional[dict]:
-    # пробегаемся по тексту и достаём последний валидный JSON по балансировке скобок
     start = -1
     depth = 0
     last_obj = None
     for i, ch in enumerate(text):
         if ch == '{':
-            if depth == 0:
-                start = i
+            if depth == 0: start = i
             depth += 1
         elif ch == '}':
             if depth > 0:
@@ -219,6 +218,30 @@ def _extract_last_json_block(text: str) -> Optional[dict]:
                         pass
                     start = -1
     return last_obj
+
+def _extract_loudnorm_targets(chain: str):
+    """
+    Из исходной цепочки вынимаем целевые I/TP/LRA.
+    Если их нет — используем безопасные дефолты.
+    """
+    mI  = re.search(r"loudnorm=[^,]*\bI=([-\d.]+)", chain)
+    mTP = re.search(r"loudnorm=[^,]*\bTP=([-\d.]+)", chain)
+    mLR = re.search(r"loudnorm=[^,]*\bLRA=([-\d.]+)", chain)
+    try:
+        I  = float(mI.group(1))  if mI  else -14.0
+    except Exception:
+        I = -14.0
+    try:
+        TP = float(mTP.group(1)) if mTP else -1.2
+    except Exception:
+        TP = -1.2
+    try:
+        LRA = float(mLR.group(1)) if mLR else 7.0
+    except Exception:
+        LRA = 7.0
+    # TP цели обязан быть в [-9, 0]
+    TP = float(np.clip(TP, -9.0, 0.0))
+    return I, TP, LRA
 
 async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain_with_loudnorm: str, out_args: str, out_path: str):
     if "loudnorm" not in af_chain_with_loudnorm:
@@ -235,21 +258,24 @@ async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain_with_loudnorm: str, ou
     text = err1.decode("utf-8", "ignore")
     js = _extract_last_json_block(text)
 
-    # PASS 2: если JSON нашли — подставляем measured_*; иначе — оставляем как есть
+    # вынимаем целевые из исходной цепочки (или дефолты), клампим TP
+    target_I, target_TP, target_LRA = _extract_loudnorm_targets(af_chain_with_loudnorm)
+
+    # Строим второй проход: цели берём из исходной цепочки, measured_* из JSON
     pass2_ln = af_chain_with_loudnorm
     if js:
         measured = (
             f"loudnorm="
-            f"I={js.get('target_i', js.get('input_i', '-14'))}:"
-            f"TP={js.get('target_tp', js.get('input_tp', '-1.2'))}:"
-            f"LRA={js.get('target_lra', js.get('input_lra', '7'))}:"
+            f"I={target_I}:TP={target_TP}:LRA={target_LRA}:"
             f"measured_I={js.get('input_i','-14')}:"
             f"measured_LRA={js.get('input_lra','7')}:"
             f"measured_TP={js.get('input_tp','-1.2')}:"
             f"measured_thresh={js.get('input_thresh','-26')}:"
             f"offset={js.get('target_offset','0')}:print_format=summary"
         )
-        pass2_ln = re.sub(r"loudnorm=[^,]*print_format=\w+", measured, af_chain_with_loudnorm)
+        # заменяем последнюю конфигурацию loudnorm
+        parts = af_chain_with_loudnorm.rsplit("loudnorm=", 1)
+        pass2_ln = "loudnorm=".join(parts[:-1] + [re.sub(r"^.*?(?=$)", measured, parts[-1], count=1)])
 
     pass2_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{pass2_ln}" {out_args} {shlex.quote(out_path)}'
     p2 = await asyncio.create_subprocess_shell(pass2_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
