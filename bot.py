@@ -4,7 +4,10 @@ import os, re, sys, shlex, json, asyncio, tempfile
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import (
+    Message, InlineKeyboardMarkup, InlineKeyboardButton,
+    FSInputFile, BotCommand, BotCommandScopeDefault, MenuButtonCommands
+)
 from aiogram.filters import Command
 import aiohttp
 
@@ -25,8 +28,8 @@ bot = Bot(token)
 dp = Dispatcher()
 
 # -------- SETTINGS --------
-MAX_TG_FILE_MB = int(os.getenv("MAX_TG_FILE_MB", "19"))   # входящий файл из TG
-MAX_TG_SEND_MB = int(os.getenv("MAX_TG_SEND_MB", "49"))   # исходящий документ в TG
+MAX_TG_FILE_MB = int(os.getenv("MAX_TG_FILE_MB", "19"))
+MAX_TG_SEND_MB = int(os.getenv("MAX_TG_SEND_MB", "49"))
 ALLOWED_EXT = (".mp3", ".wav")
 
 ROOT = os.path.dirname(__file__)
@@ -49,7 +52,6 @@ def kb_main(uid):
     ])
 
 def kb_home():
-    # компактная клавиатура с одной кнопкой
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏠 Домой", callback_data="go_home")]
     ])
@@ -105,18 +107,15 @@ def choose_presets_auto(I:float, tilt:float):
 
 # -------- FFMPEG CHAIN --------
 def build_ffmpeg_chain(inten_key: str, tone_key: str):
-    """
-    Полки bass/treble -> компрессор (без makeup) -> loudnorm.
-    """
     inten = PRESETS["intensity"][inten_key]
     tone  = PRESETS["tone"][tone_key]
 
     eq_parts = []
     if tone.get("low_shelf"):
-        lf = tone["low_shelf"]   # {f, width, g}
+        lf = tone["low_shelf"]
         eq_parts.append(f"bass=g={lf['g']}:f={lf['f']}:w={lf['width']}")
     if tone.get("high_shelf"):
-        hf = tone["high_shelf"]  # {f, width, g}
+        hf = tone["high_shelf"]
         eq_parts.append(f"treble=g={hf['g']}:f={hf['f']}:w={hf['width']}")
     eq_chain = ",".join(eq_parts) if eq_parts else "anull"
 
@@ -177,6 +176,19 @@ async def http_download(session:aiohttp.ClientSession, url:str, dst_path:str, ma
 def _too_big(bytes_size:int, mb:int)->bool:
     return bytes_size > mb*1024*1024
 
+# -------- COMMAND MENU (persist кнопка-меню) --------
+async def setup_menu():
+    await bot.set_my_commands(
+        commands=[
+            BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="menu", description="Показать меню"),
+            BotCommand(command="settings", description="Сброс/настройки"),
+        ],
+        scope=BotCommandScopeDefault()
+    )
+    # Явно включаем кнопку-меню «Commands»
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
 # -------- HANDLERS --------
 @dp.message(Command("start"))
 async def start(m: Message):
@@ -198,10 +210,17 @@ async def start(m: Message):
 async def menu_cmd(m: Message):
     await m.answer("Главное меню:", reply_markup=kb_main(m.from_user.id))
 
+@dp.message(Command("settings"))
+async def settings_cmd(m: Message):
+    # простой ресет
+    USER_STATE[m.from_user.id] = PRESETS["defaults"].copy() | {"auto": True}
+    await m.answer("Настройки сброшены. Главное меню:", reply_markup=kb_main(m.from_user.id))
+
 @dp.callback_query(F.data == "go_home")
 async def go_home(c):
-    # перейти в главное меню из любого места
-    await c.message.edit_text("Главное меню:", reply_markup=kb_main(c.from_user.id))
+    # Не редактируем исходное сообщение (особенно если это document с подписью),
+    # а присылаем новое — так «Домой» всегда срабатывает.
+    await c.message.answer("Главное меню:", reply_markup=kb_main(c.from_user.id))
     await c.answer()
 
 @dp.callback_query(F.data == "menu_intensity")
@@ -305,7 +324,6 @@ async def on_audio(m: Message):
 
             await process_audio(in_path, out_path, inten, tone, fmtk)
 
-            # Фоллбэк в mp3, если слишком большой для отправки
             out_size = os.path.getsize(out_path)
             if _too_big(out_size, MAX_TG_SEND_MB):
                 mp3_path = os.path.join(td, "mastered_320.mp3")
@@ -328,27 +346,21 @@ async def on_audio(m: Message):
 
 @dp.message(F.text)
 async def on_text(m: Message):
-    """Приём ссылок (Google Drive, прямые .mp3/.wav)"""
     url = (m.text or "").strip()
     if not (is_gdrive(url) or DIRECT_RX.match(url)):
-        return  # игнорим обычный текст
-
+        return
     await m.reply("Окей, скачиваю по ссылке и делаю мастеринг…", reply_markup=kb_home())
     try:
         with tempfile.TemporaryDirectory() as td:
-            # имя входного файла по расширению
             ext = ".mp3" if ".mp3" in url.lower() else ".wav"
             in_path = os.path.join(td, f"input_from_link{ext}")
-
             if is_gdrive(url):
                 url = gdrive_direct(url) or url
-
             async with aiohttp.ClientSession() as session:
                 await http_download(session, url, in_path, max_mb=256)
 
             st = USER_STATE.get(m.from_user.id) or PRESETS["defaults"]
             inten, tone, fmtk, auto = st["intensity"], st["tone"], st["format"], st.get("auto", True)
-
             if auto:
                 I, tilt = analyze_lufs_and_tilt(in_path)
                 inten, tone = choose_presets_auto(I, tilt)
@@ -377,9 +389,13 @@ async def on_text(m: Message):
         await m.reply(f"Ошибка при обработке ссылки: {e}", reply_markup=kb_home())
 
 # -------- MAIN --------
-def main():
+async def _runner():
+    await setup_menu()                 # <- ставим команды и включаем кнопку-меню
     print("Mr Mastering bot is running…")
-    asyncio.run(dp.start_polling(bot))
+    await dp.start_polling(bot)
+
+def main():
+    asyncio.run(_runner())
 
 if __name__ == "__main__":
     main()
