@@ -8,6 +8,7 @@ from aiogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton,
     FSInputFile, BotCommand, BotCommandScopeDefault, MenuButtonCommands
 )
+from aiogram.filters import Command
 
 import aiohttp
 
