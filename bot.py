@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 import os, re, sys, shlex, json, asyncio, tempfile
 from typing import Optional
-
+from smart_auto import decide_smart_params, build_smart_chain
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton,
     FSInputFile, BotCommand, BotCommandScopeDefault, MenuButtonCommands
 )
-from aiogram.filters import Command
+
 import aiohttp
 
 import numpy as np
