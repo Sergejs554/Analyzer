@@ -466,4 +466,4 @@ async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain: str, out_args: str, o
     p2 = await asyncio.create_subprocess_shell(pass2_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     _, err2 = await p2.communicate()
     if p2.returncode != 0:
-        raise RuntimeError("ffmpeg pass2 failed: " + err2.decode("utf-8", errors="ignore")
+        raise RuntimeError("ffmpeg pass2 failed: " + err2.decode("utf-8", errors="ignore"))
