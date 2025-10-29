@@ -1,8 +1,23 @@
 # smart_auto.py
 
 import numpy as np
-from presets import PRESETS  # Load preset values for reference intensities and tone
+# === изменено ===
+import os, json
 
+# Загружаем пресеты из presets.json рядом с файлами (или по пути из ENV)
+PRESETS_PATH = os.getenv("PRESETS_PATH")  # опционально можно указать абсолютный путь через ENV
+if PRESETS_PATH and os.path.isfile(PRESETS_PATH):
+    _PRESETS_FILE = PRESETS_PATH
+else:
+    _ROOT = os.path.dirname(__file__)
+    # поддержим оба варианта на всякий случай (если файл называется presets.json.txt)
+    cand1 = os.path.join(_ROOT, "presets.json")
+    cand2 = os.path.join(_ROOT, "presets.json.txt")
+    _PRESETS_FILE = cand1 if os.path.isfile(cand1) else cand2
+
+with open(_PRESETS_FILE, "r", encoding="utf-8") as f:
+    PRESETS = json.load(f)
+# === конец изменения ===
 def decide_smart_params(analysis: dict) -> dict:
     """
     Decide mastering parameters (loudness targets, EQ gains, compression) based on analysis.
