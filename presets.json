@@ -1,33 +1,33 @@
 {
   "intensity": {
     "low": {
-      "I": -15.4,
-      "TP": -0.3,
-      "LRA": 6.0,
+      "I": -15.0,
+      "TP": -1.0,
+      "LRA": 7.0,
       "comp": {
-        "ratio": 1.7,
-        "attack": 25,
-        "release": 160,
+        "ratio": 1.5,
+        "attack": 30,
+        "release": 180,
         "threshold_db": -18
       }
     },
     "balanced": {
       "I": -14.0,
-      "TP": -0.3,
+      "TP": -1.0,
       "LRA": 6.0,
       "comp": {
-        "ratio": 2.5,
+        "ratio": 2.0,
         "attack": 20,
-        "release": 140,
+        "release": 150,
         "threshold_db": -20
       }
     },
     "high": {
       "I": -12.5,
-      "TP": -0.3,
+      "TP": -1.0,
       "LRA": 6.0,
       "comp": {
-        "ratio": 3.2,
+        "ratio": 2.5,
         "attack": 10,
         "release": 120,
         "threshold_db": -22
@@ -38,13 +38,13 @@
     "warm": {
       "low_shelf": {
         "f": 250,
-        "g": 1.0,
+        "g": 1.5,
         "width": 1.0
       },
       "high_shelf": {
         "f": 12000,
-        "g": -1.5,
-        "width": 2.0
+        "g": -2.0,
+        "width": 1.0
       }
     },
     "balanced": {
@@ -54,13 +54,13 @@
     "bright": {
       "low_shelf": {
         "f": 250,
-        "g": -1.0,
+        "g": -1.5,
         "width": 1.0
       },
       "high_shelf": {
-        "f": 11000,
-        "g": 2.3,
-        "width": 2.0
+        "f": 10000,
+        "g": 3.0,
+        "width": 1.0
       }
     }
   },
