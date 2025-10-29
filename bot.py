@@ -14,6 +14,11 @@ import aiohttp
 import numpy as np
 import librosa, pyloudnorm as pyln
 
+# === changed ===
+# Import the new analysis and smart auto modules
+from auto_analysis import analyze_file  # full analysis (LUFS, TP, LRA, tilt, etc.)
+from smart_auto import decide_smart_params, build_smart_chain  # smart auto logic
+
 # -------- TOKEN SANITY --------
 raw_token = os.getenv("BOT_TOKEN") or ""
 token = (raw_token.strip()
@@ -30,7 +35,7 @@ dp = Dispatcher()
 # -------- SETTINGS --------
 MAX_TG_FILE_MB = int(os.getenv("MAX_TG_FILE_MB", "19"))
 MAX_TG_SEND_MB = int(os.getenv("MAX_TG_SEND_MB", "49"))
-ALLOWED_EXT = (".mp3", ".wav")
+ALLOWED_EXT = (".mp3", ".wav", ".m4a")  # === changed === added support for .m4a
 VERBOSE = os.getenv("VERBOSE_ANALYSIS", "0") == "1"
 
 ROOT = os.path.dirname(__file__)
@@ -39,17 +44,17 @@ with open(os.path.join(ROOT, "presets.json"), "r", encoding="utf-8") as f:
 
 USER_STATE = {}  # user_id -> dict
 
-# -------- UI --------
-def label_format(fmt_key:str)->str:
-    return {"wav16":"WAV 16-bit","mp3_320":"MP3 320","wav24":"WAV 24-bit"}[fmt_key]
+# -------- UI (Keyboards) --------
+def label_format(fmt_key: str) -> str:
+    return {"wav16": "WAV 16-bit", "mp3_320": "MP3 320", "wav24": "WAV 24-bit"}[fmt_key]
 
 def kb_main(uid):
     st = USER_STATE.get(uid, PRESETS["defaults"])
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"🎚 Intensity: {st['intensity']}", callback_data="menu_intensity")],
-        [InlineKeyboardButton(text=f"🎛 Tone: {st['tone']}", callback_data="menu_tone")],
-        [InlineKeyboardButton(text=f"💾 Output: {label_format(st['format'])}", callback_data="menu_format")],
-        [InlineKeyboardButton(text=("✅ Auto ON" if st.get("auto") else "🤖 Auto OFF"), callback_data="toggle_auto")]
+         [InlineKeyboardButton(text=f"🎛 Tone: {st['tone']}", callback_data="menu_tone")],
+         [InlineKeyboardButton(text=f"💾 Output: {label_format(st['format'])}", callback_data="menu_format")],
+         [InlineKeyboardButton(text=("✅ Auto ON" if st.get("auto") else "🤖 Auto OFF"), callback_data="toggle_auto")]
     ])
 
 def kb_home():
@@ -84,109 +89,292 @@ def kb_format():
          InlineKeyboardButton(text="🏠 Домой", callback_data="go_home")]
     ])
 
-# -------- SIMPLE AUTO (оставляем на случай Auto OFF) --------
-def analyze_lufs_and_tilt(path:str, sr_target=48000):
-    y, sr = librosa.load(path, sr=sr_target, mono=True)
-    y, _ = librosa.effects.trim(y, top_db=40)
-    meter = pyln.Meter(sr)
-    I = float(meter.integrated_loudness(y))
-    S = np.abs(librosa.stft(y, n_fft=8192, hop_length=2048, window="hann"))**2
-    freqs = librosa.fft_frequencies(sr=sr, n_fft=8192)
-    psd = np.mean(S, axis=1) + 1e-18
-    def band(lo, hi):
-        idx = np.where((freqs>=lo)&(freqs<hi))[0]
-        return float(10*np.log10(np.mean(psd[idx]))) if idx.size>0 else 0.0
-    hi = band(8000, 12000); lo = band(150, 300)
-    return I, (hi-lo)
-
-def choose_presets_auto(I:float, tilt:float):
-    tone = "balanced"
-    if tilt <= -0.8: tone="bright"
-    elif tilt >= 0.8: tone="warm"
-    intensity = "balanced" if I <= -14.5 else "low"
-    return intensity, tone
-
-# -------- AUTO-PRO (под конкретный трек) --------
-def analyze_track_pro(path: str, sr_target=48000):
-    y, sr = librosa.load(path, sr=sr_target, mono=True)
-    y, _ = librosa.effects.trim(y, top_db=40)
-    if len(y) == 0:
-        raise RuntimeError("Empty audio after trim")
-
-    peak = float(np.max(np.abs(y)))
-    rms = float(np.sqrt(np.mean(y**2)))
-    rms_db = 20*np.log10(rms + 1e-12)
-    tp_dbfs = 20*np.log10(peak + 1e-12)
-
-    meter = pyln.Meter(sr)
-    I = float(meter.integrated_loudness(y))
-
-    S = np.abs(librosa.stft(y, n_fft=8192, hop_length=2048, window="hann"))**2
-    freqs = librosa.fft_frequencies(sr=sr, n_fft=8192)
-    psd = np.mean(S, axis=1) + 1e-18
-    def band_db(lo, hi):
-        idx = np.where((freqs>=lo)&(freqs<hi))[0]
-        return float(10*np.log10(np.mean(psd[idx]))) if idx.size>0 else 0.0
-    lo_db = band_db(150, 300)
-    hi_db = band_db(8000, 12000)
-    tilt = hi_db - lo_db
-
-    sub_db = band_db(20, 40)
-    bass_db = band_db(60, 120)
-    sub_excess = (sub_db - bass_db) > 2.0
-
-    return {"sr": sr, "I": I, "rms_db": rms_db, "tp_dbfs": tp_dbfs, "tilt": tilt, "sub_excess": bool(sub_excess)}
-
-def decide_params_from_analysis(A: dict):
-    I = A["I"]; rms_db = A["rms_db"]; tilt = float(np.clip(A["tilt"], -4.0, 4.0)); sub_excess = A["sub_excess"]
-
-    target_I = float(np.clip(np.interp(I, [-22, -16, -12, -10], [-16, -14.5, -13, -12]), -16.5, -12.0))
-    target_TP = -1.2
-    target_LRA = 6.0
-
-    high_g = float(np.interp(tilt, [-4, 0, 4], [ +2.5, 0.0, -2.5 ]))
-    low_g  = float(np.interp(tilt, [-4, 0, 4], [ -1.5, 0.0, +1.0 ]))
-    hpf = bool(sub_excess)
-
-    if rms_db < -24:
-        ratio = 1.4; thr = rms_db + 6
-    elif rms_db < -20:
-        ratio = 1.6; thr = rms_db + 4
-    elif rms_db < -16:
-        ratio = 1.8; thr = rms_db + 2
-    else:
-        ratio = 2.2; thr = rms_db + 1
-
-    comp = {"ratio": round(ratio, 2), "threshold_db": round(thr, 1), "attack": 20, "release": 180}
-    tone = {
-        "low_shelf":  {"g": round(low_g, 2),  "f": 250,  "width": 1.0},
-        "high_shelf": {"g": round(high_g, 2), "f": 6500, "width": 0.8},
-        "hpf": hpf
+# -------- HANDLERS: MENU AND SETTINGS --------
+@dp.message(Command("start"))
+async def start(m: Message):
+    USER_STATE[m.from_user.id] = {
+        "intensity": PRESETS["defaults"]["intensity"],
+        "tone": PRESETS["defaults"]["tone"],
+        "format": PRESETS["defaults"]["format"],
+        "auto": True  # Smart Auto is ON by default
     }
-    return {"loudnorm": {"I": round(target_I,2), "TP": target_TP, "LRA": target_LRA}, "tone": tone, "comp": comp}
+    await m.answer(
+        "👋 Привет! Я — Mr. Mastering.\n"
+        "Пришли аудио-файл **.mp3**, **.m4a** или **.wav** (до ~19 MB), либо **ссылку** на файл в облаке (Google Drive/Dropbox).\n"
+        "Форматы мастеринга: WAV 16-bit / MP3 320 / WAV 24-bit.\n"
+        "Сейчас включен режим Smart Auto — полный автоматический мастеринг.",
+        reply_markup=kb_main(m.from_user.id)
+    )
 
-def build_chain_from_params(P: dict):
-    tone, comp, ln = P["tone"], P["comp"], P["loudnorm"]
+@dp.message(Command("menu"))
+async def menu_cmd(m: Message):
+    await m.answer("Главное меню:", reply_markup=kb_main(m.from_user.id))
+
+@dp.message(Command("settings"))
+async def settings_cmd(m: Message):
+    USER_STATE[m.from_user.id] = PRESETS["defaults"].copy() | {"auto": True}
+    await m.answer("⚙️ Настройки сброшены. Режим Smart Auto включён.", reply_markup=kb_main(m.from_user.id))
+
+# -------- CALLBACK HANDLERS: INLINE MENU --------
+@dp.callback_query()
+async def callbacks(c):
+    uid = c.from_user.id
+    data = c.data
+    st = USER_STATE.get(uid, PRESETS["defaults"])
+    if data == "go_home":
+        # Return to main menu without changing state
+        await c.message.edit_text("Главное меню:", reply_markup=kb_main(uid))
+        await c.answer()
+        return
+    if data == "menu_intensity":
+        await c.message.edit_text("Выбери интенсивность мастеринга:", reply_markup=kb_intensity())
+    elif data == "menu_tone":
+        await c.message.edit_text("Выбери тон (тембральный баланс):", reply_markup=kb_tone())
+    elif data == "menu_format":
+        await c.message.edit_text("Выбери формат итогового файла:", reply_markup=kb_format())
+    elif data.startswith("set_intensity_"):
+        intensity = data.split("set_intensity_")[1]
+        st["intensity"] = intensity
+        # If user adjusts intensity manually, consider that turning Auto off (manual mode)
+        # === changed ===
+        st["auto"] = False
+        await c.message.edit_text(f"Интенсивность: {intensity}", reply_markup=kb_main(uid))
+    elif data.startswith("set_tone_"):
+        tone = data.split("set_tone_")[1]
+        st["tone"] = tone
+        # Changing tone manually implies Auto off as well
+        # === changed ===
+        st["auto"] = False
+        await c.message.edit_text(f"Тон: {tone}", reply_markup=kb_main(uid))
+    elif data.startswith("set_fmt_"):
+        fmt = data.split("set_fmt_")[1]
+        st["format"] = fmt
+        await c.message.edit_text(f"Формат результата: {label_format(fmt)}", reply_markup=kb_main(uid))
+    elif data == "toggle_auto":
+        # Toggle between Smart Auto and Manual modes
+        st["auto"] = not st.get("auto", True)
+        status = "✅ Auto ON" if st["auto"] else "🤖 Auto OFF"
+        await c.message.edit_text("Главное меню:", reply_markup=kb_main(uid))
+    await c.answer()
+
+# -------- CORE HANDLER: AUDIO FILES --------
+@dp.message(F.audio | F.document)
+async def on_audio(m: Message):
+    file_obj = m.audio or m.document
+    if not file_obj:
+        return
+    name = (file_obj.file_name or "input").lower()
+    if not name.endswith(ALLOWED_EXT):
+        await m.reply("⚠️ Пожалуйста, пришли аудио-файл с расширением **.mp3**, **.m4a** или **.wav**.", reply_markup=kb_home())
+        return
+
+    size = file_obj.file_size or 0
+    if _too_big(size, MAX_TG_FILE_MB):
+        await m.reply(
+            f"⚠️ Файл **{round(size/1024/1024, 1)} MB** слишком большой для загрузки через Telegram.\n"
+            f"Отправь **ссылку** на файл (Google Drive или Dropbox), я скачаю и сделаю мастеринг.",
+            reply_markup=kb_home()
+        )
+        return
+
+    # Retrieve user state (intensity, tone, format, auto)
+    st = USER_STATE.get(m.from_user.id) or PRESETS["defaults"]
+    inten_key = st["intensity"]
+    tone_key = st["tone"]
+    fmt_key = st["format"]
+    auto_mode = st.get("auto", True)
+
+    await m.reply("🎧 Файл получен. " + ("Анализирую и мастерю…" if auto_mode else "Делаю мастеринг…"), reply_markup=kb_home())
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path = os.path.join(td, name)
+            out_path = os.path.join(td, "mastered.wav" if fmt_key.startswith("wav") else "mastered.mp3")
+
+            # Download the file to a temp folder
+            file_info = await bot.get_file(file_obj.file_id)
+            await bot.download_file(file_info.file_path, in_path)
+
+            # Mastering process
+            if auto_mode:
+                # Smart Auto Mode: full analysis and automatic parameter selection
+                analysis = analyze_file(in_path)  # === changed === use new analysis module
+                params = decide_smart_params(analysis)  # get optimal processing params (loudnorm targets, EQ, comp, etc.)
+                chain = build_smart_chain(params)      # build FFmpeg audio filter chain from params
+                # Verbose logging of analysis
+                if VERBOSE:
+                    print(f"[Analysis++] {os.path.basename(name)} -> "
+                          f"LUFS={analysis['LUFS']:.2f}, LRA={analysis['LRA']:.2f}, TruePeak={analysis['TruePeak_dBFS']:.2f} dBFS, "
+                          f"Tilt={analysis['Tilt_dB']:+.2f} dB, SubExcess={analysis['SubExcess']} => {params}", flush=True)
+                # Process audio using two-pass loudnorm with the chain
+                fmt_args, _ = output_args(fmt_key)
+                await ffmpeg_loudnorm_two_pass(in_path, chain, fmt_args, out_path)
+                analysis_note = (f" | LUFS={analysis['LUFS']:.1f}, LRA={analysis['LRA']:.1f}, Tilt={analysis['Tilt_dB']:+.1f} dB") if VERBOSE else ""
+            else:
+                # Manual Mode: still perform analysis for technical adjustments
+                analysis = analyze_file(in_path)  # analyze even in manual mode
+                if VERBOSE:
+                    print(f"[Analysis] {os.path.basename(name)} -> LUFS={analysis['LUFS']:.2f}, TruePeak={analysis['TruePeak_dBFS']:.2f} dBFS, Tilt={analysis['Tilt_dB']:+.2f} dB, SubExcess={analysis['SubExcess']}", flush=True)
+                # Build chain from user presets, but incorporate any needed corrections from analysis
+                chain = build_ffmpeg_chain(inten_key, tone_key, analysis)
+                fmt_args, _ = output_args(fmt_key)
+                await ffmpeg_loudnorm_two_pass(in_path, chain, fmt_args, out_path)  # use two-pass even for manual
+                analysis_note = ""  # we don't append analysis info in caption for manual (to avoid confusion)
+            
+            # Check output size and send appropriate format
+            out_size = os.path.getsize(out_path)
+            if _too_big(out_size, MAX_TG_SEND_MB):
+                # If output WAV is too large for Telegram, fallback to MP3 320kbps
+                alt_out_path = os.path.join(td, "mastered_320.mp3")
+                if auto_mode:
+                    await ffmpeg_loudnorm_two_pass(in_path, chain, output_args("mp3_320")[0], alt_out_path)
+                else:
+                    await ffmpeg_loudnorm_two_pass(in_path, chain, output_args("mp3_320")[0], alt_out_path)
+                await m.reply_document(
+                    FSInputFile(alt_out_path, filename="mastered_320.mp3"),
+                    caption=(f"✅ Готово! Результат: MP3 320 kbps{analysis_note}\n"
+                             f"(WAV > {MAX_TG_SEND_MB} MB, поэтому отправлен MP3)"),
+                    reply_markup=kb_home()
+                )
+            else:
+                # Send the mastered file in the requested format
+                await m.reply_document(
+                    FSInputFile(out_path, filename=os.path.basename(out_path)),
+                    caption=f"✅ Готово! Результат: {label_format(fmt_key)}{analysis_note}",
+                    reply_markup=kb_home()
+                )
+    except Exception as e:
+        await m.reply(f"❌ Ошибка: {e}", reply_markup=kb_home())
+
+# -------- CORE HANDLER: LINK (Google Drive/Dropbox) --------
+@dp.message(F.text)
+async def on_text(m: Message):
+    url = (m.text or "").strip()
+    if not (is_gdrive(url) or DIRECT_RX.match(url)):
+        return  # not a recognized URL, ignore
+    await m.reply("⏬ Скачиваю файл по ссылке, выполняю мастеринг…", reply_markup=kb_home())
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            # Determine file extension from URL (default to .wav if unknown)
+            ext = ".mp3" if ".mp3" in url.lower() else ".m4a" if ".m4a" in url.lower() else ".wav"
+            in_path = os.path.join(td, f"input_from_link{ext}")
+            if is_gdrive(url):
+                url = gdrive_direct(url) or url
+            async with aiohttp.ClientSession() as session:
+                await http_download(session, url, in_path, max_mb=256)
+
+            st = USER_STATE.get(m.from_user.id) or PRESETS["defaults"]
+            inten_key = st["intensity"]; tone_key = st["tone"]
+            fmt_key = st["format"]; auto_mode = st.get("auto", True)
+            out_path = os.path.join(td, "mastered.wav" if fmt_key.startswith("wav") else "mastered.mp3")
+
+            if auto_mode:
+                analysis = analyze_file(in_path)
+                params = decide_smart_params(analysis)
+                chain = build_smart_chain(params)
+                if VERBOSE:
+                    print(f"[Analysis++] Link -> LUFS={analysis['LUFS']:.2f}, LRA={analysis['LRA']:.2f}, TP={analysis['TruePeak_dBFS']:.2f}, Tilt={analysis['Tilt_dB']:+.2f}, SubExcess={analysis['SubExcess']} => {params}", flush=True)
+                fmt_args, _ = output_args(fmt_key)
+                await ffmpeg_loudnorm_two_pass(in_path, chain, fmt_args, out_path)
+                analysis_note = (f" | LUFS={analysis['LUFS']:.1f}, LRA={analysis['LRA']:.1f}, Tilt={analysis['Tilt_dB']:+.1f} dB") if VERBOSE else ""
+            else:
+                analysis = analyze_file(in_path)
+                if VERBOSE:
+                    print(f"[Analysis] Link -> LUFS={analysis['LUFS']:.2f}, TP={analysis['TruePeak_dBFS']:.2f}, Tilt={analysis['Tilt_dB']:+.2f}, SubExcess={analysis['SubExcess']}", flush=True)
+                chain = build_ffmpeg_chain(inten_key, tone_key, analysis)
+                fmt_args, _ = output_args(fmt_key)
+                await ffmpeg_loudnorm_two_pass(in_path, chain, fmt_args, out_path)
+                analysis_note = ""
+
+            out_size = os.path.getsize(out_path)
+            if _too_big(out_size, MAX_TG_SEND_MB):
+                alt_out = os.path.join(td, "mastered_320.mp3")
+                await ffmpeg_loudnorm_two_pass(in_path, chain, output_args("mp3_320")[0], alt_out)
+                await m.reply_document(
+                    FSInputFile(alt_out, filename="mastered_320.mp3"),
+                    caption=(f"✅ Готово! Результат: MP3 320 kbps{analysis_note}\n"
+                             f"(финальный WAV > {MAX_TG_SEND_MB}MB, поэтому MP3)"),
+                    reply_markup=kb_home()
+                )
+            else:
+                await m.reply_document(
+                    FSInputFile(out_path, filename=os.path.basename(out_path)),
+                    caption=f"✅ Готово! Результат: {label_format(fmt_key)}{analysis_note}",
+                    reply_markup=kb_home()
+                )
+    except Exception as e:
+        await m.reply(f"❌ Ошибка при загрузке/мастеринге: {e}", reply_markup=kb_home())
+
+# -------- PRESET-BASED CHAIN (Manual mode) --------
+def build_ffmpeg_chain(inten_key: str, tone_key: str, analysis: dict):
+    """Construct the FFmpeg filter chain for manual mode using presets, 
+    but adapt if needed based on analysis (e.g. add HPF for sub bass)."""
+    inten = PRESETS["intensity"][inten_key]
+    tone = PRESETS["tone"][tone_key]
     eq_parts = []
-    if tone.get("hpf"):
-        eq_parts.append("highpass=f=30:width=0.7")
+    # If analysis indicates excessive sub-bass, add a gentle high-pass filter at 30Hz
+    if analysis.get("SubExcess"):
+        eq_parts.append("highpass=f=30:width=0.7")  # === changed === auto-correct sub-bass
+    # Low shelf from tone preset
     if tone.get("low_shelf"):
         lf = tone["low_shelf"]
         eq_parts.append(f"bass=g={lf['g']}:f={lf['f']}:w={lf['width']}")
+    # High shelf from tone preset
     if tone.get("high_shelf"):
         hf = tone["high_shelf"]
         eq_parts.append(f"treble=g={hf['g']}:f={hf['f']}:w={hf['width']}")
+    # If no EQ adjustments, use an 'anull' filter
     eq_chain = ",".join(eq_parts) if eq_parts else "anull"
-
+    # Use preset compressor settings
+    comp = inten["comp"]
     acompressor = (
-        f"acompressor=ratio={comp['ratio']}:"
-        f"threshold={comp['threshold_db']}dB:"
+        f"acompressor=ratio={comp['ratio']}:threshold={comp['threshold_db']}dB:"
         f"attack={comp['attack']}:release={comp['release']}"
     )
-    loudnorm = f"loudnorm=I={ln['I']}:TP={ln['TP']}:LRA={ln['LRA']}:print_format=summary"
-    return f"{eq_chain},{acompressor},{loudnorm}"
+    # Use preset loudnorm targets
+    loudnorm = f"loudnorm=I={inten['I']}:TP={inten['TP']}:LRA={inten['LRA']}:print_format=summary"
+    # Note: In two-pass mode, print_format=summary will be replaced with json and back.
+    chain = f"{eq_chain},{acompressor},{loudnorm}"
+    # === changed === 
+    # If Smart Auto analysis found track very mono (low stereo width), we do NOT automatically widen in manual mode (to respect user).
+    # (We only widen in smart auto mode for now.)
+    return chain
 
- # --- helpers to force print_format=json and parse last JSON safely ---
+def output_args(fmt_key: str):
+    # Select FFmpeg output arguments and filename based on desired format
+    if fmt_key == "wav16":   return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav"
+    if fmt_key == "wav24":   return "-ar 48000 -ac 2 -c:a pcm_s24le", "mastered_uhd.wav"
+    if fmt_key == "mp3_320": return "-ar 48000 -ac 2 -c:a libmp3lame -b:a 320k", "mastered_320.mp3"
+    return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav"
+
+# -------- LOUDNORM UTILS (Two-Pass Implementation) --------
+def _too_big(bytes_size: int, mb: int) -> bool:
+    return bytes_size > mb * 1024 * 1024
+
+# (Regex patterns for Google Drive etc. are unchanged)
+GDRIVE_RX = re.compile(r"(?:https?://)?(?:drive\.google\.com)/(?:file/d/|open\?id=|uc\?id=)([\w-]+)")
+DIRECT_RX = re.compile(r"^https?://.*\.(mp3|wav|m4a)(\?.*)?$", re.IGNORECASE)
+def is_gdrive(url: str) -> bool: return GDRIVE_RX.search(url) is not None
+def gdrive_direct(url: str) -> Optional[str]:
+    m = GDRIVE_RX.search(url)
+    if not m: return None
+    file_id = m.group(1)
+    return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+async def http_download(session: aiohttp.ClientSession, url: str, dst_path: str, max_mb: int = 256) -> int:
+    total = 0
+    async with session.get(url, timeout=120) as r:
+        r.raise_for_status()
+        with open(dst_path, "wb") as f:
+            async for chunk in r.content.iter_chunked(1 << 14):
+                if not chunk: 
+                    break
+                total += len(chunk)
+                if total > max_mb * 1024 * 1024:
+                    raise RuntimeError("Remote file too big")
+                f.write(chunk)
+    return total
+
+# (Two-pass loudnorm helper functions and ffmpeg_loudnorm_two_pass remain mostly unchanged)
 def _force_print_format_json(chain: str) -> str:
     if "loudnorm=" not in chain:
         return chain
@@ -221,9 +409,9 @@ def _extract_last_json_block(text: str) -> Optional[dict]:
 def _extract_loudnorm_targets(chain: str):
     mI  = re.search(r"loudnorm=[^,]*\bI=([-\d.]+)", chain)
     mTP = re.search(r"loudnorm=[^,]*\bTP=([-\d.]+)", chain)
-    mLR = re.search(r"loudnorm=[^,]*\bLRA=([-\d.]+)", chain)
+    mLRA = re.search(r"loudnorm=[^,]*\bLRA=([-\d.]+)", chain)
     try:
-        I  = float(mI.group(1))  if mI  else -14.0
+        I = float(mI.group(1)) if mI else -14.0
     except Exception:
         I = -14.0
     try:
@@ -231,358 +419,51 @@ def _extract_loudnorm_targets(chain: str):
     except Exception:
         TP = -1.2
     try:
-        LRA = float(mLR.group(1)) if mLR else 7.0
+        LRA = float(mLRA.group(1)) if mLRA else 7.0
     except Exception:
         LRA = 7.0
-    TP = float(np.clip(TP, -9.0, 0.0))  # target TP обязан быть в [-9, 0]
+    # Ensure TP target is within [-9, 0] dBFS to avoid invalid values
+    TP = float(np.clip(TP, -9.0, 0.0))
     return I, TP, LRA
 
-async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain_with_loudnorm: str, out_args: str, out_path: str):
-    if "loudnorm" not in af_chain_with_loudnorm:
-        raise RuntimeError("Chain must end with loudnorm")
+async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain: str, out_args: str, out_path: str):
+    """Run loudnorm in two-pass mode for given audio filter chain (which must end with loudnorm)."""
+    if "loudnorm" not in af_chain:
+        # If loudnorm filter is not in chain, we can just do a single pass (no normalization needed)
+        cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{af_chain}" {out_args} {shlex.quote(out_path)}'
+        proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        _, err = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError("ffmpeg processing failed: " + err.decode("utf-8", errors="ignore"))
+        return
 
-    # PASS 1 — принудительно json, чтобы достать корректный measured_*
-    pass1_chain = _force_print_format_json(af_chain_with_loudnorm)
+    # PASS 1 – force JSON output to measure input loudness parameters
+    pass1_chain = _force_print_format_json(af_chain)
     pass1_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{pass1_chain}" -f null -'
-    p1 = await asyncio.create_subprocess_shell(
-        pass1_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
+    p1 = await asyncio.create_subprocess_shell(pass1_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     _, err1 = await p1.communicate()
     if p1.returncode != 0:
         raise RuntimeError("ffmpeg pass1 failed: " + err1.decode("utf-8", errors="ignore"))
-
     text = err1.decode("utf-8", "ignore")
-    js = _extract_last_json_block(text)
-
-    # цели берём из исходной цепочки
-    target_I, target_TP, target_LRA = _extract_loudnorm_targets(af_chain_with_loudnorm)
-
-    pass2_ln = af_chain_with_loudnorm
-    if js:
-        # ВНИМАНИЕ: без префикса 'loudnorm=' — только аргументы!
+    stats = _extract_last_json_block(text)
+    # Extract target values from original chain
+    target_I, target_TP, target_LRA = _extract_loudnorm_targets(af_chain)
+    # Build measured parameters string for pass2 (if stats available)
+    if stats:
         measured_args = (
             f"I={target_I}:TP={target_TP}:LRA={target_LRA}:"
-            f"measured_I={js.get('input_i','-14')}:"
-            f"measured_LRA={js.get('input_lra','7')}:"
-            f"measured_TP={js.get('input_tp','-1.2')}:"
-            f"measured_thresh={js.get('input_thresh','-26')}:"
-            f"offset={js.get('target_offset','0')}:print_format=summary"
+            f"measured_I={stats.get('input_i', '-14')}:"
+            f"measured_LRA={stats.get('input_lra', '7')}:"
+            f"measured_TP={stats.get('input_tp', '-2')}:"
+            f"measured_thresh={stats.get('input_thresh', '-24')}:"
+            f"offset={stats.get('target_offset', '0')}:print_format=summary"
         )
-        # подменяем всё после последнего 'loudnorm=' на готовые аргументы
-        prefix, _ = af_chain_with_loudnorm.rsplit("loudnorm=", 1)
-        pass2_ln = prefix + "loudnorm=" + measured_args
-
-    pass2_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{pass2_ln}" {out_args} {shlex.quote(out_path)}'
-    p2 = await asyncio.create_subprocess_shell(
-        pass2_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-    )
+        # Replace the loudnorm filter args with measured args for pass2
+        prefix, _ = af_chain.rsplit("loudnorm=", 1)
+        af_chain = prefix + "loudnorm=" + measured_args
+    # PASS 2 – apply loudness normalization with measured values
+    pass2_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{af_chain}" {out_args} {shlex.quote(out_path)}'
+    p2 = await asyncio.create_subprocess_shell(pass2_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     _, err2 = await p2.communicate()
     if p2.returncode != 0:
-        raise RuntimeError("ffmpeg pass2 failed: " + err2.decode("utf-8", errors="ignore"))
-# -------- ПРЕСЕТНЫЙ FFMPEG (когда Auto выключен) --------
-def build_ffmpeg_chain(inten_key: str, tone_key: str):
-    inten = PRESETS["intensity"][inten_key]
-    tone  = PRESETS["tone"][tone_key]
-
-    eq_parts = []
-    if tone.get("low_shelf"):
-        lf = tone["low_shelf"]
-        eq_parts.append(f"bass=g={lf['g']}:f={lf['f']}:w={lf['width']}")
-    if tone.get("high_shelf"):
-        hf = tone["high_shelf"]
-        eq_parts.append(f"treble=g={hf['g']}:f={hf['f']}:w={hf['width']}")
-    eq_chain = ",".join(eq_parts) if eq_parts else "anull"
-
-    comp = inten["comp"]  # {ratio, threshold_db, attack, release}
-    acompressor = (
-        f"acompressor=ratio={comp['ratio']}:"
-        f"threshold={comp['threshold_db']}dB:"
-        f"attack={comp['attack']}:"
-        f"release={comp['release']}"
-    )
-    loudnorm = f"loudnorm=I={inten['I']}:TP={inten['TP']}:LRA={inten['LRA']}:print_format=summary"
-    return f"{eq_chain},{acompressor},{loudnorm}"
-
-def output_args(fmt_key:str):
-    if fmt_key=="wav16":   return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav"
-    if fmt_key=="wav24":   return "-ar 48000 -ac 2 -c:a pcm_s24le", "mastered_uhd.wav"
-    if fmt_key=="mp3_320": return "-ar 48000 -ac 2 -codec:a libmp3lame -b:a 320k", "mastered_320.mp3"
-    return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav"
-
-async def process_audio(in_path: str, out_path: str, intensity: str, tone: str, fmt_key: str):
-    from shutil import which
-    if which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg not found. Add it in nixpacks.toml (nixPkgs=['ffmpeg']).")
-    af = build_ffmpeg_chain(intensity, tone)
-    fmt_args, _ = output_args(fmt_key)
-    cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{af}" {fmt_args} {shlex.quote(out_path)}'
-    proc = await asyncio.create_subprocess_shell(cmd,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    _, err = await proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError("ffmpeg failed: " + err.decode("utf-8", errors="ignore"))
-
-# -------- UTILS: LINKS & DOWNLOAD --------
-GDRIVE_RX = re.compile(r"(?:https?://)?(?:drive\.google\.com)/(?:file/d/|open\?id=|uc\?id=)([\w-]+)")
-DIRECT_RX = re.compile(r"^https?://.*\.(mp3|wav)(\?.*)?$", re.IGNORECASE)
-
-def is_gdrive(url:str)->bool: return GDRIVE_RX.search(url) is not None
-
-def gdrive_direct(url:str)->Optional[str]:
-    m = GDRIVE_RX.search(url)
-    if not m: return None
-    file_id = m.group(1)
-    return f"https://drive.google.com/uc?export=download&id={file_id}"
-
-async def http_download(session:aiohttp.ClientSession, url:str, dst_path:str, max_mb:int=256)->int:
-    total = 0
-    async with session.get(url, timeout=120) as r:
-        r.raise_for_status()
-        with open(dst_path, "wb") as f:
-            async for chunk in r.content.iter_chunked(1<<14):
-                if not chunk: break
-                total += len(chunk)
-                if total > max_mb*1024*1024:
-                    raise RuntimeError("Remote file too big")
-                f.write(chunk)
-    return total
-
-def _too_big(bytes_size:int, mb:int)->bool:
-    return bytes_size > mb*1024*1024
-
-# -------- COMMAND MENU (persist кнопка-меню) --------
-async def setup_menu():
-    await bot.set_my_commands(
-        commands=[
-            BotCommand(command="start", description="Главное меню"),
-            BotCommand(command="menu", description="Показать меню"),
-            BotCommand(command="settings", description="Сброс/настройки"),
-        ],
-        scope=BotCommandScopeDefault()
-    )
-    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-
-# -------- HANDLERS --------
-@dp.message(Command("start"))
-async def start(m: Message):
-    USER_STATE[m.from_user.id] = {
-        "intensity": PRESETS["defaults"]["intensity"],
-        "tone": PRESETS["defaults"]["tone"],
-        "format": PRESETS["defaults"]["format"],
-        "auto": True
-    }
-    await m.answer(
-        "Йо! Я — Mr Mastering.\n"
-        "Пришли трек **.mp3** или **.wav** (до ~19 MB в Telegram), либо **ссылку** на Google Drive/Dropbox.\n"
-        "Форматы вывода: WAV16 / MP3 320 / WAV24.\n"
-        "Auto — включён.",
-        reply_markup=kb_main(m.from_user.id)
-    )
-
-@dp.message(Command("menu"))
-async def menu_cmd(m: Message):
-    await m.answer("Главное меню:", reply_markup=kb_main(m.from_user.id))
-
-@dp.message(Command("settings"))
-async def settings_cmd(m: Message):
-    USER_STATE[m.from_user.id] = PRESETS["defaults"].copy() | {"auto": True}
-    await m.answer("Настройки сброшены. Главное меню:", reply_markup=kb_main(m.from_user.id))
-
-@dp.callback_query(F.data == "go_home")
-async def go_home(c):
-    await c.message.answer("Главное меню:", reply_markup=kb_main(c.from_user.id))
-    await c.answer()
-
-@dp.callback_query(F.data == "menu_intensity")
-async def menu_intensity(c):
-    await c.message.edit_text("Выбери Intensity:", reply_markup=kb_intensity()); await c.answer()
-
-@dp.callback_query(F.data == "menu_tone")
-async def menu_tone(c):
-    await c.message.edit_text("Выбери Tone:", reply_markup=kb_tone()); await c.answer()
-
-@dp.callback_query(F.data == "menu_format")
-async def menu_format(c):
-    await c.message.edit_text("Выбери формат вывода:", reply_markup=kb_format()); await c.answer()
-
-@dp.callback_query(F.data == "back_main")
-async def back_main(c):
-    await c.message.edit_text("Главное меню:", reply_markup=kb_main(c.from_user.id)); await c.answer()
-
-@dp.callback_query(F.data.startswith("set_intensity_"))
-async def set_intensity(c):
-    val = c.data.replace("set_intensity_", "")
-    USER_STATE[c.from_user.id]["intensity"] = val
-    await c.message.edit_text(
-        f"Intensity = {val}\nКинь аудио или настрой Tone/Format.",
-        reply_markup=kb_main(c.from_user.id)
-    ); await c.answer()
-
-@dp.callback_query(F.data.startswith("set_tone_"))
-async def set_tone(c):
-    val = c.data.replace("set_tone_", "")
-    USER_STATE[c.from_user.id]["tone"] = val
-    await c.message.edit_text(
-        f"Tone = {val}\nКинь аудио или настрой Intensity/Format.",
-        reply_markup=kb_main(c.from_user.id)
-    ); await c.answer()
-
-@dp.callback_query(F.data.startswith("set_fmt_"))
-async def set_fmt(c):
-    key = c.data.replace("set_fmt_", "")
-    mapping = {"wav16":"wav16","mp3_320":"mp3_320","wav24":"wav24"}
-    key = mapping.get(key, "wav16")
-    USER_STATE[c.from_user.id]["format"] = key
-    await c.message.edit_text(
-        f"Output = {label_format(key)}\nКинь аудио.",
-        reply_markup=kb_main(c.from_user.id)
-    ); await c.answer()
-
-@dp.callback_query(F.data == "toggle_auto")
-async def toggle_auto(c):
-    st = USER_STATE.get(c.from_user.id, PRESETS["defaults"])
-    st["auto"] = not st.get("auto", False)
-    USER_STATE[c.from_user.id] = st
-    await c.message.edit_text(
-        ("🤖 Auto включён. Пришли аудио — выберу Intensity/Tone сам."
-         if st["auto"] else
-         "🤖 Auto выключен. Выбери пресеты и пришли аудио."),
-        reply_markup=kb_main(c.from_user.id)
-    ); await c.answer()
-
-# ---- CORE HANDLER: FILE ----
-@dp.message(F.audio | F.document)
-async def on_audio(m: Message):
-    file = m.audio or m.document
-    if not file: return
-    name = (file.file_name or "input").lower()
-    if not name.endswith(ALLOWED_EXT):
-        await m.reply("Пришли файл с расширением **.mp3** или **.wav** 🙏", reply_markup=kb_home())
-        return
-
-    size = file.file_size or 0
-    if _too_big(size, MAX_TG_FILE_MB):
-        await m.reply(
-            f"⚠️ Файл **{round(size/1024/1024,1)} MB** слишком большой для Telegram-скачивания.\n"
-            f"Кинь **ссылку** на Google Drive/Dropbox — я скачаю и сделаю мастеринг.",
-            reply_markup=kb_home()
-        )
-        return
-
-    st = USER_STATE.get(m.from_user.id) or PRESETS["defaults"]
-    inten, tone, fmtk, auto = st["intensity"], st["tone"], st["format"], st.get("auto", True)
-
-    await m.reply("Принял файл. " + ("Анализирую и мастерю…" if auto else "Делаю мастеринг…"), reply_markup=kb_home())
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            in_path = os.path.join(td, name)
-            out_path = os.path.join(td, ("mastered.wav" if fmtk.startswith("wav") else "mastered.mp3"))
-
-            fobj = await bot.get_file(file.file_id)
-            await bot.download_file(fobj.file_path, in_path)
-
-            if auto:
-                # --- AUTO-PRO ---
-                A = analyze_track_pro(in_path)
-                P = decide_params_from_analysis(A)
-                chain = build_chain_from_params(P)
-                if VERBOSE:
-                    print(f"[ANALYZE] LUFS={A['I']:.1f} | RMS={A['rms_db']:.1f} dBFS | TP={A['tp_dbfs']:.1f} dBFS | tilt={A['tilt']:+.2f} dB | sub_excess={A['sub_excess']} -> {P}", flush=True)
-                fmt_args, _ = output_args(fmtk)
-                await ffmpeg_loudnorm_two_pass(in_path, chain, fmt_args, out_path)
-                analysis_note = (f" | LUFS={A['I']:.1f} | tilt={A['tilt']:+.2f} dB") if VERBOSE else ""
-            else:
-                # --- Ручные пресеты ---
-                await process_audio(in_path, out_path, inten, tone, fmtk)
-                analysis_note = ""
-
-            out_size = os.path.getsize(out_path)
-            if _too_big(out_size, MAX_TG_SEND_MB):
-                mp3_path = os.path.join(td, "mastered_320.mp3")
-                if auto:
-                    await ffmpeg_loudnorm_two_pass(in_path, chain, output_args("mp3_320")[0], mp3_path)
-                else:
-                    await process_audio(in_path, mp3_path, inten, tone, "mp3_320")
-                await m.reply_document(
-                    FSInputFile(mp3_path, filename="mastered_320.mp3"),
-                    caption=(f"Готово ✅  Format=MP3 320{analysis_note}\n"
-                             f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)"),
-                    reply_markup=kb_home()
-                )
-                return
-
-            await m.reply_document(
-                FSInputFile(out_path, filename=os.path.basename(out_path)),
-                caption=f"Готово ✅  Format={label_format(fmtk)}{analysis_note}",
-                reply_markup=kb_home()
-            )
-    except Exception as e:
-        await m.reply(f"Ошибка: {e}", reply_markup=kb_home())
-
-# ---- CORE HANDLER: LINKS ----
-@dp.message(F.text)
-async def on_text(m: Message):
-    url = (m.text or "").strip()
-    if not (is_gdrive(url) or DIRECT_RX.match(url)):
-        return
-    await m.reply("Окей, скачиваю по ссылке и делаю мастеринг…", reply_markup=kb_home())
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            ext = ".mp3" if ".mp3" in url.lower() else ".wav"
-            in_path = os.path.join(td, f"input_from_link{ext}")
-            if is_gdrive(url):
-                url = gdrive_direct(url) or url
-            async with aiohttp.ClientSession() as session:
-                await http_download(session, url, in_path, max_mb=256)
-
-            st = USER_STATE.get(m.from_user.id) or PRESETS["defaults"]
-            inten, tone, fmtk, auto = st["intensity"], st["tone"], st["format"], st.get("auto", True)
-
-            out_path = os.path.join(td, ("mastered.wav" if fmtk.startswith("wav") else "mastered.mp3"))
-            if auto:
-                A = analyze_track_pro(in_path)
-                P = decide_params_from_analysis(A)
-                chain = build_chain_from_params(P)
-                if VERBOSE:
-                    print(f"[ANALYZE] LUFS={A['I']:.1f} | RMS={A['rms_db']:.1f} dBFS | TP={A['tp_dbfs']:.1f} dBFS | tilt={A['tilt']:+.2f} dB | sub_excess={A['sub_excess']} -> {P}", flush=True)
-                fmt_args, _ = output_args(fmtk)
-                await ffmpeg_loudnorm_two_pass(in_path, chain, fmt_args, out_path)
-                analysis_note = (f" | LUFS={A['I']:.1f} | tilt={A['tilt']:+.2f} dB") if VERBOSE else ""
-            else:
-                await process_audio(in_path, out_path, inten, tone, fmtk)
-                analysis_note = ""
-
-            out_size = os.path.getsize(out_path)
-            if _too_big(out_size, MAX_TG_SEND_MB):
-                mp3_path = os.path.join(td, "mastered_320.mp3")
-                if auto:
-                    await ffmpeg_loudnorm_two_pass(in_path, chain, output_args("mp3_320")[0], mp3_path)
-                else:
-                    await process_audio(in_path, mp3_path, inten, tone, "mp3_320")
-                await m.reply_document(
-                    FSInputFile(mp3_path, filename="mastered_320.mp3"),
-                    caption=(f"Готово ✅  Format=MP3 320{analysis_note}\n"
-                             f"(WAV >{MAX_TG_SEND_MB}MB — отправил MP3)"),
-                    reply_markup=kb_home()
-                )
-                return
-
-            await m.reply_document(
-                FSInputFile(out_path, filename=os.path.basename(out_path)),
-                caption=f"Готово ✅  Format={label_format(fmtk)}{analysis_note}",
-                reply_markup=kb_home()
-            )
-    except Exception as e:
-        await m.reply(f"Ошибка при обработке ссылки: {e}", reply_markup=kb_home())
-
-# -------- MAIN --------
-async def _runner():
-    await setup_menu()
-    print("Mr Mastering bot is running…")
-    await dp.start_polling(bot)
-
-def main():
-    asyncio.run(_runner())
-
-if __name__ == "__main__":
-    main()
+        raise RuntimeError("ffmpeg pass2 failed: " + err2.decode("utf-8", errors="ignore")
