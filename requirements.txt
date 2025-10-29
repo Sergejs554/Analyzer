@@ -1,13 +1,14 @@
 flask==3.0.3
-aiogram==3.4.1
 requests
-librosa
-pyloudnorm
-soundfile
 matplotlib
 pandas
 numpy
 resampy
-ffmpeg-python
-aiohttp
 pydub
+aiogram==3.4.1
+aiohttp
+librosa
+numpy
+pyloudnorm
+soundfile  # for librosa audio reading
+ffmpeg-python  # (optional, not used directly but can be omitted if not needed)
