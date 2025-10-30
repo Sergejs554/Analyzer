@@ -8,7 +8,9 @@ from aiogram.types import (
     Message, InlineKeyboardMarkup, InlineKeyboardButton,
     FSInputFile, BotCommand, BotCommandScopeDefault, MenuButtonCommands
 )
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandStart  # === добавлено ===
+import logging
+logging.basicConfig(level=logging.INFO)
 
 import aiohttp
 
@@ -91,7 +93,7 @@ def kb_format():
     ])
 
 # -------- HANDLERS: MENU AND SETTINGS --------
-@dp.message(Command("start"))
+@dp.message(CommandStart())  # === изменено ===
 async def start(m: Message):
     USER_STATE[m.from_user.id] = {
         "intensity": PRESETS["defaults"]["intensity"],
@@ -468,3 +470,20 @@ async def ffmpeg_loudnorm_two_pass(in_path: str, af_chain: str, out_args: str, o
     _, err2 = await p2.communicate()
     if p2.returncode != 0:
         raise RuntimeError("ffmpeg pass2 failed: " + err2.decode("utf-8", errors="ignore"))
+# -------- MAIN --------
+# === добавлено ===
+async def _runner():
+    # Сбрасываем старый webhook (если бот был подключён через вебхуки)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await setup_menu()
+    print("Mr Mastering bot is running…", flush=True)
+    await dp.start_polling(
+        bot,
+        allowed_updates=dp.resolve_used_update_types()
+    )
+
+def main():
+    asyncio.run(_runner())
+
+if __name__ == "__main__":
+    main()
