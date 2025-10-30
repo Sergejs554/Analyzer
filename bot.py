@@ -93,6 +93,17 @@ def kb_format():
     ])
 
 # -------- HANDLERS: MENU AND SETTINGS --------
+# -------- COMMAND MENU (persist кнопка-меню) --------
+async def setup_menu():
+    await bot.set_my_commands(
+        commands=[
+            BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="menu", description="Показать меню"),
+            BotCommand(command="settings", description="Сброс/настройки"),
+        ],
+        scope=BotCommandScopeDefault()
+    )
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 @dp.message(CommandStart())  # === изменено ===
 async def start(m: Message):
     USER_STATE[m.from_user.id] = {
