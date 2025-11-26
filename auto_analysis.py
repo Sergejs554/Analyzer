@@ -1,4 +1,3 @@
-# auto_analysis.py
 
 import numpy as np
 import librosa, pyloudnorm as pyln
