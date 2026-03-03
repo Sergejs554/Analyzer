@@ -98,15 +98,15 @@ def _run(cmd: str):
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7,afftdn=nf=-25"
 
 # === изменено ===
-# Кроссфейд между секциями, чтобы убрать "штыки/провалы" на стыках
-_XFADE_SEC = 0.25
-_XFADE_MIN = 0.05
+# Кроссфейд делаем КОРОТКИЙ, чтобы не было "двойного слога" и смаза атак
+_XFADE_SEC = 0.06
+_XFADE_MIN = 0.02
+# Снэп границ секций, чтобы убрать микро-щели/перехлёсты от округлений анализа
+_SNAP_SEC = 0.20
+# Если вдруг осталась большая щель, acrossfade выключаем (иначе будет странно)
+_MAX_GAP_FOR_XFADE = 0.05
 
 def _strip_loudnorm(chain: str) -> tuple[str, str]:
-    """
-    Split '... , loudnorm=...' into (pre_chain, loudnorm_part).
-    If loudnorm not found: returns (chain, "")
-    """
     if "loudnorm=" not in chain:
         return chain, ""
     pre, ln = chain.rsplit("loudnorm=", 1)
@@ -115,7 +115,6 @@ def _strip_loudnorm(chain: str) -> tuple[str, str]:
     return pre, ln
 
 def _force_print_format_json(loudnorm_part: str) -> str:
-    # loudnorm=...:print_format=summary -> json
     if "loudnorm=" not in loudnorm_part:
         return loudnorm_part
     if "print_format=" in loudnorm_part:
@@ -144,10 +143,6 @@ def _extract_last_json_block(text: str):
     return last_obj
 
 def _build_loudnorm_two_pass(in_path: str, ln: dict, out_args: str, out_path: str):
-    """
-    Two-pass loudnorm (FFmpeg) for final stage.
-    We run loudnorm only (post section-EQ/comp), so it stays stable.
-    """
     target_I = float(ln["I"])
     target_TP = float(ln["TP"])
     target_LRA = float(ln["LRA"])
@@ -176,9 +171,6 @@ def _build_loudnorm_two_pass(in_path: str, ln: dict, out_args: str, out_path: st
     _run(pass2_cmd)
 
 def _out_args(fmt: str) -> tuple[str, str, str]:
-    """
-    Returns (ffmpeg_out_args, filename, mimetype)
-    """
     fmt = (fmt or "wav16").lower()
     if fmt == "wav24":
         return "-ar 48000 -ac 2 -c:a pcm_s24le", "mastered_uhd.wav", "audio/wav"
@@ -186,57 +178,73 @@ def _out_args(fmt: str) -> tuple[str, str, str]:
         return "-ar 48000 -ac 2 -c:a flac", "mastered.flac", "audio/flac"
     if fmt == "mp3_320" or fmt == "mp3":
         return "-ar 48000 -ac 2 -c:a libmp3lame -b:a 320k", "mastered_320.mp3", "audio/mpeg"
-    # default wav16
     return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav", "audio/wav"
 
 # === изменено ===
-def _xfade_duration(prev_start: float, prev_end: float, next_start: float, next_end: float) -> float:
-    prev_len = max(0.0, prev_end - prev_start)
-    next_len = max(0.0, next_end - next_start)
-    d = min(_XFADE_SEC, prev_len * 0.45, next_len * 0.45)
+def _xfade_duration(prev_len: float, next_len: float) -> float:
+    d = min(_XFADE_SEC, prev_len * 0.25, next_len * 0.25)
     return float(max(_XFADE_MIN, d))
+
+# === изменено ===
+def _sanitize_sections(sections: list[dict]) -> list[dict]:
+    """
+    1) сортируем
+    2) снэпим start следующей секции к end предыдущей, если они рядом (убираем микро-дырки/перехлёсты)
+    3) гарантируем минимальную длину
+    """
+    if not sections:
+        return []
+    secs = sorted(sections, key=lambda s: float(s.get("start", 0.0)))
+
+    out = []
+    for i, s in enumerate(secs):
+        st = max(0.0, float(s.get("start", 0.0)))
+        en = max(st + 0.02, float(s.get("end", 0.0)))
+
+        if out:
+            prev = out[-1]
+            prev_en = float(prev["end"])
+            # если граница рядом - снэпим, чтобы не было дырок/двойных кусков
+            if abs(st - prev_en) <= _SNAP_SEC:
+                st = prev_en
+                en = max(st + 0.02, en)
+
+        ns = dict(s)
+        ns["start"] = float(st)
+        ns["end"] = float(en)
+        out.append(ns)
+    return out
 
 def _build_section_filter_complex(section_params: dict) -> str:
     """
-    We apply ONLY pre-loudnorm part per section: pre_clean + (eq/comp/widen) WITHOUT loudnorm.
-    Final loudnorm is global 2-pass after concatenation.
+    ONLY pre-loudnorm part per section: pre_clean + (eq/comp/widen) WITHOUT loudnorm.
+    Final loudnorm is global 2-pass after stitching.
 
     === изменено ===
-    Вместо concat используем acrossfade с overlap, чтобы убрать стыки.
+    Правильная схема:
+      - НЕ расширяем сегменты влево/вправо
+      - НЕ используем concat вместе с acrossfade
+      - делаем последовательный acrossfade: (s0+s1)->x1; (x1+s2)->x2; ...
     """
     base = section_params["base_params"]
-    sections = section_params["sections"]
+    sections = _sanitize_sections(section_params["sections"])
 
-    # Build per-section chain WITHOUT loudnorm
     base_chain = build_smart_chain(base)
     pre_chain, _ = _strip_loudnorm(base_chain)
 
-    # If we have no sections, just apply global pre_clean + pre_chain
     if not sections:
         return f"[0:a]{_PRE_CLEAN_CHAIN},{pre_chain}[aout]"
-
-    # normalize section ordering just in case
-    sections = sorted(sections, key=lambda s: float(s.get("start", 0.0)))
 
     seg_filters = []
     seg_labels = []
 
-    n = len(sections)
     for i, s in enumerate(sections):
         sp = s["params"]
         ch = build_smart_chain(sp)
         ch_pre, _ = _strip_loudnorm(ch)
 
-        s_start = max(0.0, float(s.get("start", 0.0)))
-        s_end = max(s_start + 0.01, float(s.get("end", 0.0)))
-
-        # overlap: extend each segment a bit into neighbors
-        left = _XFADE_SEC if i > 0 else 0.0
-        right = _XFADE_SEC if i < (n - 1) else 0.0
-
-        start = max(0.0, s_start - left)
-        end = max(start + 0.02, s_end + right)
-
+        start = float(s["start"])
+        end = float(s["end"])
         lbl = f"s{i}"
 
         seg_filters.append(
@@ -244,22 +252,30 @@ def _build_section_filter_complex(section_params: dict) -> str:
         )
         seg_labels.append(lbl)
 
-    # chain acrossfades
     if len(seg_labels) == 1:
         return ";".join(seg_filters + [f"[{seg_labels[0]}]anull[aout]"])
 
     xfade_filters = []
     cur = seg_labels[0]
+
     for i in range(1, len(seg_labels)):
-        prev_sec = sections[i - 1]
-        next_sec = sections[i]
-        prev_start = max(0.0, float(prev_sec.get("start", 0.0)))
-        prev_end = max(prev_start + 0.01, float(prev_sec.get("end", 0.0)))
-        next_start = max(0.0, float(next_sec.get("start", 0.0)))
-        next_end = max(next_start + 0.01, float(next_sec.get("end", 0.0)))
+        prev = sections[i - 1]
+        nxt = sections[i]
+        prev_len = float(prev["end"] - prev["start"])
+        next_len = float(nxt["end"] - nxt["start"])
 
-        d = _xfade_duration(prev_start, prev_end, next_start, next_end)
+        # если вдруг между секциями есть большая дырка - acrossfade только навредит
+        gap = float(nxt["start"] - prev["end"])
+        if gap > _MAX_GAP_FOR_XFADE:
+            # fallback: просто склеиваем через concat=2 (без overlap)
+            out_lbl = "aout" if i == (len(seg_labels) - 1) else f"x{i}"
+            xfade_filters.append(
+                f"[{cur}][{seg_labels[i]}]concat=n=2:v=0:a=1[{out_lbl}]"
+            )
+            cur = out_lbl
+            continue
 
+        d = _xfade_duration(prev_len, next_len)
         out_lbl = "aout" if i == (len(seg_labels) - 1) else f"x{i}"
         xfade_filters.append(
             f"[{cur}][{seg_labels[i]}]acrossfade=d={d}:c1=tri:c2=tri[{out_lbl}]"
@@ -269,16 +285,10 @@ def _build_section_filter_complex(section_params: dict) -> str:
     return ";".join(seg_filters + xfade_filters)
 
 def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
-    """
-    Pipeline:
-      analyze_sections -> smart params (base+sections) -> section processing -> acrossfade -> final loudnorm 2-pass -> output
-    """
-    # 1) Analyze (global + sections)
     sec = analyze_sections(in_path, target_sr=48000)
     global_a = sec["global"]
     sections = sec.get("sections") or []
 
-    # 2) Decide params (base + section params) with user tone/intensity biases
     sp = decide_smart_params_with_sections(
         global_analysis=global_a,
         sections=sections,
@@ -286,13 +296,11 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
         tone_mode=(tone or "balanced"),
     )
 
-    # 3) Render intermediate with section EQ/comp (NO loudnorm)
     interm = os.path.join(td, "intermediate.wav")
     fc = _build_section_filter_complex(sp)
     cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -filter_complex "{fc}" -map "[aout]" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(interm)}'
     _run(cmd)
 
-    # 4) Final loudnorm 2-pass (global) with base targets
     out_args, out_name, _mime = _out_args(fmt)
     out_path = os.path.join(td, out_name)
     _build_loudnorm_two_pass(interm, sp["base_params"]["loudnorm"], out_args, out_path)
@@ -394,14 +402,6 @@ def compare_sections_route():
 
 @app.get("/master")
 def master_route():
-    """
-    MR MASTERING v2 — единственный endpoint для прод-мастеринга.
-
-    Usage:
-      /master?file=<url>&tone=warm|balanced|bright&intensity=low|balanced|high&format=wav16|wav24|flac|mp3_320
-
-    Returns: mastered file as binary download.
-    """
     url = request.args.get("file")
     if not url:
         return jsonify({"error": "provide ?file=<url>"}), 400
