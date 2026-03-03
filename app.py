@@ -127,27 +127,44 @@ def _lowmid_filter() -> str:
     return f"equalizer=f={f}:t=q:w={w}:g={g}"
 
 # === изменено ===
-# GLUE (очень мягкий bus compression) — через ENV
-# Включение: GLUE_ON=1 (по умолчанию 0, чтобы не менять звук внезапно)
-# Параметры по умолчанию (твой запрос):
-#   ratio=1.35, threshold=-18 dB, attack=25 ms, release=160 ms, makeup=0
+# GLUE (лёгкая "склейка" микродинамики) через ENV
+# По умолчанию ВЫКЛ (GLUE_ON=0), чтобы ничего не ломать.
+# Включение:
+#   GLUE_ON=1
+# Ручные ползунки:
+#   GLUE_RATIO=1.6
+#   GLUE_THRESHOLD_DB=-18
+#   GLUE_ATTACK_MS=10
+#   GLUE_RELEASE_MS=120
+#   GLUE_KNEE_DB=2
+#   GLUE_MAKEUP_DB=0
+#   GLUE_MIX=1.0   (0..1)
 _GLUE_ON = (os.getenv("GLUE_ON", "0").strip() == "1")
-_GLUE_RATIO = float(os.getenv("GLUE_RATIO", "1.35"))
+_GLUE_RATIO = float(os.getenv("GLUE_RATIO", "1.6"))
 _GLUE_THRESHOLD_DB = float(os.getenv("GLUE_THRESHOLD_DB", "-18"))
-_GLUE_ATTACK_MS = float(os.getenv("GLUE_ATTACK_MS", "25"))
-_GLUE_RELEASE_MS = float(os.getenv("GLUE_RELEASE_MS", "160"))
+_GLUE_ATTACK_MS = float(os.getenv("GLUE_ATTACK_MS", "10"))
+_GLUE_RELEASE_MS = float(os.getenv("GLUE_RELEASE_MS", "120"))
+_GLUE_KNEE_DB = float(os.getenv("GLUE_KNEE_DB", "2"))
 _GLUE_MAKEUP_DB = float(os.getenv("GLUE_MAKEUP_DB", "0"))
+_GLUE_MIX = float(os.getenv("GLUE_MIX", "1.0"))
 
 def _glue_filter() -> str:
     if not _GLUE_ON:
         return "anull"
-    ratio = max(1.05, min(2.50, float(_GLUE_RATIO)))
-    thr = max(-40.0, min(-6.0, float(_GLUE_THRESHOLD_DB)))
-    atk = max(1.0, min(200.0, float(_GLUE_ATTACK_MS)))
-    rel = max(10.0, min(2000.0, float(_GLUE_RELEASE_MS)))
-    mk = max(-6.0, min(6.0, float(_GLUE_MAKEUP_DB)))
-    # NOTE: без knee, чтобы не зависеть от сборки ffmpeg (у разных билдов набор опций отличается)
-    return f"acompressor=ratio={ratio}:threshold={thr}dB:attack={atk}:release={rel}:makeup={mk}dB"
+    ratio = max(1.0, min(10.0, float(_GLUE_RATIO)))
+    thr = max(-60.0, min(0.0, float(_GLUE_THRESHOLD_DB)))
+    att = max(0.1, min(200.0, float(_GLUE_ATTACK_MS)))      # ms
+    rel = max(5.0, min(2000.0, float(_GLUE_RELEASE_MS)))    # ms
+    knee = max(0.0, min(12.0, float(_GLUE_KNEE_DB)))
+    makeup = max(-6.0, min(12.0, float(_GLUE_MAKEUP_DB)))
+    mix = max(0.0, min(1.0, float(_GLUE_MIX)))
+
+    # acompressor: threshold in dB, attack/release in ms
+    # mix: параллель, можно делать subtle (например 0.35)
+    return (
+        f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
+        f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
+    )
 
 # AIR BUS (параллельный "воздух" без склеек/нарезки)
 _AIR_AMOUNT = 0.16            # 0.10..0.22 (старт 0.16)
@@ -301,12 +318,12 @@ def _normalize_format(x: str) -> str:
 
 def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
     # === изменено ===
-    # Добавили low-mid "плечи" (уже было) + GLUE (через ENV) после основной цепи
+    # Добавили low-mid "плечи" + glue между pre-clean и основной цепью
     lm = _lowmid_filter()
     glue = _glue_filter()
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-af "{_PRE_CLEAN_CHAIN},{lm},{chain_no_ln},{glue}" '
+        f'-af "{_PRE_CLEAN_CHAIN},{lm},{glue},{chain_no_ln}" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
@@ -374,7 +391,24 @@ def root():
 
 @app.get("/health")
 def health():
-    return jsonify({"ok": True})
+    # === изменено ===
+    # Чтобы ты ТОЧНО видел, что Railway подхватил env и что код их читает.
+    return jsonify({
+        "ok": True,
+        "ENABLE_AFFTDN": os.getenv("ENABLE_AFFTDN"),
+        "LOWMID_ON": os.getenv("LOWMID_ON"),
+        "LOWMID_F": os.getenv("LOWMID_F"),
+        "LOWMID_W": os.getenv("LOWMID_W"),
+        "LOWMID_G": os.getenv("LOWMID_G"),
+        "GLUE_ON": os.getenv("GLUE_ON"),
+        "GLUE_RATIO": os.getenv("GLUE_RATIO"),
+        "GLUE_THRESHOLD_DB": os.getenv("GLUE_THRESHOLD_DB"),
+        "GLUE_ATTACK_MS": os.getenv("GLUE_ATTACK_MS"),
+        "GLUE_RELEASE_MS": os.getenv("GLUE_RELEASE_MS"),
+        "GLUE_KNEE_DB": os.getenv("GLUE_KNEE_DB"),
+        "GLUE_MAKEUP_DB": os.getenv("GLUE_MAKEUP_DB"),
+        "GLUE_MIX": os.getenv("GLUE_MIX"),
+    })
 
 @app.get("/analyze")
 def analyze():
@@ -455,21 +489,16 @@ def compare_sections_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.get("/health")
-def health():
-    return jsonify({
-        "ok": True,
-        "ENABLE_AFFTDN": os.getenv("ENABLE_AFFTDN"),
-        "LOWMID_ON": os.getenv("LOWMID_ON"),
-        "LOWMID_F": os.getenv("LOWMID_F"),
-        "LOWMID_W": os.getenv("LOWMID_W"),
-        "LOWMID_G": os.getenv("LOWMID_G"),
-        "GLUE_ON": os.getenv("GLUE_ON"),
-        "GLUE_RATIO": os.getenv("GLUE_RATIO"),
-        "GLUE_THRESHOLD_DB": os.getenv("GLUE_THRESHOLD_DB"),
-        "GLUE_ATTACK_MS": os.getenv("GLUE_ATTACK_MS"),
-        "GLUE_RELEASE_MS": os.getenv("GLUE_RELEASE_MS"),
-    })
+@app.get("/master")
+def master_route():
+    """
+    Usage:
+      /master?file=<url>&tone=warm|balanced|bright&intensity=low|balanced|high&format=wav16|wav24|aiff|flac|mp3_320
+    """
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
     tone = _normalize_tone(request.args.get("tone") or "balanced")
     intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
     fmt = _normalize_format(request.args.get("format") or "wav16")
