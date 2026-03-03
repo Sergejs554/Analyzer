@@ -6,8 +6,8 @@ import os, tempfile, requests, re, subprocess, shlex, json
 from analyze_mastering import run_analysis
 from auto_analysis import analyze_sections  # секционный анализ
 from smart_auto import (
-    decide_smart_params,           # base params
-    apply_section_influence,        # === изменено === (нужно для soft/hard рендера)
+    decide_smart_params,        # base params (tone/intensity учитываются тут)
+    apply_section_influence,    # внутренняя +/-0.10 для морфа по секциям
     build_smart_chain
 )
 
@@ -38,14 +38,12 @@ def guess_ext(url: str, content_type: str | None) -> str:
     if ".mp3" in u: return ".mp3"
     if ".m4a" in u: return ".m4a"
     if ".flac" in u: return ".flac"
-    if ".aiff" in u or ".aif" in u: return ".aiff"
     if content_type:
         ct = content_type.lower()
         if "audio/wav" in ct or "audio/x-wav" in ct: return ".wav"
         if "audio/mpeg" in ct: return ".mp3"
         if "audio/mp4" in ct or "audio/x-m4a" in ct: return ".m4a"
         if "audio/flac" in ct: return ".flac"
-        if "audio/aiff" in ct or "audio/x-aiff" in ct: return ".aiff"
     return ".wav"
 
 def download_file(url: str, out_path: str, timeout: int = 120) -> tuple[int, str, str]:
@@ -101,14 +99,9 @@ def _run(cmd: str):
 # ---------------------------
 
 # Fixed Pre-Clean (НЕ зависит от tone/intensity, НЕ зависит от section mapping)
-# Максимально безопасно: убираем инфраниз, лёгкий шумодав, без лимитера.
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7,afftdn=nf=-25"
 
 def _strip_loudnorm(chain: str) -> tuple[str, str]:
-    """
-    Split '... , loudnorm=...' into (pre_chain, loudnorm_part).
-    If loudnorm not found: returns (chain, "")
-    """
     if "loudnorm=" not in chain:
         return chain, ""
     pre, ln = chain.rsplit("loudnorm=", 1)
@@ -145,10 +138,6 @@ def _extract_last_json_block(text: str):
     return last_obj
 
 def _build_loudnorm_two_pass(in_path: str, ln: dict, out_args: str, out_path: str):
-    """
-    Two-pass loudnorm (FFmpeg) for final stage.
-    Мы применяем loudnorm только ОДИН раз в конце (глобально), чтобы не было скачков.
-    """
     target_I = float(ln["I"])
     target_TP = float(ln["TP"])
     target_LRA = float(ln["LRA"])
@@ -177,120 +166,132 @@ def _build_loudnorm_two_pass(in_path: str, ln: dict, out_args: str, out_path: st
     _run(pass2_cmd)
 
 def _out_args(fmt: str) -> tuple[str, str, str]:
-    """
-    Returns (ffmpeg_out_args, filename, mimetype)
-    """
     fmt = (fmt or "wav16").lower()
     if fmt == "wav24":
         return "-ar 48000 -ac 2 -c:a pcm_s24le", "mastered_uhd.wav", "audio/wav"
     if fmt == "flac":
         return "-ar 48000 -ac 2 -c:a flac", "mastered.flac", "audio/flac"
-    if fmt in ("mp3_320", "mp3"):
+    if fmt == "mp3_320" or fmt == "mp3":
         return "-ar 48000 -ac 2 -c:a libmp3lame -b:a 320k", "mastered_320.mp3", "audio/mpeg"
-    if fmt == "aiff":
-        # AIFF: PCM big-endian
-        return "-ar 48000 -ac 2 -f aiff -c:a pcm_s16be", "mastered.aiff", "audio/aiff"
-    # default wav16
     return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav", "audio/wav"
 
-# === изменено ===
-# Section-aware БЕЗ НАРЕЗКИ:
-# 1) рендерим SOFT и HARD версии целиком (одна архитектура)
-# 2) строим плавную маску mask(t) из секций (0..1)
-# 3) миксуем: out = soft*(1-mask) + hard*mask
-# 4) loudnorm 2-pass один раз в конце
+# ---------------------------
+# SECTION-AWARE (БЕЗ НАРЕЗКИ / БЕЗ СКЛЕЕК)
+# ---------------------------
 
-_RAMP_MIN = 0.08
+# Плавная рампа вокруг границ секций (чтобы mask(t) менялась мягко)
+_RAMP_MIN = 0.10
 _RAMP_MAX = 0.80
 
 def _clamp(x, lo, hi):
     return float(max(lo, min(hi, x)))
 
 def _pick_ramp(prev_len: float, next_len: float) -> float:
-    # рампа вокруг границы секций, чтобы не было слышимых точек
     r = min(_RAMP_MAX, 0.25 * prev_len, 0.25 * next_len)
     return _clamp(r, _RAMP_MIN, _RAMP_MAX)
 
-def _build_mask_expr_from_sections(sections: list[dict]) -> tuple[str, float]:
-    """
-    Строим piecewise-linear mask(t) по секциям.
-    mask в [0..1], плавные переходы на границах.
-
-    Возвращает (expr, total_duration_est).
-    """
+def _sanitize_sections_basic(sections: list[dict]) -> list[dict]:
     if not sections:
-        return "0.5", 0.0
-
+        return []
     secs = sorted(sections, key=lambda s: float(s.get("start", 0.0)))
-    starts = [float(s.get("start", 0.0)) for s in secs]
-    ends = [float(s.get("end", 0.0)) for s in secs]
-    dur_est = float(max(ends) if ends else 0.0)
+    out = []
+    for s in secs:
+        st = max(0.0, float(s.get("start", 0.0)))
+        en = max(st + 0.02, float(s.get("end", 0.0)))
+        ns = dict(s)
+        ns["start"] = float(st)
+        ns["end"] = float(en)
+        out.append(ns)
+    return out
 
-    # weight берем из "level" (0..1), это уже нормализовано в auto_analysis
+def _build_mask_expr_from_sections(sections: list[dict]) -> str:
+    """
+    mask(t) в [0..1], piecewise-linear с плавными переходами на границах.
+    Используем sections[].level (0..1) из auto_analysis (у тебя он уже нормализован).
+    """
+    secs = _sanitize_sections_basic(sections)
+    if not secs:
+        return "0.5"
+
+    # веса по секциям
     w = [ _clamp(float(s.get("level", 0.5)), 0.0, 1.0) for s in secs ]
 
-    # Собираем выражение в обратную сторону (чтобы не городить суммирование/оверлап)
-    # На каждой границе b делаем линейный переход w[i] -> w[i+1] на интервале [b-r, b+r]
+    # строим выражение справа налево:
+    # expr = w_last, затем на каждой границе делаем if(t < left) wi else if(t < right) lerp else expr
     expr = f"{w[-1]:.6f}"
-    for i in range(len(w) - 2, -1, -1):
-        # граница между i и i+1
-        b = max(starts[i+1], ends[i])  # безопасно
-        prev_len = max(0.01, ends[i] - starts[i])
-        next_len = max(0.01, ends[i+1] - starts[i+1])
+    for i in range(len(secs) - 2, -1, -1):
+        left_sec = secs[i]
+        right_sec = secs[i+1]
+
+        wi = _clamp(w[i], 0.0, 1.0)
+        wj = _clamp(w[i+1], 0.0, 1.0)
+
+        # граница между секциями
+        b = max(float(right_sec["start"]), float(left_sec["end"]))
+
+        prev_len = max(0.01, float(left_sec["end"] - left_sec["start"]))
+        next_len = max(0.01, float(right_sec["end"] - right_sec["start"]))
         r = _pick_ramp(prev_len, next_len)
 
         left = b - r
         right = b + r
-        wi = w[i]
-        wj = w[i+1]
+        denom = max(0.001, 2.0 * r)
 
         # if(t < left) wi
-        # else if(t < right) wi + (wj-wi)*(t-left)/(2r)
-        # else -> expr (который уже описывает дальше)
+        # else if(t < right) wi + (wj-wi)*(t-left)/denom
+        # else expr
         expr = (
             f"if(lt(t,{left:.6f}),{wi:.6f},"
             f"if(lt(t,{right:.6f}),"
-            f"({wi:.6f}+({wj:.6f}-{wi:.6f})*(t-{left:.6f})/{(2*r):.6f}),"
+            f"({wi:.6f}+({wj:.6f}-{wi:.6f})*(t-{left:.6f})/{denom:.6f}),"
             f"({expr})"
             f"))"
         )
 
-    return expr, dur_est
+    return expr
 
-def _render_variant(in_path: str, chain_no_ln: str, out_path: str):
+def _render_variant_full(in_path: str, chain_no_ln: str, out_wav: str):
+    """
+    Рендерим цельный файл: preclean + chain_no_ln (без loudnorm).
+    """
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
         f'-af "{_PRE_CLEAN_CHAIN},{chain_no_ln}" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_wav)}'
     )
     _run(cmd)
 
-def _mix_soft_hard(soft_path: str, hard_path: str, mask_expr: str, out_path: str):
-    # base = 1-mask
-    base_expr = f"(1-({mask_expr}))"
+def _mix_by_mask(a_path: str, b_path: str, mask_expr: str, out_wav: str):
+    """
+    out = A*(1-mask) + B*mask, mask(t) eval=frame
+    """
+    inv_expr = f"(1-({mask_expr}))"
     fc = (
-        f"[0:a]volume='{base_expr}':eval=frame[a0];"
+        f"[0:a]volume='{inv_expr}':eval=frame[a0];"
         f"[1:a]volume='{mask_expr}':eval=frame[a1];"
         f"[a0][a1]amix=inputs=2:normalize=0[aout]"
     )
     cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(soft_path)} -i {shlex.quote(hard_path)} '
-        f'-filter_complex "{fc}" -map "[aout]" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+        f'ffmpeg -y -hide_banner -i {shlex.quote(a_path)} -i {shlex.quote(b_path)} '
+        f'-filter_complex "{fc}" -map "[aout]" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_wav)}'
     )
     _run(cmd)
-
-def _normalize_intensity_alias(x: str) -> str:
-    x = (x or "balanced").lower().strip()
-    # поддерживаем старые и новые имена
-    if x in ("soft", "low"): return "low"
-    if x in ("normal", "balanced", "mid", "medium"): return "balanced"
-    if x in ("hard", "high"): return "high"
-    return "balanced"
 
 def _normalize_tone(x: str) -> str:
     x = (x or "balanced").lower().strip()
     if x in ("warm", "balanced", "bright"):
         return x
+    return "balanced"
+
+def _normalize_intensity(x: str) -> str:
+    x = (x or "balanced").lower().strip()
+    # строго low/balanced/high
+    if x in ("low",):
+        return "low"
+    if x in ("balanced", "normal", "mid", "medium"):
+        return "balanced"
+    if x in ("high",):
+        return "high"
     return "balanced"
 
 def _normalize_format(x: str) -> str:
@@ -299,45 +300,178 @@ def _normalize_format(x: str) -> str:
     if x in ("wav24",): return "wav24"
     if x in ("flac",): return "flac"
     if x in ("mp3", "mp3_320"): return "mp3_320"
-    if x in ("aiff", "aif"): return "aiff"
     return "wav16"
 
 def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     """
     Pipeline (без склеек):
-      1) analyze_sections -> берем sections(level)
-      2) decide_smart_params(global, tone/intensity) -> base_params
-      3) делаем soft_params = base + (-0.10), hard_params = base + (+0.10)
-      4) рендерим soft.wav и hard.wav целиком (preclean + chain_no_loudnorm)
-      5) строим mask(t) и морфим soft/hard
-      6) loudnorm 2-pass один раз в конце (base loudnorm targets)
+      1) analyze_sections -> sections[level]
+      2) base_params = decide_smart_params(global, tone/intensity)
+      3) делаем A/B через apply_section_influence(base, -0.10/+0.10)
+      4) рендерим A.wav и B.wav целиком (без loudnorm)
+      5) строим mask(t) из секций и миксуем A/B
+      6) loudnorm 2-pass ОДИН раз в конце (base loudnorm targets)
     """
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
     sec = analyze_sections(in_path, target_sr=48000)
     global_a = sec["global"]
     sections = sec.get("sections") or []
 
-    tone = _normalize_tone(tone)
-    intensity = _normalize_intensity_alias(intensity)
-    fmt = _normalize_format(fmt)
-
-    # base params (tone/intensity — пользовательские bias поверх базы; pre-clean/section mapping не трогаем)
     base_params = decide_smart_params(global_a, intensity=intensity, tone_mode=tone)
 
-    # делаем две “крайние” версии для морфа
-    soft_params = apply_section_influence(base_params, -0.10)
-    hard_params = apply_section_influence(base_params, +0.10)
+    # внутренние крайности для морфа (не юзерские режимы)
+    params_a = apply_section_influence(base_params, -0.10)
+    params_b = apply_section_influence(base_params, +0.10)
 
-    # цепи без loudnorm (loudnorm только в конце)
-    soft_chain = build_smart_chain(soft_params)
-    hard_chain = build_smart_chain(hard_params)
-    soft_no_ln, _ = _strip_loudnorm(soft_chain)
-    hard_no_ln, _ = _strip_loudnorm(hard_chain)
+    chain_a = build_smart_chain(params_a)
+    chain_b = build_smart_chain(params_b)
+    a_no_ln, _ = _strip_loudnorm(chain_a)
+    b_no_ln, _ = _strip_loudnorm(chain_b)
 
-    soft_wav = os.path.join(td, "soft.wav")
-    hard_wav = os.path.join(td, "hard.wav")
-    mixed_wav = os.path.join(td, "mixed.wav")
+    a_wav = os.path.join(td, "A.wav")
+    b_wav = os.path.join(td, "B.wav")
+    mixed = os.path.join(td, "mixed.wav")
 
-    _render_variant(in_path, soft_no_ln, soft_wav)
-    _render_variant(in_path, hard_no_ln, hard_wav)
+    _render_variant_full(in_path, a_no_ln, a_wav)
+    _render_variant_full(in_path, b_no_ln, b_wav)
 
-    mask_expr, _dur = _build
+    mask_expr = _build_mask_expr_from_sections(sections)
+    _mix_by_mask(a_wav, b_wav, mask_expr, mixed)
+
+    out_args, out_name, _mime = _out_args(fmt)
+    out_path = os.path.join(td, out_name)
+
+    _build_loudnorm_two_pass(mixed, base_params["loudnorm"], out_args, out_path)
+    return out_path, out_name
+
+# --- routes ---
+
+@app.get("/")
+def root():
+    return jsonify({
+        "ok": True,
+        "service": "analysis_mastering_api",
+        "endpoints": ["/health", "/analyze", "/analyze_sections", "/compare_sections", "/master"]
+    })
+
+@app.get("/health")
+def health():
+    return jsonify({"ok": True})
+
+@app.get("/analyze")
+def analyze():
+    before = request.args.get("before")
+    after = request.args.get("after")
+    if not before or not after:
+        return jsonify({"error": "provide ?before=<url>&after=<url>"}), 400
+
+    if is_gdrive(before):
+        before = gdrive_direct(before)
+    if is_gdrive(after):
+        after = gdrive_direct(after)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            b_path, dbg_b = _dl_to_named(td, "before", before)
+            a_path, dbg_a = _dl_to_named(td, "after", after)
+
+            report, suggestion = run_analysis(b_path, a_path, os.path.join(td, "out"))
+            debug = {}
+            debug.update(dbg_b)
+            debug.update(dbg_a)
+
+            return jsonify({
+                "report": report,
+                "preset_suggestion": suggestion,
+                "debug": debug
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/analyze_sections")
+def analyze_sections_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            f_path, dbg = _dl_to_named(td, "file", url)
+            result = analyze_sections(f_path, target_sr=48000)
+            return jsonify({"result": result, "debug": dbg})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/compare_sections")
+def compare_sections_route():
+    before = request.args.get("before")
+    after = request.args.get("after")
+    if not before or not after:
+        return jsonify({"error": "provide ?before=<url>&after=<url>"}), 400
+
+    if is_gdrive(before):
+        before = gdrive_direct(before)
+    if is_gdrive(after):
+        after = gdrive_direct(after)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            b_path, dbg_b = _dl_to_named(td, "before", before)
+            a_path, dbg_a = _dl_to_named(td, "after", after)
+
+            before_res = analyze_sections(b_path, target_sr=48000)
+            after_res = analyze_sections(a_path, target_sr=48000)
+
+            debug = {}
+            debug.update(dbg_b)
+            debug.update(dbg_a)
+
+            return jsonify({
+                "before": before_res,
+                "after": after_res,
+                "debug": debug
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/master")
+def master_route():
+    """
+    Usage:
+      /master?file=<url>&tone=warm|balanced|bright&intensity=low|balanced|high&format=wav16|wav24|flac|mp3_320
+    """
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, dbg = _dl_to_named(td, "file", url)
+
+            out_path, out_name = _render_master(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
