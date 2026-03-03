@@ -107,8 +107,28 @@ _ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
 # Максимально безопасно: убираем инфраниз; шумодав временно отключаем (по умолчанию).
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7" + (",afftdn=nf=-25" if _ENABLE_AFFTDN else "")
 
+# === изменено ===
+# LOW-MID "ПЛЕЧИ" (ручные ползунки)
+# Точка/ширина/гейн для лёгкого тела. По умолчанию:
+#  - 200 Hz, W=0.7, G=+0.6 dB
+# Можно быстро крутить локально или через env:
+#  LOWMID_F=200  LOWMID_W=0.7  LOWMID_G=0.6  LOWMID_ON=1
+_LOWMID_ON = (os.getenv("LOWMID_ON", "1").strip() == "1")
+_LOWMID_F = float(os.getenv("LOWMID_F", "200"))
+_LOWMID_W = float(os.getenv("LOWMID_W", "0.7"))
+_LOWMID_G = float(os.getenv("LOWMID_G", "0.6"))
+
+def _lowmid_filter() -> str:
+    if not _LOWMID_ON:
+        return "anull"
+    # equalizer: f (Hz), w (Q width), g (dB)
+    # t=q -> ширина задаётся w (чем больше, тем шире)
+    f = max(20.0, min(800.0, float(_LOWMID_F)))
+    w = max(0.2, min(3.0, float(_LOWMID_W)))
+    g = max(-3.0, min(3.0, float(_LOWMID_G)))
+    return f"equalizer=f={f}:t=q:w={w}:g={g}"
+
 # AIR BUS (параллельный "воздух" без склеек/нарезки)
-# Подмешиваем ТОЛЬКО высокие + лёгкую ширину, по маске секций.
 _AIR_AMOUNT = 0.16            # 0.10..0.22 (старт 0.16)
 _AIR_SHELF_F = 9000           # где начинаем "air"
 _AIR_SHELF_G = 2.6            # dB
@@ -133,24 +153,15 @@ def _pick_ramp(prev_len: float, next_len: float) -> float:
     return _clamp(r, _RAMP_MIN, _RAMP_MAX)
 
 def _build_mask_expr_from_sections(sections: list[dict]) -> str:
-    """
-    Строим piecewise-linear mask(t) по секциям.
-    mask в [0..1], плавные переходы на границах.
-
-    Берём s["level"] (0..1) из analyze_sections.
-    Если level нет - используем 0.5.
-    """
     if not sections:
         return "0.5"
 
     secs = sorted(sections, key=lambda s: float(s.get("start", 0.0)))
     starts = [float(s.get("start", 0.0)) for s in secs]
     ends = [float(s.get("end", 0.0)) for s in secs]
-
     w = [_clamp(float(s.get("level", 0.5)), 0.0, 1.0) for s in secs]
 
     expr = f"{w[-1]:.6f}"
-
     for i in range(len(w) - 2, -1, -1):
         b = max(starts[i+1], ends[i])
         prev_len = max(0.01, ends[i] - starts[i])
@@ -159,7 +170,6 @@ def _build_mask_expr_from_sections(sections: list[dict]) -> str:
 
         left = b - r
         right = b + r
-
         wi = w[i]
         wj = w[i+1]
 
@@ -170,7 +180,6 @@ def _build_mask_expr_from_sections(sections: list[dict]) -> str:
             f"({expr})"
             f"))"
         )
-
     return expr
 
 def _strip_loudnorm(chain: str) -> tuple[str, str]:
@@ -270,20 +279,17 @@ def _normalize_format(x: str) -> str:
     return "wav16"
 
 def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
+    # === изменено ===
+    # Добавили low-mid "плечи" между pre-clean и основной цепью
+    lm = _lowmid_filter()
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-af "{_PRE_CLEAN_CHAIN},{chain_no_ln}" '
+        f'-af "{_PRE_CLEAN_CHAIN},{lm},{chain_no_ln}" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
 
 def _apply_air_bus(base_path: str, mask_expr: str, out_path: str):
-    """
-    dry = base
-    air = highshelf + widen
-    air *= mask(t) * AIR_AMOUNT
-    out = dry + air
-    """
     air_gain_expr = f"(({mask_expr})*{_AIR_AMOUNT:.6f})"
     fc = (
         f"[0:a]asplit=2[dry][air];"
@@ -301,14 +307,6 @@ def _apply_air_bus(base_path: str, mask_expr: str, out_path: str):
     _run(cmd)
 
 def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
-    """
-    Без склеек/нарезки:
-      1) analyze_sections -> sections(level) для mask(t)
-      2) decide_smart_params_with_sections -> берём base_params (одна цепь на весь трек)
-      3) рендер base.wav (preclean + chain без loudnorm)
-      4) AIR BUS (маска по секциям) -> mixed.wav
-      5) loudnorm 2-pass один раз в конце -> output
-    """
     sec = analyze_sections(in_path, target_sr=48000)
     global_a = sec["global"]
     sections = sec.get("sections") or []
