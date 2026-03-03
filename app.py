@@ -455,16 +455,21 @@ def compare_sections_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.get("/master")
-def master_route():
-    """
-    Usage:
-      /master?file=<url>&tone=warm|balanced|bright&intensity=low|balanced|high&format=wav16|wav24|aiff|flac|mp3_320
-    """
-    url = request.args.get("file")
-    if not url:
-        return jsonify({"error": "provide ?file=<url>"}), 400
-
+@app.get("/health")
+def health():
+    return jsonify({
+        "ok": True,
+        "ENABLE_AFFTDN": os.getenv("ENABLE_AFFTDN"),
+        "LOWMID_ON": os.getenv("LOWMID_ON"),
+        "LOWMID_F": os.getenv("LOWMID_F"),
+        "LOWMID_W": os.getenv("LOWMID_W"),
+        "LOWMID_G": os.getenv("LOWMID_G"),
+        "GLUE_ON": os.getenv("GLUE_ON"),
+        "GLUE_RATIO": os.getenv("GLUE_RATIO"),
+        "GLUE_THRESHOLD_DB": os.getenv("GLUE_THRESHOLD_DB"),
+        "GLUE_ATTACK_MS": os.getenv("GLUE_ATTACK_MS"),
+        "GLUE_RELEASE_MS": os.getenv("GLUE_RELEASE_MS"),
+    })
     tone = _normalize_tone(request.args.get("tone") or "balanced")
     intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
     fmt = _normalize_format(request.args.get("format") or "wav16")
