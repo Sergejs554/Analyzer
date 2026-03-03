@@ -12,3 +12,4 @@ numpy
 pyloudnorm
 soundfile  # for librosa audio reading
 ffmpeg-python  # (optional, not used directly but can be omitted if not needed)
+gunicorn==21.2.0
