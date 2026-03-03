@@ -24,10 +24,12 @@ def _clamp(x, lo, hi):
 def _deepcopy_params(p: dict) -> dict:
     # быстрый deepcopy без импорта copy (структура маленькая)
     return {
+        "preclean": dict(p.get("preclean", {})),  # === изменено ===
         "loudnorm": dict(p["loudnorm"]),
         "tone": {
             "low_shelf": dict(p["tone"]["low_shelf"]) if p["tone"].get("low_shelf") else None,
             "high_shelf": dict(p["tone"]["high_shelf"]) if p["tone"].get("high_shelf") else None,
+            # "hpf" больше не должен быть частью tone (core), оставим для backward compatibility
             "hpf": bool(p["tone"].get("hpf", False)),
         },
         "comp": dict(p["comp"]),
@@ -48,16 +50,13 @@ def apply_section_influence(base_params: dict, influence: float) -> dict:
     inf = float(np.clip(influence, -0.10, 0.10))
 
     # 1) loudnorm target I — лёгкий сдвиг (в пределах ~±0.7 LUFS)
-    #    (это именно target, а не гейн прямо сейчас)
     p["loudnorm"]["I"] = _clamp(p["loudnorm"]["I"] + (inf * 7.0), -16.5, -11.0)
 
     # 2) compressor — чуть плотнее на +inf и чуть мягче на -inf
-    #    ratio: +/- 0.15 макс; threshold: +/- 0.8 dB
     p["comp"]["ratio"] = round(_clamp(p["comp"]["ratio"] + (inf * 1.5), 1.20, 2.60), 2)
     p["comp"]["threshold_db"] = round(float(p["comp"]["threshold_db"] - (inf * 8.0)), 1)
 
-    # 3) shelves — микро-движение, чтобы "воздух/плотность" на секциях ощущалась
-    #    low shelf: +/- 0.35 dB, high shelf: +/- 0.35 dB
+    # 3) shelves — микро-движение (±0.35 dB примерно)
     lf = p["tone"].get("low_shelf")
     hf = p["tone"].get("high_shelf")
     if lf:
@@ -65,15 +64,37 @@ def apply_section_influence(base_params: dict, influence: float) -> dict:
     if hf:
         hf["g"] = round(_clamp(float(hf["g"]) + (inf * 3.5), -3.5, +3.5), 2)
 
-    # HPF и widen — не секционируем (это “глобальные” решения)
+    # preclean/stereo_widen секционно НЕ двигаем (это фундамент)
     return p
+
+# === изменено ===
+def _decide_preclean(analysis: dict) -> dict:
+    """
+    Pre-Clean = Smart Auto Core.
+    Не зависит от Tone/Intensity.
+    """
+    sub_excess = bool(analysis.get("SubExcess", False))
+
+    # 1) DC/rumble protection: очень мягко, почти не слышно
+    # (минимальная страховка под весь пайплайн)
+    dc_hpf_hz = 15
+
+    # 2) Sub discipline: только если реально есть SubExcess
+    # (это уже ощутимее, поэтому включаем строго по анализу)
+    sub_hpf_hz = 30 if sub_excess else None
+
+    return {
+        "dc_hpf_hz": int(dc_hpf_hz),
+        "sub_hpf_hz": (int(sub_hpf_hz) if sub_hpf_hz else None),
+    }
 
 def decide_smart_params(analysis: dict, intensity: str = "balanced", tone_mode: str = "balanced") -> dict:
     """
     Smart Auto параметры + управляемые смещения от пользователя.
     Возвращает:
+      preclean: {dc_hpf_hz, sub_hpf_hz}
       loudnorm: {I, TP, LRA}
-      tone: {low_shelf, high_shelf, hpf}
+      tone: {low_shelf, high_shelf}
       comp: {ratio, threshold_db, attack, release}
       stereo_widen: bool
     """
@@ -81,9 +102,11 @@ def decide_smart_params(analysis: dict, intensity: str = "balanced", tone_mode: 
     LRA = float(analysis["LRA"])
     tp = float(analysis["TruePeak_dBFS"])
     tilt = float(np.clip(float(analysis["Tilt_dB"]), -20.0, 20.0))
-    sub_excess = bool(analysis["SubExcess"])
     stereo_narrow = bool(analysis.get("StereoNarrow", False))
     rms_db = float(analysis.get("RMS_dB", -20.0))
+
+    # --- PRE-CLEAN CORE ---
+    preclean = _decide_preclean(analysis)  # === изменено ===
 
     # --- BASE TARGETS (инженерная база) ---
     target_I = float(np.interp(I, [-30, -22, -16, -12, -10], [-18, -16, -14.5, -13, -12]))
@@ -143,7 +166,8 @@ def decide_smart_params(analysis: dict, intensity: str = "balanced", tone_mode: 
     tone = {
         "low_shelf":  {"g": round(low_shelf_gain, 2),  "f": 250,  "width": 1.0},
         "high_shelf": {"g": round(high_shelf_gain, 2), "f": 8000, "width": 0.8},
-        "hpf": bool(sub_excess)
+        # legacy flag (НЕ используем как источник истины)
+        "hpf": False,  # === изменено ===
     }
 
     comp = {
@@ -156,6 +180,7 @@ def decide_smart_params(analysis: dict, intensity: str = "balanced", tone_mode: 
     stereo_widen = bool(stereo_narrow)
 
     return {
+        "preclean": preclean,  # === изменено ===
         "loudnorm": {"I": round(float(target_I), 2), "TP": float(target_TP), "LRA": float(target_LRA)},
         "tone": tone,
         "comp": comp,
@@ -198,6 +223,27 @@ def decide_smart_params_with_sections(
 
     return {"base_params": base, "sections": out_sections}
 
+# === изменено ===
+def _preclean_filters_from_params(params: dict) -> list[str]:
+    """
+    Pre-Clean = фиксированный фундамент.
+    Всегда в начале цепочки.
+    """
+    pc = params.get("preclean") or {}
+    out = []
+
+    # DC / rumble protection (очень мягко)
+    dc_hpf = pc.get("dc_hpf_hz", 15)
+    if dc_hpf and int(dc_hpf) > 0:
+        out.append(f"highpass=f={int(dc_hpf)}:width=0.5")
+
+    # Sub discipline (только по анализу)
+    sub_hpf = pc.get("sub_hpf_hz", None)
+    if sub_hpf and int(sub_hpf) > 0:
+        out.append(f"highpass=f={int(sub_hpf)}:width=0.7")
+
+    return out
+
 def build_smart_chain(params: dict) -> str:
     """
     Build the FFmpeg audio filter chain string from Smart Auto params.
@@ -209,7 +255,12 @@ def build_smart_chain(params: dict) -> str:
 
     filters = []
 
-    if tone.get("hpf"):
+    # --- PRE-CLEAN FIRST (core, hidden) ---
+    filters.extend(_preclean_filters_from_params(params))  # === изменено ===
+
+    # Backward compatibility: если где-то старое tone.hpf осталось
+    # (но источником истины является preclean.sub_hpf_hz)
+    if tone.get("hpf") and not params.get("preclean"):
         filters.append("highpass=f=30:width=0.7")
 
     lf = tone.get("low_shelf")
