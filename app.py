@@ -93,10 +93,14 @@ def _run(cmd: str):
 # MR MASTERING v2 — CORE DSP
 # ---------------------------
 
-# === изменено ===
 # Fixed Pre-Clean (НЕ зависит от tone/intensity, НЕ зависит от section mapping)
 # Максимально безопасно: убираем инфраниз, лёгкий шумодав, без лимитера.
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7,afftdn=nf=-25"
+
+# === изменено ===
+# Кроссфейд между секциями, чтобы убрать "штыки/провалы" на стыках
+_XFADE_SEC = 0.25
+_XFADE_MIN = 0.05
 
 def _strip_loudnorm(chain: str) -> tuple[str, str]:
     """
@@ -185,10 +189,20 @@ def _out_args(fmt: str) -> tuple[str, str, str]:
     # default wav16
     return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav", "audio/wav"
 
+# === изменено ===
+def _xfade_duration(prev_start: float, prev_end: float, next_start: float, next_end: float) -> float:
+    prev_len = max(0.0, prev_end - prev_start)
+    next_len = max(0.0, next_end - next_start)
+    d = min(_XFADE_SEC, prev_len * 0.45, next_len * 0.45)
+    return float(max(_XFADE_MIN, d))
+
 def _build_section_filter_complex(section_params: dict) -> str:
     """
     We apply ONLY pre-loudnorm part per section: pre_clean + (eq/comp/widen) WITHOUT loudnorm.
     Final loudnorm is global 2-pass after concatenation.
+
+    === изменено ===
+    Вместо concat используем acrossfade с overlap, чтобы убрать стыки.
     """
     base = section_params["base_params"]
     sections = section_params["sections"]
@@ -201,35 +215,63 @@ def _build_section_filter_complex(section_params: dict) -> str:
     if not sections:
         return f"[0:a]{_PRE_CLEAN_CHAIN},{pre_chain}[aout]"
 
-    # For each section we build its own pre_chain derived from that section params
-    # (still WITHOUT loudnorm)
+    # normalize section ordering just in case
+    sections = sorted(sections, key=lambda s: float(s.get("start", 0.0)))
+
     seg_filters = []
     seg_labels = []
 
+    n = len(sections)
     for i, s in enumerate(sections):
         sp = s["params"]
         ch = build_smart_chain(sp)
         ch_pre, _ = _strip_loudnorm(ch)
 
-        start = max(0.0, float(s["start"]))
-        end = max(start + 0.01, float(s["end"]))
+        s_start = max(0.0, float(s.get("start", 0.0)))
+        s_end = max(s_start + 0.01, float(s.get("end", 0.0)))
+
+        # overlap: extend each segment a bit into neighbors
+        left = _XFADE_SEC if i > 0 else 0.0
+        right = _XFADE_SEC if i < (n - 1) else 0.0
+
+        start = max(0.0, s_start - left)
+        end = max(start + 0.02, s_end + right)
+
         lbl = f"s{i}"
 
-        # atrim -> asetpts -> preclean -> chain(no loudnorm)
         seg_filters.append(
             f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS,{_PRE_CLEAN_CHAIN},{ch_pre}[{lbl}]"
         )
-        seg_labels.append(f"[{lbl}]")
+        seg_labels.append(lbl)
 
-    # concat segments
-    # Note: concat filter expects same format; our chains keep sr/ch.
-    concat = "".join(seg_labels) + f"concat=n={len(seg_labels)}:v=0:a=1[aout]"
-    return ";".join(seg_filters + [concat])
+    # chain acrossfades
+    if len(seg_labels) == 1:
+        return ";".join(seg_filters + [f"[{seg_labels[0]}]anull[aout]"])
+
+    xfade_filters = []
+    cur = seg_labels[0]
+    for i in range(1, len(seg_labels)):
+        prev_sec = sections[i - 1]
+        next_sec = sections[i]
+        prev_start = max(0.0, float(prev_sec.get("start", 0.0)))
+        prev_end = max(prev_start + 0.01, float(prev_sec.get("end", 0.0)))
+        next_start = max(0.0, float(next_sec.get("start", 0.0)))
+        next_end = max(next_start + 0.01, float(next_sec.get("end", 0.0)))
+
+        d = _xfade_duration(prev_start, prev_end, next_start, next_end)
+
+        out_lbl = "aout" if i == (len(seg_labels) - 1) else f"x{i}"
+        xfade_filters.append(
+            f"[{cur}][{seg_labels[i]}]acrossfade=d={d}:c1=tri:c2=tri[{out_lbl}]"
+        )
+        cur = out_lbl
+
+    return ";".join(seg_filters + xfade_filters)
 
 def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     """
     Pipeline:
-      analyze_sections -> smart params (base+sections) -> section processing -> concat -> final loudnorm 2-pass -> output
+      analyze_sections -> smart params (base+sections) -> section processing -> acrossfade -> final loudnorm 2-pass -> output
     """
     # 1) Analyze (global + sections)
     sec = analyze_sections(in_path, target_sr=48000)
@@ -350,7 +392,6 @@ def compare_sections_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# === изменено ===
 @app.get("/master")
 def master_route():
     """
@@ -386,7 +427,6 @@ def master_route():
             out_path, out_name = _render_master(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
-            # send as attachment
             return send_file(
                 out_path,
                 mimetype=mime,
@@ -395,7 +435,6 @@ def master_route():
             )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-# === конец изменения ===
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
