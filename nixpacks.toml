@@ -6,3 +6,11 @@ nixPkgs = [
   "libffi",
   "zlib"
 ]
+
+[phases.build]
+cmds = [
+  "ffmpeg -version",
+  "which ffmpeg",
+  "python -V",
+  "pip install -r requirements.txt"
+]
