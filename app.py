@@ -121,12 +121,33 @@ _LOWMID_G = float(os.getenv("LOWMID_G", "0.6"))
 def _lowmid_filter() -> str:
     if not _LOWMID_ON:
         return "anull"
-    # equalizer: f (Hz), w (Q width), g (dB)
-    # t=q -> ширина задаётся w (чем больше, тем шире)
     f = max(20.0, min(800.0, float(_LOWMID_F)))
     w = max(0.2, min(3.0, float(_LOWMID_W)))
     g = max(-3.0, min(3.0, float(_LOWMID_G)))
     return f"equalizer=f={f}:t=q:w={w}:g={g}"
+
+# === изменено ===
+# GLUE (очень мягкий bus compression) — через ENV
+# Включение: GLUE_ON=1 (по умолчанию 0, чтобы не менять звук внезапно)
+# Параметры по умолчанию (твой запрос):
+#   ratio=1.35, threshold=-18 dB, attack=25 ms, release=160 ms, makeup=0
+_GLUE_ON = (os.getenv("GLUE_ON", "0").strip() == "1")
+_GLUE_RATIO = float(os.getenv("GLUE_RATIO", "1.35"))
+_GLUE_THRESHOLD_DB = float(os.getenv("GLUE_THRESHOLD_DB", "-18"))
+_GLUE_ATTACK_MS = float(os.getenv("GLUE_ATTACK_MS", "25"))
+_GLUE_RELEASE_MS = float(os.getenv("GLUE_RELEASE_MS", "160"))
+_GLUE_MAKEUP_DB = float(os.getenv("GLUE_MAKEUP_DB", "0"))
+
+def _glue_filter() -> str:
+    if not _GLUE_ON:
+        return "anull"
+    ratio = max(1.05, min(2.50, float(_GLUE_RATIO)))
+    thr = max(-40.0, min(-6.0, float(_GLUE_THRESHOLD_DB)))
+    atk = max(1.0, min(200.0, float(_GLUE_ATTACK_MS)))
+    rel = max(10.0, min(2000.0, float(_GLUE_RELEASE_MS)))
+    mk = max(-6.0, min(6.0, float(_GLUE_MAKEUP_DB)))
+    # NOTE: без knee, чтобы не зависеть от сборки ffmpeg (у разных билдов набор опций отличается)
+    return f"acompressor=ratio={ratio}:threshold={thr}dB:attack={atk}:release={rel}:makeup={mk}dB"
 
 # AIR BUS (параллельный "воздух" без склеек/нарезки)
 _AIR_AMOUNT = 0.16            # 0.10..0.22 (старт 0.16)
@@ -280,11 +301,12 @@ def _normalize_format(x: str) -> str:
 
 def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
     # === изменено ===
-    # Добавили low-mid "плечи" между pre-clean и основной цепью
+    # Добавили low-mid "плечи" (уже было) + GLUE (через ENV) после основной цепи
     lm = _lowmid_filter()
+    glue = _glue_filter()
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-af "{_PRE_CLEAN_CHAIN},{lm},{chain_no_ln}" '
+        f'-af "{_PRE_CLEAN_CHAIN},{lm},{chain_no_ln},{glue}" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
