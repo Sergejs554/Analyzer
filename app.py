@@ -96,20 +96,24 @@ def _run(cmd: str):
 # MR MASTERING v2 — CORE DSP
 # ---------------------------
 
-# Fixed Pre-Clean (НЕ зависит от tone/intensity, НЕ зависит от section mapping)
-# Максимально безопасно: убираем инфраниз, лёгкий шумодав, без лимитера.
-_PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7,afftdn=nf=-25"
-
 # === изменено ===
+# TEMP TEST: полностью отключаем afftdn (FFT noise reduction),
+# чтобы проверить гипотезу "вакуум/одеяло" из-за шумодава.
+# Можно вернуть шумодав позже, включив переменную окружения:
+# ENABLE_AFFTDN=1 (по умолчанию 0).
+_ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
+
+# Fixed Pre-Clean (НЕ зависит от tone/intensity, НЕ зависит от section mapping)
+# Максимально безопасно: убираем инфраниз; шумодав временно отключаем (по умолчанию).
+_PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7" + (",afftdn=nf=-25" if _ENABLE_AFFTDN else "")
+
 # AIR BUS (параллельный "воздух" без склеек/нарезки)
 # Подмешиваем ТОЛЬКО высокие + лёгкую ширину, по маске секций.
 _AIR_AMOUNT = 0.16            # 0.10..0.22 (старт 0.16)
 _AIR_SHELF_F = 9000           # где начинаем "air"
 _AIR_SHELF_G = 2.6            # dB
-# _AIR_SHELF_S удалён (в твоём ffmpeg highshelf не поддерживает параметр s)
 
-# ВАЖНО: в твоём ffmpeg stereowiden принимает delay (1..100), а не "amount 0..1".
-# Оставляем удобный "0..1" и переводим в delay=1..100.
+# stereowiden принимает delay (1..100), а не "amount 0..1".
 _AIR_WIDEN = 0.12             # 0.00..1.00 -> delay=1..100  (0.12 => 12)
 
 # Маска (плавные рампы на границах секций)
@@ -119,7 +123,6 @@ _RAMP_MAX = 0.80
 def _clamp(x, lo, hi):
     return float(max(lo, min(hi, x)))
 
-# === изменено ===
 def _stereowiden_filter() -> str:
     d = int(round(_clamp(_AIR_WIDEN, 0.0, 1.0) * 100.0))
     d = max(1, min(100, d))
