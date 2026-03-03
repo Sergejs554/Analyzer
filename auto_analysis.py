@@ -1,4 +1,6 @@
 # auto_analysis.py
+import os
+import json
 import numpy as np
 import librosa
 import pyloudnorm as pyln
@@ -6,6 +8,7 @@ import pyloudnorm as pyln
 # === изменено ===
 # v2: секционный анализ (energy_curve -> rolling median -> hysteresis -> min section)
 #      + подготовка данных для "≤10% плавного влияния" в DSP-цепочке
+#      + запись section_report в скрытый json-файл (для app.py / smart_auto.py)
 
 def _trim_stereo(y: np.ndarray, sr: int, top_db: float = 40.0) -> np.ndarray:
     """
@@ -261,6 +264,21 @@ def build_section_influence_map(
         out.append({**sec, "influence": float(inf)})
     return out
 
+# === изменено ===
+def _default_report_path(audio_path: str) -> str:
+    """
+    Hidden sidecar file for internal pipeline (user never sees it).
+    Example: /path/song.wav -> /path/song.analysis.json
+    """
+    base = os.path.splitext(audio_path)[0]
+    return base + ".analysis.json"
+
+# === изменено ===
+def _write_json(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
 # === исходная функция сохранена + расширена ===
 def analyze_file(path: str, target_sr: int = 48000) -> dict:
     """
@@ -307,6 +325,8 @@ def analyze_sections(
     hysteresis_db: float = 1.5,
     min_section_sec: float = 4.0,
     max_influence: float = 0.10,
+    save_report: bool = True,
+    report_path: str | None = None,
 ) -> dict:
     """
     Returns:
@@ -315,6 +335,9 @@ def analyze_sections(
       "energy_curve": {"hop_sec":..., "times": [...], "curve_db":[...], "smooth_db":[...]},
       "sections": [{start,end,level,mean_db,peak_db,influence}, ...]
     }
+
+    Also writes hidden sidecar JSON (by default) for the pipeline:
+      <audio>.analysis.json
     """
     y, sr = librosa.load(path, sr=target_sr, mono=False)
     if y.ndim == 1:
@@ -340,7 +363,7 @@ def analyze_sections(
     )
     sections = build_section_influence_map(sections, max_influence=max_influence, curve="smoothstep")
 
-    return {
+    report = {
         "global": analyze_file(path, target_sr=target_sr),
         "energy_curve": {
             "window_ms": int(window_ms),
@@ -351,3 +374,10 @@ def analyze_sections(
         },
         "sections": sections,
     }
+
+    # === изменено ===
+    if save_report:
+        out_path = report_path or _default_report_path(path)
+        _write_json(out_path, report)
+
+    return report
