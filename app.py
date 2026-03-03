@@ -107,7 +107,10 @@ _AIR_AMOUNT = 0.16            # 0.10..0.22 (старт 0.16)
 _AIR_SHELF_F = 9000           # где начинаем "air"
 _AIR_SHELF_G = 2.6            # dB
 # _AIR_SHELF_S удалён (в твоём ffmpeg highshelf не поддерживает параметр s)
-_AIR_WIDEN = 0.12             # stereowiden amount (осторожно)
+
+# ВАЖНО: в твоём ffmpeg stereowiden принимает delay (1..100), а не "amount 0..1".
+# Оставляем удобный "0..1" и переводим в delay=1..100.
+_AIR_WIDEN = 0.12             # 0.00..1.00 -> delay=1..100  (0.12 => 12)
 
 # Маска (плавные рампы на границах секций)
 _RAMP_MIN = 0.08
@@ -115,6 +118,12 @@ _RAMP_MAX = 0.80
 
 def _clamp(x, lo, hi):
     return float(max(lo, min(hi, x)))
+
+# === изменено ===
+def _stereowiden_filter() -> str:
+    d = int(round(_clamp(_AIR_WIDEN, 0.0, 1.0) * 100.0))
+    d = max(1, min(100, d))
+    return f"stereowiden=delay={d}"
 
 def _pick_ramp(prev_len: float, next_len: float) -> float:
     r = min(_RAMP_MAX, 0.25 * prev_len, 0.25 * next_len)
@@ -137,12 +146,10 @@ def _build_mask_expr_from_sections(sections: list[dict]) -> str:
 
     w = [_clamp(float(s.get("level", 0.5)), 0.0, 1.0) for s in secs]
 
-    # expression describing future part (right side), start with last weight
     expr = f"{w[-1]:.6f}"
 
     for i in range(len(w) - 2, -1, -1):
-        # boundary between i and i+1
-        b = max(starts[i+1], ends[i])  # безопасно
+        b = max(starts[i+1], ends[i])
         prev_len = max(0.01, ends[i] - starts[i])
         next_len = max(0.01, ends[i+1] - starts[i+1])
         r = _pick_ramp(prev_len, next_len)
@@ -274,15 +281,13 @@ def _apply_air_bus(base_path: str, mask_expr: str, out_path: str):
     air *= mask(t) * AIR_AMOUNT
     out = dry + air
     """
-    # === изменено ===
-    # Убрали ":s=..." из highshelf — в твоём ffmpeg этот параметр не поддерживается
     air_gain_expr = f"(({mask_expr})*{_AIR_AMOUNT:.6f})"
     fc = (
         f"[0:a]asplit=2[dry][air];"
         f"[dry]volume=1[d0];"
         f"[air]"
         f"highshelf=f={_AIR_SHELF_F}:g={_AIR_SHELF_G},"
-        f"stereowiden={_AIR_WIDEN},"
+        f"{_stereowiden_filter()},"
         f"volume='{air_gain_expr}':eval=frame[a1];"
         f"[d0][a1]amix=inputs=2:normalize=0[aout]"
     )
@@ -309,7 +314,6 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
     intensity = _normalize_intensity(intensity)
     fmt = _normalize_format(fmt)
 
-    # решаем параметры (используем секции как контекст, но РЕНДЕРИМ ОДНУ базовую цепь)
     sp = decide_smart_params_with_sections(
         global_analysis=global_a,
         sections=sections,
