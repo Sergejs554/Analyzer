@@ -106,7 +106,7 @@ _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7,afftdn=nf=-25"
 _AIR_AMOUNT = 0.16            # 0.10..0.22 (старт 0.16)
 _AIR_SHELF_F = 9000           # где начинаем "air"
 _AIR_SHELF_G = 2.6            # dB
-_AIR_SHELF_S = 0.70           # slope
+# _AIR_SHELF_S удалён (в твоём ffmpeg highshelf не поддерживает параметр s)
 _AIR_WIDEN = 0.12             # stereowiden amount (осторожно)
 
 # Маска (плавные рампы на границах секций)
@@ -274,12 +274,14 @@ def _apply_air_bus(base_path: str, mask_expr: str, out_path: str):
     air *= mask(t) * AIR_AMOUNT
     out = dry + air
     """
+    # === изменено ===
+    # Убрали ":s=..." из highshelf — в твоём ffmpeg этот параметр не поддерживается
     air_gain_expr = f"(({mask_expr})*{_AIR_AMOUNT:.6f})"
     fc = (
         f"[0:a]asplit=2[dry][air];"
         f"[dry]volume=1[d0];"
         f"[air]"
-        f"highshelf=f={_AIR_SHELF_F}:g={_AIR_SHELF_G}:s={_AIR_SHELF_S},"
+        f"highshelf=f={_AIR_SHELF_F}:g={_AIR_SHELF_G},"
         f"stereowiden={_AIR_WIDEN},"
         f"volume='{air_gain_expr}':eval=frame[a1];"
         f"[d0][a1]amix=inputs=2:normalize=0[aout]"
