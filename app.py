@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 from flask import Flask, request, jsonify
 import os, tempfile, requests, re
-from urllib.parse import urlparse, parse_qs
 from analyze_mastering import run_analysis
+from auto_analysis import analyze_sections  # === изменено ===
 
 app = Flask(__name__)
 
@@ -46,11 +46,11 @@ def guess_ext(url: str, content_type: str | None) -> str:
     # default
     return ".wav"
 
-def download_file(url: str, out_path: str, timeout: int = 120) -> tuple[int, str]:
+def download_file(url: str, out_path: str, timeout: int = 120) -> tuple[int, str, str]:
     """
     Download a file, following redirects.
     If Google Drive returns an interstitial confirmation page, try to pass confirm token.
-    Returns: (bytes, final_url)
+    Returns: (bytes, final_url, content_type)
     """
     sess = requests.Session()
     r = sess.get(url, timeout=timeout, allow_redirects=True)
@@ -59,7 +59,6 @@ def download_file(url: str, out_path: str, timeout: int = 120) -> tuple[int, str
     # Google Drive sometimes returns HTML with confirm token
     ct = (r.headers.get("Content-Type") or "").lower()
     if "text/html" in ct and "drive.google.com" in (r.url or ""):
-        # try to find confirm token in cookies
         confirm = None
         for k, v in r.cookies.items():
             if k.startswith("download_warning"):
@@ -73,20 +72,37 @@ def download_file(url: str, out_path: str, timeout: int = 120) -> tuple[int, str
                 r.raise_for_status()
                 ct = (r.headers.get("Content-Type") or "").lower()
 
-    # still HTML? then it's not a direct audio file
     if "text/html" in ct:
         raise RuntimeError(f"Downloaded HTML instead of audio. URL probably not direct-download. final_url={r.url}")
 
     with open(out_path, "wb") as f:
         f.write(r.content)
 
-    return len(r.content), (r.url or url)
+    return len(r.content), (r.url or url), (r.headers.get("Content-Type") or "")
+
+def _dl_to_named(td: str, label: str, url: str) -> tuple[str, dict]:
+    """
+    Download URL into temp dir with proper extension.
+    Returns (path, debug_dict)
+    """
+    tmp = os.path.join(td, f"{label}.tmp")
+    size, final, ctype = download_file(url, tmp)
+    ext = guess_ext(final, ctype)
+    path = os.path.join(td, f"{label}{ext}")
+    os.replace(tmp, path)
+    dbg = {
+        f"{label}_bytes": size,
+        f"{label}_final_url": final,
+        f"{label}_file": os.path.basename(path),
+        f"{label}_content_type": ctype,
+    }
+    return path, dbg
 
 # --- routes ---
 
 @app.get("/")
 def root():
-    return jsonify({"ok": True, "service": "analysis_mastering_api", "endpoints": ["/health", "/analyze"]})
+    return jsonify({"ok": True, "service": "analysis_mastering_api", "endpoints": ["/health", "/analyze", "/analyze_sections", "/compare_sections"]})
 
 @app.get("/health")
 def health():
@@ -99,7 +115,6 @@ def analyze():
     if not before or not after:
         return jsonify({"error": "provide ?before=<url>&after=<url>"}), 400
 
-    # convert gdrive view links to direct
     if is_gdrive(before):
         before = gdrive_direct(before)
     if is_gdrive(after):
@@ -107,37 +122,80 @@ def analyze():
 
     try:
         with tempfile.TemporaryDirectory() as td:
-            # download BEFORE
-            b_tmp = os.path.join(td, "before.tmp")
-            b_size, b_final = download_file(before, b_tmp)
-            # decide ext by final url / content type (we only have final url now)
-            b_ext = guess_ext(b_final, None)
-            b_path = os.path.join(td, "before" + b_ext)
-            os.replace(b_tmp, b_path)
-
-            # download AFTER
-            a_tmp = os.path.join(td, "after.tmp")
-            a_size, a_final = download_file(after, a_tmp)
-            a_ext = guess_ext(a_final, None)
-            a_path = os.path.join(td, "after" + a_ext)
-            os.replace(a_tmp, a_path)
+            b_path, dbg_b = _dl_to_named(td, "before", before)
+            a_path, dbg_a = _dl_to_named(td, "after", after)
 
             report, suggestion = run_analysis(b_path, a_path, os.path.join(td, "out"))
+            debug = {}
+            debug.update(dbg_b)
+            debug.update(dbg_a)
+
             return jsonify({
                 "report": report,
                 "preset_suggestion": suggestion,
-                "debug": {
-                    "before_bytes": b_size,
-                    "after_bytes": a_size,
-                    "before_final_url": b_final,
-                    "after_final_url": a_final,
-                    "before_file": os.path.basename(b_path),
-                    "after_file": os.path.basename(a_path),
-                }
+                "debug": debug
             })
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# === изменено ===
+@app.get("/analyze_sections")
+def analyze_sections_route():
+    """
+    Section analysis for ONE file.
+    Usage: /analyze_sections?file=<url>
+    """
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            f_path, dbg = _dl_to_named(td, "file", url)
+            result = analyze_sections(f_path, target_sr=48000)
+            return jsonify({"result": result, "debug": dbg})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/compare_sections")
+def compare_sections_route():
+    """
+    Section analysis BEFORE vs AFTER in one response.
+    Usage: /compare_sections?before=<url>&after=<url>
+    """
+    before = request.args.get("before")
+    after = request.args.get("after")
+    if not before or not after:
+        return jsonify({"error": "provide ?before=<url>&after=<url>"}), 400
+
+    if is_gdrive(before):
+        before = gdrive_direct(before)
+    if is_gdrive(after):
+        after = gdrive_direct(after)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            b_path, dbg_b = _dl_to_named(td, "before", before)
+            a_path, dbg_a = _dl_to_named(td, "after", after)
+
+            before_res = analyze_sections(b_path, target_sr=48000)
+            after_res = analyze_sections(a_path, target_sr=48000)
+
+            debug = {}
+            debug.update(dbg_b)
+            debug.update(dbg_a)
+
+            return jsonify({
+                "before": before_res,
+                "after": after_res,
+                "debug": debug
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+# === конец изменения ===
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
