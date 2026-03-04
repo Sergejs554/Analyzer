@@ -105,7 +105,7 @@ _ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
 # Pre-Clean
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7" + (",afftdn=nf=-25" if _ENABLE_AFFTDN else "")
 
-# LOW-MID "ПЛЕЧИ" (EQ ручные ползунки)
+# LOW-MID "ПЛЕЧИ" (ручные ползунки)
 _LOWMID_ON = (os.getenv("LOWMID_ON", "1").strip() == "1")
 _LOWMID_F = float(os.getenv("LOWMID_F", "200"))
 _LOWMID_W = float(os.getenv("LOWMID_W", "0.7"))
@@ -212,6 +212,7 @@ def _transient_filter() -> str:
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
 
+# === изменено ===
 # ---------------------------
 # MICRO HARMONICS (safe)
 # ---------------------------
@@ -243,59 +244,47 @@ def _harm_fc() -> str:
     )
     return fc
 
-# === изменено ===
 # ---------------------------
-# LOW-MID DENSITY (120–350 Hz, band comp + blend)
+# SUB DENSITY (low harmonic density)
 # ---------------------------
+# Идея: очень лёгкая параллельная сатурация ТОЛЬКО в низкой полосе,
+# чтобы "жир" появился у всех источников с низом, но без подъёма громкости.
 # Включение:
-#   LMD_ON=1
+#   SUBDEN_ON=1
 # Ползунки:
-#   LMD_LO_HZ=120
-#   LMD_HI_HZ=350
-#   LMD_RATIO=1.25
-#   LMD_THRESHOLD_DB=-28
-#   LMD_ATTACK_MS=30
-#   LMD_RELEASE_MS=200
-#   LMD_MAKEUP_DB=1
-#   LMD_MIX=0.25          (0..0.60, сколько "тела" подмешать)
-_LMD_ON = (os.getenv("LMD_ON", "0").strip() == "1")
-_LMD_LO_HZ = float(os.getenv("LMD_LO_HZ", "120"))
-_LMD_HI_HZ = float(os.getenv("LMD_HI_HZ", "350"))
-_LMD_RATIO = float(os.getenv("LMD_RATIO", "1.25"))
-_LMD_THRESHOLD_DB = float(os.getenv("LMD_THRESHOLD_DB", "-28"))
-_LMD_ATTACK_MS = float(os.getenv("LMD_ATTACK_MS", "30"))
-_LMD_RELEASE_MS = float(os.getenv("LMD_RELEASE_MS", "200"))
-_LMD_MAKEUP_DB = float(os.getenv("LMD_MAKEUP_DB", "1"))
-_LMD_MIX = float(os.getenv("LMD_MIX", "0.25"))
+#   SUBDEN_LO_HZ=55        (низ полосы)
+#   SUBDEN_HI_HZ=160       (верх полосы)
+#   SUBDEN_DRIVE_DB=10     (насколько вдавить)
+#   SUBDEN_MIX=0.06        (0.03..0.10 обычно)
+_SUBDEN_ON = (os.getenv("SUBDEN_ON", "0").strip() == "1")
+_SUBDEN_LO_HZ = float(os.getenv("SUBDEN_LO_HZ", "55"))
+_SUBDEN_HI_HZ = float(os.getenv("SUBDEN_HI_HZ", "160"))
+_SUBDEN_DRIVE_DB = float(os.getenv("SUBDEN_DRIVE_DB", "10"))
+_SUBDEN_MIX = float(os.getenv("SUBDEN_MIX", "0.06"))
 
-def _lmd_enabled() -> bool:
-    return bool(_LMD_ON)
+def _subden_enabled() -> bool:
+    return bool(_SUBDEN_ON)
 
-def _lmd_fc() -> str:
-    lo = _clamp(float(_LMD_LO_HZ), 60.0, 240.0)
-    hi = _clamp(float(_LMD_HI_HZ), 200.0, 500.0)
-    if hi <= lo + 10.0:
-        hi = lo + 10.0
+def _subden_fc() -> str:
+    lo = _clamp(float(_SUBDEN_LO_HZ), 35.0, 90.0)
+    hi = _clamp(float(_SUBDEN_HI_HZ), 110.0, 260.0)
+    if hi <= lo + 10:
+        hi = lo + 10
 
-    ratio = _clamp(float(_LMD_RATIO), 1.0, 4.0)
-    thr = _clamp(float(_LMD_THRESHOLD_DB), -60.0, 0.0)
-    att = _clamp(float(_LMD_ATTACK_MS), 0.1, 200.0)
-    rel = _clamp(float(_LMD_RELEASE_MS), 5.0, 2000.0)
-    makeup = _clamp(float(_LMD_MAKEUP_DB), -6.0, 12.0)
-    mix = _clamp(float(_LMD_MIX), 0.0, 0.80)
+    drive_db = _clamp(float(_SUBDEN_DRIVE_DB), 0.0, 18.0)
+    mix = _clamp(float(_SUBDEN_MIX), 0.0, 0.20)
 
-    band_comp = (
+    # Полоса: HP -> LP, затем мягкий клип, затем подмешиваем
+    fc = (
+        f"[0:a]asplit=2[dry][s];"
+        f"[dry]volume=1[d0];"
+        f"[s]"
         f"highpass=f={lo}:width=0.707,"
         f"lowpass=f={hi}:width=0.707,"
-        f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:makeup={makeup}dB"
-    )
-
-    # dry + (band_comp * mix)
-    fc = (
-        f"[0:a]asplit=2[dry][b];"
-        f"[dry]volume=1[d0];"
-        f"[b]{band_comp},volume={mix}[b1];"
-        f"[d0][b1]amix=inputs=2:normalize=0[aout]"
+        f"volume={drive_db}dB,"
+        f"asoftclip,"
+        f"volume={mix}[s1];"
+        f"[d0][s1]amix=inputs=2:normalize=0[aout]"
     )
     return fc
 # === /изменено ===
@@ -478,6 +467,7 @@ def _apply_kicksafe_glue_if_needed(base_path: str, out_path: str):
     )
     _run(cmd)
 
+# === изменено ===
 def _apply_harmonics_if_needed(in_path: str, out_path: str):
     if not _harm_enabled():
         cmd = (
@@ -495,9 +485,8 @@ def _apply_harmonics_if_needed(in_path: str, out_path: str):
     )
     _run(cmd)
 
-# === изменено ===
-def _apply_lowmid_density_if_needed(in_path: str, out_path: str):
-    if not _lmd_enabled():
+def _apply_subdensity_if_needed(in_path: str, out_path: str):
+    if not _subden_enabled():
         cmd = (
             f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
             f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
@@ -505,7 +494,7 @@ def _apply_lowmid_density_if_needed(in_path: str, out_path: str):
         _run(cmd)
         return
 
-    fc = _lmd_fc()
+    fc = _subden_fc()
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
         f'-filter_complex "{fc}" -map "[aout]" '
@@ -553,22 +542,20 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
 
     base_wav = os.path.join(td, "base.wav")
     glued_wav = os.path.join(td, "glued.wav")
-    harm_wav = os.path.join(td, "harm.wav")
-    dens_wav = os.path.join(td, "dens.wav")   # === изменено ===
+    harm_wav = os.path.join(td, "harm.wav")     # === изменено ===
+    subden_wav = os.path.join(td, "subden.wav") # === изменено ===
     mixed_wav = os.path.join(td, "mixed.wav")
 
     _render_base_no_loudnorm(in_path, base_no_ln, base_wav)
 
     _apply_kicksafe_glue_if_needed(base_wav, glued_wav)
 
-    _apply_harmonics_if_needed(glued_wav, harm_wav)
-
     # === изменено ===
-    # Low-mid density (120–350Hz) BEFORE air bus
-    _apply_lowmid_density_if_needed(harm_wav, dens_wav)
+    _apply_harmonics_if_needed(glued_wav, harm_wav)
+    _apply_subdensity_if_needed(harm_wav, subden_wav)
 
     mask_expr = _build_mask_expr_from_sections(sections)
-    _apply_air_bus(dens_wav, mask_expr, mixed_wav)
+    _apply_air_bus(subden_wav, mask_expr, mixed_wav)
 
     out_args, out_name, _mime = _out_args(fmt)
     out_path = os.path.join(td, out_name)
@@ -632,15 +619,11 @@ def health():
         "HARM_MIX": os.getenv("HARM_MIX"),
 
         # === изменено ===
-        "LMD_ON": os.getenv("LMD_ON"),
-        "LMD_LO_HZ": os.getenv("LMD_LO_HZ"),
-        "LMD_HI_HZ": os.getenv("LMD_HI_HZ"),
-        "LMD_RATIO": os.getenv("LMD_RATIO"),
-        "LMD_THRESHOLD_DB": os.getenv("LMD_THRESHOLD_DB"),
-        "LMD_ATTACK_MS": os.getenv("LMD_ATTACK_MS"),
-        "LMD_RELEASE_MS": os.getenv("LMD_RELEASE_MS"),
-        "LMD_MAKEUP_DB": os.getenv("LMD_MAKEUP_DB"),
-        "LMD_MIX": os.getenv("LMD_MIX"),
+        "SUBDEN_ON": os.getenv("SUBDEN_ON"),
+        "SUBDEN_LO_HZ": os.getenv("SUBDEN_LO_HZ"),
+        "SUBDEN_HI_HZ": os.getenv("SUBDEN_HI_HZ"),
+        "SUBDEN_DRIVE_DB": os.getenv("SUBDEN_DRIVE_DB"),
+        "SUBDEN_MIX": os.getenv("SUBDEN_MIX"),
     })
 
 @app.get("/analyze")
