@@ -105,7 +105,7 @@ _ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
 # Pre-Clean
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7" + (",afftdn=nf=-25" if _ENABLE_AFFTDN else "")
 
-# LOW-MID "ПЛЕЧИ" (ручные ползунки)
+# LOW-MID "ПЛЕЧИ" (EQ ручные ползунки)
 _LOWMID_ON = (os.getenv("LOWMID_ON", "1").strip() == "1")
 _LOWMID_F = float(os.getenv("LOWMID_F", "200"))
 _LOWMID_W = float(os.getenv("LOWMID_W", "0.7"))
@@ -212,19 +212,9 @@ def _transient_filter() -> str:
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
 
-# === изменено ===
 # ---------------------------
 # MICRO HARMONICS (safe)
 # ---------------------------
-# Идея: параллельный мягкий harmonics-слой ТОЛЬКО выше HP,
-# чтобы не трогать кик/саб/понч снизу.
-# Включение:
-#   HARM_ON=1
-# Ползунки:
-#   HARM_HP_HZ=140        (ниже не трогаем)
-#   HARM_LP_HZ=12000      (ограничение “песка”)
-#   HARM_DRIVE_DB=6       (сколько “вдавить” в софт-клип)
-#   HARM_MIX=0.08         (0..0.20 обычно)
 _HARM_ON = (os.getenv("HARM_ON", "0").strip() == "1")
 _HARM_HP_HZ = float(os.getenv("HARM_HP_HZ", "140"))
 _HARM_LP_HZ = float(os.getenv("HARM_LP_HZ", "12000"))
@@ -240,8 +230,6 @@ def _harm_fc() -> str:
     drive_db = _clamp(float(_HARM_DRIVE_DB), 0.0, 18.0)
     mix = _clamp(float(_HARM_MIX), 0.0, 0.35)
 
-    # ВАЖНО: asoftclip добавляет гармоники мягко.
-    # Мы ограничиваем полосу (HP/LP), чтобы не убивать низ и не делать “песок”.
     fc = (
         f"[0:a]asplit=2[dry][h];"
         f"[dry]volume=1[d0];"
@@ -252,6 +240,62 @@ def _harm_fc() -> str:
         f"asoftclip,"
         f"volume={mix}[h1];"
         f"[d0][h1]amix=inputs=2:normalize=0[aout]"
+    )
+    return fc
+
+# === изменено ===
+# ---------------------------
+# LOW-MID DENSITY (120–350 Hz, band comp + blend)
+# ---------------------------
+# Включение:
+#   LMD_ON=1
+# Ползунки:
+#   LMD_LO_HZ=120
+#   LMD_HI_HZ=350
+#   LMD_RATIO=1.25
+#   LMD_THRESHOLD_DB=-28
+#   LMD_ATTACK_MS=30
+#   LMD_RELEASE_MS=200
+#   LMD_MAKEUP_DB=1
+#   LMD_MIX=0.25          (0..0.60, сколько "тела" подмешать)
+_LMD_ON = (os.getenv("LMD_ON", "0").strip() == "1")
+_LMD_LO_HZ = float(os.getenv("LMD_LO_HZ", "120"))
+_LMD_HI_HZ = float(os.getenv("LMD_HI_HZ", "350"))
+_LMD_RATIO = float(os.getenv("LMD_RATIO", "1.25"))
+_LMD_THRESHOLD_DB = float(os.getenv("LMD_THRESHOLD_DB", "-28"))
+_LMD_ATTACK_MS = float(os.getenv("LMD_ATTACK_MS", "30"))
+_LMD_RELEASE_MS = float(os.getenv("LMD_RELEASE_MS", "200"))
+_LMD_MAKEUP_DB = float(os.getenv("LMD_MAKEUP_DB", "1"))
+_LMD_MIX = float(os.getenv("LMD_MIX", "0.25"))
+
+def _lmd_enabled() -> bool:
+    return bool(_LMD_ON)
+
+def _lmd_fc() -> str:
+    lo = _clamp(float(_LMD_LO_HZ), 60.0, 240.0)
+    hi = _clamp(float(_LMD_HI_HZ), 200.0, 500.0)
+    if hi <= lo + 10.0:
+        hi = lo + 10.0
+
+    ratio = _clamp(float(_LMD_RATIO), 1.0, 4.0)
+    thr = _clamp(float(_LMD_THRESHOLD_DB), -60.0, 0.0)
+    att = _clamp(float(_LMD_ATTACK_MS), 0.1, 200.0)
+    rel = _clamp(float(_LMD_RELEASE_MS), 5.0, 2000.0)
+    makeup = _clamp(float(_LMD_MAKEUP_DB), -6.0, 12.0)
+    mix = _clamp(float(_LMD_MIX), 0.0, 0.80)
+
+    band_comp = (
+        f"highpass=f={lo}:width=0.707,"
+        f"lowpass=f={hi}:width=0.707,"
+        f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:makeup={makeup}dB"
+    )
+
+    # dry + (band_comp * mix)
+    fc = (
+        f"[0:a]asplit=2[dry][b];"
+        f"[dry]volume=1[d0];"
+        f"[b]{band_comp},volume={mix}[b1];"
+        f"[d0][b1]amix=inputs=2:normalize=0[aout]"
     )
     return fc
 # === /изменено ===
@@ -402,10 +446,9 @@ def _normalize_format(x: str) -> str:
 def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
     lm = _lowmid_filter()
 
-    # либо kicksafe glue (рекомендуем), либо legacy glue
     glue = "anull"
     if _kicksafe_glue_enabled():
-        glue = "anull"  # применим через filter_complex ниже
+        glue = "anull"
     else:
         glue = _glue_filter()
 
@@ -435,7 +478,6 @@ def _apply_kicksafe_glue_if_needed(base_path: str, out_path: str):
     )
     _run(cmd)
 
-# === изменено ===
 def _apply_harmonics_if_needed(in_path: str, out_path: str):
     if not _harm_enabled():
         cmd = (
@@ -446,6 +488,24 @@ def _apply_harmonics_if_needed(in_path: str, out_path: str):
         return
 
     fc = _harm_fc()
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-filter_complex "{fc}" -map "[aout]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+# === изменено ===
+def _apply_lowmid_density_if_needed(in_path: str, out_path: str):
+    if not _lmd_enabled():
+        cmd = (
+            f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+            f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
+        )
+        _run(cmd)
+        return
+
+    fc = _lmd_fc()
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
         f'-filter_complex "{fc}" -map "[aout]" '
@@ -493,23 +553,23 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
 
     base_wav = os.path.join(td, "base.wav")
     glued_wav = os.path.join(td, "glued.wav")
-    harm_wav = os.path.join(td, "harm.wav")   # === изменено ===
+    harm_wav = os.path.join(td, "harm.wav")
+    dens_wav = os.path.join(td, "dens.wav")   # === изменено ===
     mixed_wav = os.path.join(td, "mixed.wav")
 
     _render_base_no_loudnorm(in_path, base_no_ln, base_wav)
 
-    # kicksafe glue (если включен)
     _apply_kicksafe_glue_if_needed(base_wav, glued_wav)
 
-    # === изменено ===
-    # micro harmonics (если включено)
     _apply_harmonics_if_needed(glued_wav, harm_wav)
 
-    # air bus
-    mask_expr = _build_mask_expr_from_sections(sections)
-    _apply_air_bus(harm_wav, mask_expr, mixed_wav)
+    # === изменено ===
+    # Low-mid density (120–350Hz) BEFORE air bus
+    _apply_lowmid_density_if_needed(harm_wav, dens_wav)
 
-    # final loudnorm
+    mask_expr = _build_mask_expr_from_sections(sections)
+    _apply_air_bus(dens_wav, mask_expr, mixed_wav)
+
     out_args, out_name, _mime = _out_args(fmt)
     out_path = os.path.join(td, out_name)
     _build_loudnorm_two_pass(mixed_wav, base_params["loudnorm"], out_args, out_path)
@@ -565,12 +625,22 @@ def health():
         "TRANSIENT_MAKEUP_DB": os.getenv("TRANSIENT_MAKEUP_DB"),
         "TRANSIENT_MIX": os.getenv("TRANSIENT_MIX"),
 
-        # === изменено ===
         "HARM_ON": os.getenv("HARM_ON"),
         "HARM_HP_HZ": os.getenv("HARM_HP_HZ"),
         "HARM_LP_HZ": os.getenv("HARM_LP_HZ"),
         "HARM_DRIVE_DB": os.getenv("HARM_DRIVE_DB"),
         "HARM_MIX": os.getenv("HARM_MIX"),
+
+        # === изменено ===
+        "LMD_ON": os.getenv("LMD_ON"),
+        "LMD_LO_HZ": os.getenv("LMD_LO_HZ"),
+        "LMD_HI_HZ": os.getenv("LMD_HI_HZ"),
+        "LMD_RATIO": os.getenv("LMD_RATIO"),
+        "LMD_THRESHOLD_DB": os.getenv("LMD_THRESHOLD_DB"),
+        "LMD_ATTACK_MS": os.getenv("LMD_ATTACK_MS"),
+        "LMD_RELEASE_MS": os.getenv("LMD_RELEASE_MS"),
+        "LMD_MAKEUP_DB": os.getenv("LMD_MAKEUP_DB"),
+        "LMD_MIX": os.getenv("LMD_MIX"),
     })
 
 @app.get("/analyze")
