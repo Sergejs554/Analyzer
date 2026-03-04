@@ -96,6 +96,9 @@ def _run(cmd: str):
 # MR MASTERING v2 — CORE DSP
 # ---------------------------
 
+def _clamp(x, lo, hi):
+    return float(max(lo, min(hi, x)))
+
 # TEMP TEST: afftdn off by default
 _ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
 
@@ -111,12 +114,14 @@ _LOWMID_G = float(os.getenv("LOWMID_G", "0.6"))
 def _lowmid_filter() -> str:
     if not _LOWMID_ON:
         return "anull"
-    f = max(20.0, min(800.0, float(_LOWMID_F)))
-    w = max(0.2, min(3.0, float(_LOWMID_W)))
-    g = max(-3.0, min(3.0, float(_LOWMID_G)))
+    f = _clamp(float(_LOWMID_F), 20.0, 800.0)
+    w = _clamp(float(_LOWMID_W), 0.2, 3.0)
+    g = _clamp(float(_LOWMID_G), -3.0, 3.0)
     return f"equalizer=f={f}:t=q:w={w}:g={g}"
 
-# GLUE (лёгкая "склейка") через ENV
+# ---------------------------
+# GLUE (legacy) — fallback
+# ---------------------------
 _GLUE_ON = (os.getenv("GLUE_ON", "0").strip() == "1")
 _GLUE_RATIO = float(os.getenv("GLUE_RATIO", "1.6"))
 _GLUE_THRESHOLD_DB = float(os.getenv("GLUE_THRESHOLD_DB", "-18"))
@@ -129,32 +134,78 @@ _GLUE_MIX = float(os.getenv("GLUE_MIX", "1.0"))
 def _glue_filter() -> str:
     if not _GLUE_ON:
         return "anull"
-    ratio = max(1.0, min(10.0, float(_GLUE_RATIO)))
-    thr = max(-60.0, min(0.0, float(_GLUE_THRESHOLD_DB)))
-    att = max(0.1, min(200.0, float(_GLUE_ATTACK_MS)))      # ms
-    rel = max(5.0, min(2000.0, float(_GLUE_RELEASE_MS)))    # ms
-    knee = max(0.0, min(12.0, float(_GLUE_KNEE_DB)))
-    makeup = max(-6.0, min(12.0, float(_GLUE_MAKEUP_DB)))
-    mix = max(0.0, min(1.0, float(_GLUE_MIX)))
+    ratio = _clamp(float(_GLUE_RATIO), 1.0, 10.0)
+    thr = _clamp(float(_GLUE_THRESHOLD_DB), -60.0, 0.0)
+    att = _clamp(float(_GLUE_ATTACK_MS), 0.1, 200.0)
+    rel = _clamp(float(_GLUE_RELEASE_MS), 5.0, 2000.0)
+    knee = _clamp(float(_GLUE_KNEE_DB), 0.0, 12.0)
+    makeup = _clamp(float(_GLUE_MAKEUP_DB), -6.0, 12.0)
+    mix = _clamp(float(_GLUE_MIX), 0.0, 1.0)
     return (
         f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
 
-# === изменено ===
-# TRANSIENT MICROCONTROL (эмуляция transient shaper через acompressor)
-# Идея: мягко подчёркнуть атаки/панч (transients пролетают через attack)
-# По умолчанию ВЫКЛ (TRANSIENT_ON=0).
+# ---------------------------
+# KICKSAFE GLUE (new)
+# ---------------------------
+# Работает только на mid/high: low band bypass (кик/саб не давит).
 # Включение:
-#   TRANSIENT_ON=1
+#   KICKSAFE_GLUE_ON=1
 # Ползунки:
-#   TRANSIENT_RATIO=1.8
-#   TRANSIENT_THRESHOLD_DB=-22
-#   TRANSIENT_ATTACK_MS=25
-#   TRANSIENT_RELEASE_MS=90
-#   TRANSIENT_KNEE_DB=2
-#   TRANSIENT_MAKEUP_DB=0
-#   TRANSIENT_MIX=0.25   (0..1)  <- главная ручка (слышимость)
+#   KICKSAFE_XOVER_HZ=140      (разделение low/mid)
+#   KICKSAFE_RATIO=1.6
+#   KICKSAFE_THRESHOLD_DB=-20
+#   KICKSAFE_ATTACK_MS=10
+#   KICKSAFE_RELEASE_MS=160
+#   KICKSAFE_KNEE_DB=2
+#   KICKSAFE_MAKEUP_DB=0
+#   KICKSAFE_MIX=0.25          (0..1, слышимость)
+_KICKSAFE_GLUE_ON = (os.getenv("KICKSAFE_GLUE_ON", "0").strip() == "1")
+_KICKSAFE_XOVER_HZ = float(os.getenv("KICKSAFE_XOVER_HZ", "140"))
+_KICKSAFE_RATIO = float(os.getenv("KICKSAFE_RATIO", "1.6"))
+_KICKSAFE_THRESHOLD_DB = float(os.getenv("KICKSAFE_THRESHOLD_DB", "-20"))
+_KICKSAFE_ATTACK_MS = float(os.getenv("KICKSAFE_ATTACK_MS", "10"))
+_KICKSAFE_RELEASE_MS = float(os.getenv("KICKSAFE_RELEASE_MS", "160"))
+_KICKSAFE_KNEE_DB = float(os.getenv("KICKSAFE_KNEE_DB", "2"))
+_KICKSAFE_MAKEUP_DB = float(os.getenv("KICKSAFE_MAKEUP_DB", "0"))
+_KICKSAFE_MIX = float(os.getenv("KICKSAFE_MIX", "0.25"))
+
+def _kicksafe_glue_enabled() -> bool:
+    return bool(_KICKSAFE_GLUE_ON)
+
+def _kicksafe_glue_fc() -> str:
+    """
+    filter_complex (на base.wav):
+      split -> low(mid bypass) + mid(high compressed) -> mix
+    """
+    xover = _clamp(float(_KICKSAFE_XOVER_HZ), 80.0, 240.0)
+    ratio = _clamp(float(_KICKSAFE_RATIO), 1.0, 10.0)
+    thr = _clamp(float(_KICKSAFE_THRESHOLD_DB), -60.0, 0.0)
+    att = _clamp(float(_KICKSAFE_ATTACK_MS), 0.1, 200.0)
+    rel = _clamp(float(_KICKSAFE_RELEASE_MS), 5.0, 2000.0)
+    knee = _clamp(float(_KICKSAFE_KNEE_DB), 0.0, 12.0)
+    makeup = _clamp(float(_KICKSAFE_MAKEUP_DB), -6.0, 12.0)
+    mix = _clamp(float(_KICKSAFE_MIX), 0.0, 1.0)
+
+    # low band bypass
+    # mid band compressor with mix (параллель внутри полосы)
+    comp = (
+        f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
+        f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
+    )
+
+    fc = (
+        f"[0:a]asplit=2[aL][aH];"
+        f"[aL]lowpass=f={xover}:width=0.707[aLow];"
+        f"[aH]highpass=f={xover}:width=0.707,{comp}[aHigh];"
+        f"[aLow][aHigh]amix=inputs=2:normalize=0[aout]"
+    )
+    return fc
+
+# ---------------------------
+# TRANSIENT MICROCONTROL
+# ---------------------------
 _TRANSIENT_ON = (os.getenv("TRANSIENT_ON", "0").strip() == "1")
 _TRANSIENT_RATIO = float(os.getenv("TRANSIENT_RATIO", "1.8"))
 _TRANSIENT_THRESHOLD_DB = float(os.getenv("TRANSIENT_THRESHOLD_DB", "-22"))
@@ -167,16 +218,13 @@ _TRANSIENT_MIX = float(os.getenv("TRANSIENT_MIX", "0.25"))
 def _transient_filter() -> str:
     if not _TRANSIENT_ON:
         return "anull"
-    ratio = max(1.0, min(10.0, float(_TRANSIENT_RATIO)))
-    thr = max(-60.0, min(0.0, float(_TRANSIENT_THRESHOLD_DB)))
-    att = max(0.1, min(200.0, float(_TRANSIENT_ATTACK_MS)))      # ms
-    rel = max(5.0, min(2000.0, float(_TRANSIENT_RELEASE_MS)))    # ms
-    knee = max(0.0, min(12.0, float(_TRANSIENT_KNEE_DB)))
-    makeup = max(-6.0, min(12.0, float(_TRANSIENT_MAKEUP_DB)))
-    mix = max(0.0, min(1.0, float(_TRANSIENT_MIX)))
-
-    # Трюк: attack чуть медленнее (например 15..35ms) даёт панч,
-    # mix держим маленьким (0.10..0.35), иначе начнет "съедать воздух".
+    ratio = _clamp(float(_TRANSIENT_RATIO), 1.0, 10.0)
+    thr = _clamp(float(_TRANSIENT_THRESHOLD_DB), -60.0, 0.0)
+    att = _clamp(float(_TRANSIENT_ATTACK_MS), 0.1, 200.0)
+    rel = _clamp(float(_TRANSIENT_RELEASE_MS), 5.0, 2000.0)
+    knee = _clamp(float(_TRANSIENT_KNEE_DB), 0.0, 12.0)
+    makeup = _clamp(float(_TRANSIENT_MAKEUP_DB), -6.0, 12.0)
+    mix = _clamp(float(_TRANSIENT_MIX), 0.0, 1.0)
     return (
         f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
@@ -191,9 +239,6 @@ _AIR_WIDEN = 0.12  # 0..1 -> delay 1..100
 _RAMP_MIN = 0.08
 _RAMP_MAX = 0.80
 
-def _clamp(x, lo, hi):
-    return float(max(lo, min(hi, x)))
-
 def _stereowiden_filter() -> str:
     d = int(round(_clamp(_AIR_WIDEN, 0.0, 1.0) * 100.0))
     d = max(1, min(100, d))
@@ -206,7 +251,6 @@ def _pick_ramp(prev_len: float, next_len: float) -> float:
 def _build_mask_expr_from_sections(sections: list[dict]) -> str:
     if not sections:
         return "0.5"
-
     secs = sorted(sections, key=lambda s: float(s.get("start", 0.0)))
     starts = [float(s.get("start", 0.0)) for s in secs]
     ends = [float(s.get("end", 0.0)) for s in secs]
@@ -330,13 +374,39 @@ def _normalize_format(x: str) -> str:
     return "wav16"
 
 def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
-    # low-mid + glue + transient microcontrol
     lm = _lowmid_filter()
-    glue = _glue_filter()
+
+    # либо kicksafe glue (рекомендуем), либо legacy glue
+    glue = "anull"
+    if _kicksafe_glue_enabled():
+        glue = "anull"  # применим через filter_complex ниже
+    else:
+        glue = _glue_filter()
+
     tr = _transient_filter()
+
+    # 1) base.wav
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
         f'-af "{_PRE_CLEAN_CHAIN},{lm},{glue},{tr},{chain_no_ln}" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+def _apply_kicksafe_glue_if_needed(base_path: str, out_path: str):
+    if not _kicksafe_glue_enabled():
+        # просто копируем base -> out (через ffmpeg, чтобы одинаково в пайплайне)
+        cmd = (
+            f'ffmpeg -y -hide_banner -i {shlex.quote(base_path)} '
+            f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
+        )
+        _run(cmd)
+        return
+
+    fc = _kicksafe_glue_fc()
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(base_path)} '
+        f'-filter_complex "{fc}" -map "[aout]" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
@@ -379,13 +449,19 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
     base_no_ln, _ = _strip_loudnorm(base_chain)
 
     base_wav = os.path.join(td, "base.wav")
+    glued_wav = os.path.join(td, "glued.wav")
     mixed_wav = os.path.join(td, "mixed.wav")
 
     _render_base_no_loudnorm(in_path, base_no_ln, base_wav)
 
-    mask_expr = _build_mask_expr_from_sections(sections)
-    _apply_air_bus(base_wav, mask_expr, mixed_wav)
+    # kicksafe glue (если включен)
+    _apply_kicksafe_glue_if_needed(base_wav, glued_wav)
 
+    # air bus
+    mask_expr = _build_mask_expr_from_sections(sections)
+    _apply_air_bus(glued_wav, mask_expr, mixed_wav)
+
+    # final loudnorm
     out_args, out_name, _mime = _out_args(fmt)
     out_path = os.path.join(td, out_name)
     _build_loudnorm_two_pass(mixed_wav, base_params["loudnorm"], out_args, out_path)
@@ -407,6 +483,7 @@ def health():
     return jsonify({
         "ok": True,
         "ENABLE_AFFTDN": os.getenv("ENABLE_AFFTDN"),
+
         "LOWMID_ON": os.getenv("LOWMID_ON"),
         "LOWMID_F": os.getenv("LOWMID_F"),
         "LOWMID_W": os.getenv("LOWMID_W"),
@@ -421,7 +498,16 @@ def health():
         "GLUE_MAKEUP_DB": os.getenv("GLUE_MAKEUP_DB"),
         "GLUE_MIX": os.getenv("GLUE_MIX"),
 
-        # === изменено ===
+        "KICKSAFE_GLUE_ON": os.getenv("KICKSAFE_GLUE_ON"),
+        "KICKSAFE_XOVER_HZ": os.getenv("KICKSAFE_XOVER_HZ"),
+        "KICKSAFE_RATIO": os.getenv("KICKSAFE_RATIO"),
+        "KICKSAFE_THRESHOLD_DB": os.getenv("KICKSAFE_THRESHOLD_DB"),
+        "KICKSAFE_ATTACK_MS": os.getenv("KICKSAFE_ATTACK_MS"),
+        "KICKSAFE_RELEASE_MS": os.getenv("KICKSAFE_RELEASE_MS"),
+        "KICKSAFE_KNEE_DB": os.getenv("KICKSAFE_KNEE_DB"),
+        "KICKSAFE_MAKEUP_DB": os.getenv("KICKSAFE_MAKEUP_DB"),
+        "KICKSAFE_MIX": os.getenv("KICKSAFE_MIX"),
+
         "TRANSIENT_ON": os.getenv("TRANSIENT_ON"),
         "TRANSIENT_RATIO": os.getenv("TRANSIENT_RATIO"),
         "TRANSIENT_THRESHOLD_DB": os.getenv("TRANSIENT_THRESHOLD_DB"),
@@ -513,10 +599,6 @@ def compare_sections_route():
 
 @app.get("/master")
 def master_route():
-    """
-    Usage:
-      /master?file=<url>&tone=warm|balanced|bright&intensity=low|balanced|high&format=wav16|wav24|aiff|flac|mp3_320
-    """
     url = request.args.get("file")
     if not url:
         return jsonify({"error": "provide ?file=<url>"}), 400
@@ -531,7 +613,6 @@ def master_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, dbg = _dl_to_named(td, "file", url)
-
             out_path, out_name = _render_master(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
