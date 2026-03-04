@@ -149,18 +149,6 @@ def _glue_filter() -> str:
 # ---------------------------
 # KICKSAFE GLUE (new)
 # ---------------------------
-# Работает только на mid/high: low band bypass (кик/саб не давит).
-# Включение:
-#   KICKSAFE_GLUE_ON=1
-# Ползунки:
-#   KICKSAFE_XOVER_HZ=140      (разделение low/mid)
-#   KICKSAFE_RATIO=1.6
-#   KICKSAFE_THRESHOLD_DB=-20
-#   KICKSAFE_ATTACK_MS=10
-#   KICKSAFE_RELEASE_MS=160
-#   KICKSAFE_KNEE_DB=2
-#   KICKSAFE_MAKEUP_DB=0
-#   KICKSAFE_MIX=0.25          (0..1, слышимость)
 _KICKSAFE_GLUE_ON = (os.getenv("KICKSAFE_GLUE_ON", "0").strip() == "1")
 _KICKSAFE_XOVER_HZ = float(os.getenv("KICKSAFE_XOVER_HZ", "140"))
 _KICKSAFE_RATIO = float(os.getenv("KICKSAFE_RATIO", "1.6"))
@@ -175,10 +163,6 @@ def _kicksafe_glue_enabled() -> bool:
     return bool(_KICKSAFE_GLUE_ON)
 
 def _kicksafe_glue_fc() -> str:
-    """
-    filter_complex (на base.wav):
-      split -> low(mid bypass) + mid(high compressed) -> mix
-    """
     xover = _clamp(float(_KICKSAFE_XOVER_HZ), 80.0, 240.0)
     ratio = _clamp(float(_KICKSAFE_RATIO), 1.0, 10.0)
     thr = _clamp(float(_KICKSAFE_THRESHOLD_DB), -60.0, 0.0)
@@ -188,8 +172,6 @@ def _kicksafe_glue_fc() -> str:
     makeup = _clamp(float(_KICKSAFE_MAKEUP_DB), -6.0, 12.0)
     mix = _clamp(float(_KICKSAFE_MIX), 0.0, 1.0)
 
-    # low band bypass
-    # mid band compressor with mix (параллель внутри полосы)
     comp = (
         f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
@@ -229,6 +211,50 @@ def _transient_filter() -> str:
         f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
+
+# === изменено ===
+# ---------------------------
+# MICRO HARMONICS (safe)
+# ---------------------------
+# Идея: параллельный мягкий harmonics-слой ТОЛЬКО выше HP,
+# чтобы не трогать кик/саб/понч снизу.
+# Включение:
+#   HARM_ON=1
+# Ползунки:
+#   HARM_HP_HZ=140        (ниже не трогаем)
+#   HARM_LP_HZ=12000      (ограничение “песка”)
+#   HARM_DRIVE_DB=6       (сколько “вдавить” в софт-клип)
+#   HARM_MIX=0.08         (0..0.20 обычно)
+_HARM_ON = (os.getenv("HARM_ON", "0").strip() == "1")
+_HARM_HP_HZ = float(os.getenv("HARM_HP_HZ", "140"))
+_HARM_LP_HZ = float(os.getenv("HARM_LP_HZ", "12000"))
+_HARM_DRIVE_DB = float(os.getenv("HARM_DRIVE_DB", "6"))
+_HARM_MIX = float(os.getenv("HARM_MIX", "0.08"))
+
+def _harm_enabled() -> bool:
+    return bool(_HARM_ON)
+
+def _harm_fc() -> str:
+    hp = _clamp(float(_HARM_HP_HZ), 60.0, 300.0)
+    lp = _clamp(float(_HARM_LP_HZ), 6000.0, 18000.0)
+    drive_db = _clamp(float(_HARM_DRIVE_DB), 0.0, 18.0)
+    mix = _clamp(float(_HARM_MIX), 0.0, 0.35)
+
+    # ВАЖНО: asoftclip добавляет гармоники мягко.
+    # Мы ограничиваем полосу (HP/LP), чтобы не убивать низ и не делать “песок”.
+    fc = (
+        f"[0:a]asplit=2[dry][h];"
+        f"[dry]volume=1[d0];"
+        f"[h]"
+        f"highpass=f={hp}:width=0.707,"
+        f"lowpass=f={lp}:width=0.707,"
+        f"volume={drive_db}dB,"
+        f"asoftclip,"
+        f"volume={mix}[h1];"
+        f"[d0][h1]amix=inputs=2:normalize=0[aout]"
+    )
+    return fc
+# === /изменено ===
 
 # AIR BUS
 _AIR_AMOUNT = 0.16
@@ -385,7 +411,6 @@ def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
 
     tr = _transient_filter()
 
-    # 1) base.wav
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
         f'-af "{_PRE_CLEAN_CHAIN},{lm},{glue},{tr},{chain_no_ln}" '
@@ -395,7 +420,6 @@ def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
 
 def _apply_kicksafe_glue_if_needed(base_path: str, out_path: str):
     if not _kicksafe_glue_enabled():
-        # просто копируем base -> out (через ffmpeg, чтобы одинаково в пайплайне)
         cmd = (
             f'ffmpeg -y -hide_banner -i {shlex.quote(base_path)} '
             f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
@@ -410,6 +434,25 @@ def _apply_kicksafe_glue_if_needed(base_path: str, out_path: str):
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
+
+# === изменено ===
+def _apply_harmonics_if_needed(in_path: str, out_path: str):
+    if not _harm_enabled():
+        cmd = (
+            f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+            f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
+        )
+        _run(cmd)
+        return
+
+    fc = _harm_fc()
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-filter_complex "{fc}" -map "[aout]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+# === /изменено ===
 
 def _apply_air_bus(base_path: str, mask_expr: str, out_path: str):
     air_gain_expr = f"(({mask_expr})*{_AIR_AMOUNT:.6f})"
@@ -450,6 +493,7 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
 
     base_wav = os.path.join(td, "base.wav")
     glued_wav = os.path.join(td, "glued.wav")
+    harm_wav = os.path.join(td, "harm.wav")   # === изменено ===
     mixed_wav = os.path.join(td, "mixed.wav")
 
     _render_base_no_loudnorm(in_path, base_no_ln, base_wav)
@@ -457,9 +501,13 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
     # kicksafe glue (если включен)
     _apply_kicksafe_glue_if_needed(base_wav, glued_wav)
 
+    # === изменено ===
+    # micro harmonics (если включено)
+    _apply_harmonics_if_needed(glued_wav, harm_wav)
+
     # air bus
     mask_expr = _build_mask_expr_from_sections(sections)
-    _apply_air_bus(glued_wav, mask_expr, mixed_wav)
+    _apply_air_bus(harm_wav, mask_expr, mixed_wav)
 
     # final loudnorm
     out_args, out_name, _mime = _out_args(fmt)
@@ -516,6 +564,13 @@ def health():
         "TRANSIENT_KNEE_DB": os.getenv("TRANSIENT_KNEE_DB"),
         "TRANSIENT_MAKEUP_DB": os.getenv("TRANSIENT_MAKEUP_DB"),
         "TRANSIENT_MIX": os.getenv("TRANSIENT_MIX"),
+
+        # === изменено ===
+        "HARM_ON": os.getenv("HARM_ON"),
+        "HARM_HP_HZ": os.getenv("HARM_HP_HZ"),
+        "HARM_LP_HZ": os.getenv("HARM_LP_HZ"),
+        "HARM_DRIVE_DB": os.getenv("HARM_DRIVE_DB"),
+        "HARM_MIX": os.getenv("HARM_MIX"),
     })
 
 @app.get("/analyze")
