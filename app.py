@@ -96,23 +96,13 @@ def _run(cmd: str):
 # MR MASTERING v2 — CORE DSP
 # ---------------------------
 
-# === изменено ===
-# TEMP TEST: полностью отключаем afftdn (FFT noise reduction),
-# чтобы проверить гипотезу "вакуум/одеяло" из-за шумодава.
-# Можно вернуть шумодав позже, включив переменную окружения:
-# ENABLE_AFFTDN=1 (по умолчанию 0).
+# TEMP TEST: afftdn off by default
 _ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
 
-# Fixed Pre-Clean (НЕ зависит от tone/intensity, НЕ зависит от section mapping)
-# Максимально безопасно: убираем инфраниз; шумодав временно отключаем (по умолчанию).
+# Pre-Clean
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7" + (",afftdn=nf=-25" if _ENABLE_AFFTDN else "")
 
-# === изменено ===
 # LOW-MID "ПЛЕЧИ" (ручные ползунки)
-# Точка/ширина/гейн для лёгкого тела. По умолчанию:
-#  - 200 Hz, W=0.7, G=+0.6 dB
-# Можно быстро крутить локально или через env:
-#  LOWMID_F=200  LOWMID_W=0.7  LOWMID_G=0.6  LOWMID_ON=1
 _LOWMID_ON = (os.getenv("LOWMID_ON", "1").strip() == "1")
 _LOWMID_F = float(os.getenv("LOWMID_F", "200"))
 _LOWMID_W = float(os.getenv("LOWMID_W", "0.7"))
@@ -126,19 +116,7 @@ def _lowmid_filter() -> str:
     g = max(-3.0, min(3.0, float(_LOWMID_G)))
     return f"equalizer=f={f}:t=q:w={w}:g={g}"
 
-# === изменено ===
-# GLUE (лёгкая "склейка" микродинамики) через ENV
-# По умолчанию ВЫКЛ (GLUE_ON=0), чтобы ничего не ломать.
-# Включение:
-#   GLUE_ON=1
-# Ручные ползунки:
-#   GLUE_RATIO=1.6
-#   GLUE_THRESHOLD_DB=-18
-#   GLUE_ATTACK_MS=10
-#   GLUE_RELEASE_MS=120
-#   GLUE_KNEE_DB=2
-#   GLUE_MAKEUP_DB=0
-#   GLUE_MIX=1.0   (0..1)
+# GLUE (лёгкая "склейка") через ENV
 _GLUE_ON = (os.getenv("GLUE_ON", "0").strip() == "1")
 _GLUE_RATIO = float(os.getenv("GLUE_RATIO", "1.6"))
 _GLUE_THRESHOLD_DB = float(os.getenv("GLUE_THRESHOLD_DB", "-18"))
@@ -158,23 +136,58 @@ def _glue_filter() -> str:
     knee = max(0.0, min(12.0, float(_GLUE_KNEE_DB)))
     makeup = max(-6.0, min(12.0, float(_GLUE_MAKEUP_DB)))
     mix = max(0.0, min(1.0, float(_GLUE_MIX)))
-
-    # acompressor: threshold in dB, attack/release in ms
-    # mix: параллель, можно делать subtle (например 0.35)
     return (
         f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
 
-# AIR BUS (параллельный "воздух" без склеек/нарезки)
-_AIR_AMOUNT = 0.16            # 0.10..0.22 (старт 0.16)
-_AIR_SHELF_F = 9000           # где начинаем "air"
-_AIR_SHELF_G = 2.6            # dB
+# === изменено ===
+# TRANSIENT MICROCONTROL (эмуляция transient shaper через acompressor)
+# Идея: мягко подчёркнуть атаки/панч (transients пролетают через attack)
+# По умолчанию ВЫКЛ (TRANSIENT_ON=0).
+# Включение:
+#   TRANSIENT_ON=1
+# Ползунки:
+#   TRANSIENT_RATIO=1.8
+#   TRANSIENT_THRESHOLD_DB=-22
+#   TRANSIENT_ATTACK_MS=25
+#   TRANSIENT_RELEASE_MS=90
+#   TRANSIENT_KNEE_DB=2
+#   TRANSIENT_MAKEUP_DB=0
+#   TRANSIENT_MIX=0.25   (0..1)  <- главная ручка (слышимость)
+_TRANSIENT_ON = (os.getenv("TRANSIENT_ON", "0").strip() == "1")
+_TRANSIENT_RATIO = float(os.getenv("TRANSIENT_RATIO", "1.8"))
+_TRANSIENT_THRESHOLD_DB = float(os.getenv("TRANSIENT_THRESHOLD_DB", "-22"))
+_TRANSIENT_ATTACK_MS = float(os.getenv("TRANSIENT_ATTACK_MS", "25"))
+_TRANSIENT_RELEASE_MS = float(os.getenv("TRANSIENT_RELEASE_MS", "90"))
+_TRANSIENT_KNEE_DB = float(os.getenv("TRANSIENT_KNEE_DB", "2"))
+_TRANSIENT_MAKEUP_DB = float(os.getenv("TRANSIENT_MAKEUP_DB", "0"))
+_TRANSIENT_MIX = float(os.getenv("TRANSIENT_MIX", "0.25"))
 
-# stereowiden принимает delay (1..100), а не "amount 0..1".
-_AIR_WIDEN = 0.12             # 0.00..1.00 -> delay=1..100  (0.12 => 12)
+def _transient_filter() -> str:
+    if not _TRANSIENT_ON:
+        return "anull"
+    ratio = max(1.0, min(10.0, float(_TRANSIENT_RATIO)))
+    thr = max(-60.0, min(0.0, float(_TRANSIENT_THRESHOLD_DB)))
+    att = max(0.1, min(200.0, float(_TRANSIENT_ATTACK_MS)))      # ms
+    rel = max(5.0, min(2000.0, float(_TRANSIENT_RELEASE_MS)))    # ms
+    knee = max(0.0, min(12.0, float(_TRANSIENT_KNEE_DB)))
+    makeup = max(-6.0, min(12.0, float(_TRANSIENT_MAKEUP_DB)))
+    mix = max(0.0, min(1.0, float(_TRANSIENT_MIX)))
 
-# Маска (плавные рампы на границах секций)
+    # Трюк: attack чуть медленнее (например 15..35ms) даёт панч,
+    # mix держим маленьким (0.10..0.35), иначе начнет "съедать воздух".
+    return (
+        f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
+        f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
+    )
+
+# AIR BUS
+_AIR_AMOUNT = 0.16
+_AIR_SHELF_F = 9000
+_AIR_SHELF_G = 2.6
+_AIR_WIDEN = 0.12  # 0..1 -> delay 1..100
+
 _RAMP_MIN = 0.08
 _RAMP_MAX = 0.80
 
@@ -317,13 +330,13 @@ def _normalize_format(x: str) -> str:
     return "wav16"
 
 def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
-    # === изменено ===
-    # Добавили low-mid "плечи" + glue между pre-clean и основной цепью
+    # low-mid + glue + transient microcontrol
     lm = _lowmid_filter()
     glue = _glue_filter()
+    tr = _transient_filter()
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-af "{_PRE_CLEAN_CHAIN},{lm},{glue},{chain_no_ln}" '
+        f'-af "{_PRE_CLEAN_CHAIN},{lm},{glue},{tr},{chain_no_ln}" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
@@ -391,8 +404,6 @@ def root():
 
 @app.get("/health")
 def health():
-    # === изменено ===
-    # Чтобы ты ТОЧНО видел, что Railway подхватил env и что код их читает.
     return jsonify({
         "ok": True,
         "ENABLE_AFFTDN": os.getenv("ENABLE_AFFTDN"),
@@ -400,6 +411,7 @@ def health():
         "LOWMID_F": os.getenv("LOWMID_F"),
         "LOWMID_W": os.getenv("LOWMID_W"),
         "LOWMID_G": os.getenv("LOWMID_G"),
+
         "GLUE_ON": os.getenv("GLUE_ON"),
         "GLUE_RATIO": os.getenv("GLUE_RATIO"),
         "GLUE_THRESHOLD_DB": os.getenv("GLUE_THRESHOLD_DB"),
@@ -408,6 +420,16 @@ def health():
         "GLUE_KNEE_DB": os.getenv("GLUE_KNEE_DB"),
         "GLUE_MAKEUP_DB": os.getenv("GLUE_MAKEUP_DB"),
         "GLUE_MIX": os.getenv("GLUE_MIX"),
+
+        # === изменено ===
+        "TRANSIENT_ON": os.getenv("TRANSIENT_ON"),
+        "TRANSIENT_RATIO": os.getenv("TRANSIENT_RATIO"),
+        "TRANSIENT_THRESHOLD_DB": os.getenv("TRANSIENT_THRESHOLD_DB"),
+        "TRANSIENT_ATTACK_MS": os.getenv("TRANSIENT_ATTACK_MS"),
+        "TRANSIENT_RELEASE_MS": os.getenv("TRANSIENT_RELEASE_MS"),
+        "TRANSIENT_KNEE_DB": os.getenv("TRANSIENT_KNEE_DB"),
+        "TRANSIENT_MAKEUP_DB": os.getenv("TRANSIENT_MAKEUP_DB"),
+        "TRANSIENT_MIX": os.getenv("TRANSIENT_MIX"),
     })
 
 @app.get("/analyze")
