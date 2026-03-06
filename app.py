@@ -4,7 +4,7 @@ from flask import Flask, request, jsonify, send_file
 import os, tempfile, requests, re, subprocess, shlex, json
 
 from analyze_mastering import run_analysis
-from auto_analysis import analyze_sections  # секционный анализ
+from auto_analysis import analyze_sections
 from smart_auto import decide_smart_params_with_sections, build_smart_chain
 
 app = Flask(__name__)
@@ -93,7 +93,7 @@ def _run(cmd: str):
     return p.stdout.decode("utf-8", errors="ignore"), p.stderr.decode("utf-8", errors="ignore")
 
 # ---------------------------
-# MR MASTERING v2 — CORE DSP
+# MR MASTERING v3 — BASS SAFE
 # ---------------------------
 
 def _clamp(x, lo, hi):
@@ -105,7 +105,7 @@ _ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
 # Pre-Clean
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7" + (",afftdn=nf=-25" if _ENABLE_AFFTDN else "")
 
-# LOW-MID "ПЛЕЧИ" (ручные ползунки)
+# LOW-MID "ПЛЕЧИ"
 _LOWMID_ON = (os.getenv("LOWMID_ON", "1").strip() == "1")
 _LOWMID_F = float(os.getenv("LOWMID_F", "200"))
 _LOWMID_W = float(os.getenv("LOWMID_W", "0.7"))
@@ -119,9 +119,7 @@ def _lowmid_filter() -> str:
     g = _clamp(float(_LOWMID_G), -3.0, 3.0)
     return f"equalizer=f={f}:t=q:w={w}:g={g}"
 
-# ---------------------------
-# GLUE (legacy) — fallback
-# ---------------------------
+# GLUE (legacy)
 _GLUE_ON = (os.getenv("GLUE_ON", "0").strip() == "1")
 _GLUE_RATIO = float(os.getenv("GLUE_RATIO", "1.6"))
 _GLUE_THRESHOLD_DB = float(os.getenv("GLUE_THRESHOLD_DB", "-18"))
@@ -146,9 +144,7 @@ def _glue_filter() -> str:
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
 
-# ---------------------------
-# KICKSAFE GLUE (new)
-# ---------------------------
+# KICKSAFE GLUE
 _KICKSAFE_GLUE_ON = (os.getenv("KICKSAFE_GLUE_ON", "0").strip() == "1")
 _KICKSAFE_XOVER_HZ = float(os.getenv("KICKSAFE_XOVER_HZ", "140"))
 _KICKSAFE_RATIO = float(os.getenv("KICKSAFE_RATIO", "1.6"))
@@ -177,17 +173,14 @@ def _kicksafe_glue_fc() -> str:
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
 
-    fc = (
+    return (
         f"[0:a]asplit=2[aL][aH];"
         f"[aL]lowpass=f={xover}:width=0.707[aLow];"
         f"[aH]highpass=f={xover}:width=0.707,{comp}[aHigh];"
         f"[aLow][aHigh]amix=inputs=2:normalize=0[aout]"
     )
-    return fc
 
-# ---------------------------
-# TRANSIENT MICROCONTROL
-# ---------------------------
+# TRANSIENT
 _TRANSIENT_ON = (os.getenv("TRANSIENT_ON", "0").strip() == "1")
 _TRANSIENT_RATIO = float(os.getenv("TRANSIENT_RATIO", "1.8"))
 _TRANSIENT_THRESHOLD_DB = float(os.getenv("TRANSIENT_THRESHOLD_DB", "-22"))
@@ -212,10 +205,7 @@ def _transient_filter() -> str:
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
 
-# === изменено ===
-# ---------------------------
-# MICRO HARMONICS (safe)
-# ---------------------------
+# MICRO HARMONICS
 _HARM_ON = (os.getenv("HARM_ON", "0").strip() == "1")
 _HARM_HP_HZ = float(os.getenv("HARM_HP_HZ", "140"))
 _HARM_LP_HZ = float(os.getenv("HARM_LP_HZ", "12000"))
@@ -231,7 +221,7 @@ def _harm_fc() -> str:
     drive_db = _clamp(float(_HARM_DRIVE_DB), 0.0, 18.0)
     mix = _clamp(float(_HARM_MIX), 0.0, 0.35)
 
-    fc = (
+    return (
         f"[0:a]asplit=2[dry][h];"
         f"[dry]volume=1[d0];"
         f"[h]"
@@ -242,20 +232,8 @@ def _harm_fc() -> str:
         f"volume={mix}[h1];"
         f"[d0][h1]amix=inputs=2:normalize=0[aout]"
     )
-    return fc
 
-# ---------------------------
-# SUB DENSITY (low harmonic density)
-# ---------------------------
-# Идея: очень лёгкая параллельная сатурация ТОЛЬКО в низкой полосе,
-# чтобы "жир" появился у всех источников с низом, но без подъёма громкости.
-# Включение:
-#   SUBDEN_ON=1
-# Ползунки:
-#   SUBDEN_LO_HZ=55        (низ полосы)
-#   SUBDEN_HI_HZ=160       (верх полосы)
-#   SUBDEN_DRIVE_DB=10     (насколько вдавить)
-#   SUBDEN_MIX=0.06        (0.03..0.10 обычно)
+# SUB DENSITY
 _SUBDEN_ON = (os.getenv("SUBDEN_ON", "0").strip() == "1")
 _SUBDEN_LO_HZ = float(os.getenv("SUBDEN_LO_HZ", "55"))
 _SUBDEN_HI_HZ = float(os.getenv("SUBDEN_HI_HZ", "160"))
@@ -274,8 +252,7 @@ def _subden_fc() -> str:
     drive_db = _clamp(float(_SUBDEN_DRIVE_DB), 0.0, 18.0)
     mix = _clamp(float(_SUBDEN_MIX), 0.0, 0.20)
 
-    # Полоса: HP -> LP, затем мягкий клип, затем подмешиваем
-    fc = (
+    return (
         f"[0:a]asplit=2[dry][s];"
         f"[dry]volume=1[d0];"
         f"[s]"
@@ -286,14 +263,55 @@ def _subden_fc() -> str:
         f"volume={mix}[s1];"
         f"[d0][s1]amix=inputs=2:normalize=0[aout]"
     )
-    return fc
-# === /изменено ===
+
+# BASS PRESERVE BUS
+# Низ сохраняем отдельно почти dry, чтобы мастер не убивал удар/массу
+_BASS_PRESERVE_ON = (os.getenv("BASS_PRESERVE_ON", "1").strip() == "1")
+_BASS_PRESERVE_XOVER_HZ = float(os.getenv("BASS_PRESERVE_XOVER_HZ", "140"))
+_BASS_PRESERVE_GAIN_DB = float(os.getenv("BASS_PRESERVE_GAIN_DB", "0"))
+
+def _bass_preserve_enabled() -> bool:
+    return bool(_BASS_PRESERVE_ON)
+
+def _render_bass_preserve_dry(in_path: str, out_path: str):
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-af "{_PRE_CLEAN_CHAIN}" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+def _apply_bass_preserve_if_needed(dry_low_src: str, processed_src: str, out_path: str):
+    if not _bass_preserve_enabled():
+        cmd = (
+            f'ffmpeg -y -hide_banner -i {shlex.quote(processed_src)} '
+            f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
+        )
+        _run(cmd)
+        return
+
+    xover = _clamp(float(_BASS_PRESERVE_XOVER_HZ), 70.0, 220.0)
+    gain_db = _clamp(float(_BASS_PRESERVE_GAIN_DB), -3.0, 3.0)
+
+    fc = (
+        f"[0:a]lowpass=f={xover}:width=0.707,volume={gain_db}dB[low];"
+        f"[1:a]highpass=f={xover}:width=0.707[high];"
+        f"[low][high]amix=inputs=2:normalize=0[aout]"
+    )
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(dry_low_src)} '
+        f'-i {shlex.quote(processed_src)} '
+        f'-filter_complex "{fc}" -map "[aout]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
 
 # AIR BUS
 _AIR_AMOUNT = 0.16
 _AIR_SHELF_F = 9000
 _AIR_SHELF_G = 2.6
-_AIR_WIDEN = 0.12  # 0..1 -> delay 1..100
+_AIR_WIDEN = 0.12
 
 _RAMP_MIN = 0.08
 _RAMP_MAX = 0.80
@@ -310,6 +328,7 @@ def _pick_ramp(prev_len: float, next_len: float) -> float:
 def _build_mask_expr_from_sections(sections: list[dict]) -> str:
     if not sections:
         return "0.5"
+
     secs = sorted(sections, key=lambda s: float(s.get("start", 0.0)))
     starts = [float(s.get("start", 0.0)) for s in secs]
     ends = [float(s.get("end", 0.0)) for s in secs]
@@ -467,7 +486,6 @@ def _apply_kicksafe_glue_if_needed(base_path: str, out_path: str):
     )
     _run(cmd)
 
-# === изменено ===
 def _apply_harmonics_if_needed(in_path: str, out_path: str):
     if not _harm_enabled():
         cmd = (
@@ -501,7 +519,6 @@ def _apply_subdensity_if_needed(in_path: str, out_path: str):
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
-# === /изменено ===
 
 def _apply_air_bus(base_path: str, mask_expr: str, out_path: str):
     air_gain_expr = f"(({mask_expr})*{_AIR_AMOUNT:.6f})"
@@ -516,7 +533,8 @@ def _apply_air_bus(base_path: str, mask_expr: str, out_path: str):
     )
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(base_path)} '
-        f'-filter_complex "{fc}" -map "[aout]" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+        f'-filter_complex "{fc}" -map "[aout]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
 
@@ -540,22 +558,27 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
     base_chain = build_smart_chain(base_params)
     base_no_ln, _ = _strip_loudnorm(base_chain)
 
+    bassdry_wav = os.path.join(td, "bassdry.wav")
     base_wav = os.path.join(td, "base.wav")
     glued_wav = os.path.join(td, "glued.wav")
-    harm_wav = os.path.join(td, "harm.wav")     # === изменено ===
-    subden_wav = os.path.join(td, "subden.wav") # === изменено ===
+    harm_wav = os.path.join(td, "harm.wav")
+    subden_wav = os.path.join(td, "subden.wav")
+    preair_wav = os.path.join(td, "preair.wav")
     mixed_wav = os.path.join(td, "mixed.wav")
 
     _render_base_no_loudnorm(in_path, base_no_ln, base_wav)
-
     _apply_kicksafe_glue_if_needed(base_wav, glued_wav)
-
-    # === изменено ===
     _apply_harmonics_if_needed(glued_wav, harm_wav)
-    _apply_subdensity_if_needed(harm_wav, subden_wav)
+
+    if _bass_preserve_enabled():
+        _render_bass_preserve_dry(in_path, bassdry_wav)
+        _apply_bass_preserve_if_needed(bassdry_wav, harm_wav, preair_wav)
+    else:
+        _apply_subdensity_if_needed(harm_wav, subden_wav)
+        preair_wav = subden_wav
 
     mask_expr = _build_mask_expr_from_sections(sections)
-    _apply_air_bus(subden_wav, mask_expr, mixed_wav)
+    _apply_air_bus(preair_wav, mask_expr, mixed_wav)
 
     out_args, out_name, _mime = _out_args(fmt)
     out_path = os.path.join(td, out_name)
@@ -577,6 +600,7 @@ def root():
 def health():
     return jsonify({
         "ok": True,
+
         "ENABLE_AFFTDN": os.getenv("ENABLE_AFFTDN"),
 
         "LOWMID_ON": os.getenv("LOWMID_ON"),
@@ -618,12 +642,15 @@ def health():
         "HARM_DRIVE_DB": os.getenv("HARM_DRIVE_DB"),
         "HARM_MIX": os.getenv("HARM_MIX"),
 
-        # === изменено ===
         "SUBDEN_ON": os.getenv("SUBDEN_ON"),
         "SUBDEN_LO_HZ": os.getenv("SUBDEN_LO_HZ"),
         "SUBDEN_HI_HZ": os.getenv("SUBDEN_HI_HZ"),
         "SUBDEN_DRIVE_DB": os.getenv("SUBDEN_DRIVE_DB"),
         "SUBDEN_MIX": os.getenv("SUBDEN_MIX"),
+
+        "BASS_PRESERVE_ON": os.getenv("BASS_PRESERVE_ON"),
+        "BASS_PRESERVE_XOVER_HZ": os.getenv("BASS_PRESERVE_XOVER_HZ"),
+        "BASS_PRESERVE_GAIN_DB": os.getenv("BASS_PRESERVE_GAIN_DB"),
     })
 
 @app.get("/analyze")
