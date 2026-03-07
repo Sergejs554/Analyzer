@@ -93,7 +93,7 @@ def _run(cmd: str):
     return p.stdout.decode("utf-8", errors="ignore"), p.stderr.decode("utf-8", errors="ignore")
 
 # ---------------------------
-# MR MASTERING v3 — BASS SAFE
+# MR MASTERING v3.1 — PARALLEL BASS BLEND
 # ---------------------------
 
 def _clamp(x, lo, hi):
@@ -264,25 +264,38 @@ def _subden_fc() -> str:
         f"[d0][s1]amix=inputs=2:normalize=0[aout]"
     )
 
-# BASS PRESERVE BUS
-# Низ сохраняем отдельно почти dry, чтобы мастер не убивал удар/массу
-_BASS_PRESERVE_ON = (os.getenv("BASS_PRESERVE_ON", "1").strip() == "1")
-_BASS_PRESERVE_XOVER_HZ = float(os.getenv("BASS_PRESERVE_XOVER_HZ", "140"))
-_BASS_PRESERVE_GAIN_DB = float(os.getenv("BASS_PRESERVE_GAIN_DB", "0"))
+# PARALLEL BASS BLEND BUS
+# Главная идея:
+# 1) processed full mix остаётся целиком (вся магия не ломается)
+# 2) отдельно из исходника вытаскиваем только low band
+# 3) подмешиваем low band обратно параллельно
+_BASS_BLEND_ON = (os.getenv("BASS_BLEND_ON", "1").strip() == "1")
+_BASS_BLEND_LO_HZ = float(os.getenv("BASS_BLEND_LO_HZ", "32"))
+_BASS_BLEND_HI_HZ = float(os.getenv("BASS_BLEND_HI_HZ", "125"))
+_BASS_BLEND_MIX = float(os.getenv("BASS_BLEND_MIX", "0.22"))
+_BASS_BLEND_GAIN_DB = float(os.getenv("BASS_BLEND_GAIN_DB", "0.0"))
 
-def _bass_preserve_enabled() -> bool:
-    return bool(_BASS_PRESERVE_ON)
+def _bass_blend_enabled() -> bool:
+    return bool(_BASS_BLEND_ON)
 
-def _render_bass_preserve_dry(in_path: str, out_path: str):
+def _render_bass_bus(in_path: str, out_path: str):
+    lo = _clamp(float(_BASS_BLEND_LO_HZ), 20.0, 70.0)
+    hi = _clamp(float(_BASS_BLEND_HI_HZ), 80.0, 220.0)
+    if hi <= lo + 10:
+        hi = lo + 10
+
+    gain_db = _clamp(float(_BASS_BLEND_GAIN_DB), -3.0, 3.0)
+
+    # Берём low-band из почти чистого сигнала, без "убийства" магии
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-af "{_PRE_CLEAN_CHAIN}" '
+        f'-af "{_PRE_CLEAN_CHAIN},highpass=f={lo}:width=0.707,lowpass=f={hi}:width=0.707,volume={gain_db}dB" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
 
-def _apply_bass_preserve_if_needed(dry_low_src: str, processed_src: str, out_path: str):
-    if not _bass_preserve_enabled():
+def _apply_bass_blend_if_needed(processed_src: str, bass_src: str, out_path: str):
+    if not _bass_blend_enabled():
         cmd = (
             f'ffmpeg -y -hide_banner -i {shlex.quote(processed_src)} '
             f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
@@ -290,18 +303,17 @@ def _apply_bass_preserve_if_needed(dry_low_src: str, processed_src: str, out_pat
         _run(cmd)
         return
 
-    xover = _clamp(float(_BASS_PRESERVE_XOVER_HZ), 70.0, 220.0)
-    gain_db = _clamp(float(_BASS_PRESERVE_GAIN_DB), -3.0, 3.0)
+    mix = _clamp(float(_BASS_BLEND_MIX), 0.0, 0.60)
 
     fc = (
-        f"[0:a]lowpass=f={xover}:width=0.707,volume={gain_db}dB[low];"
-        f"[1:a]highpass=f={xover}:width=0.707[high];"
-        f"[low][high]amix=inputs=2:normalize=0[aout]"
+        f"[0:a]volume=1[p0];"
+        f"[1:a]volume={mix}[b0];"
+        f"[p0][b0]amix=inputs=2:normalize=0[aout]"
     )
     cmd = (
         f'ffmpeg -y -hide_banner '
-        f'-i {shlex.quote(dry_low_src)} '
         f'-i {shlex.quote(processed_src)} '
+        f'-i {shlex.quote(bass_src)} '
         f'-filter_complex "{fc}" -map "[aout]" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
@@ -558,31 +570,34 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
     base_chain = build_smart_chain(base_params)
     base_no_ln, _ = _strip_loudnorm(base_chain)
 
-    bassdry_wav = os.path.join(td, "bassdry.wav")
     base_wav = os.path.join(td, "base.wav")
     glued_wav = os.path.join(td, "glued.wav")
     harm_wav = os.path.join(td, "harm.wav")
     subden_wav = os.path.join(td, "subden.wav")
-    preair_wav = os.path.join(td, "preair.wav")
-    mixed_wav = os.path.join(td, "mixed.wav")
+    air_wav = os.path.join(td, "air.wav")
+    bassbus_wav = os.path.join(td, "bassbus.wav")
+    finalmix_wav = os.path.join(td, "finalmix.wav")
 
+    # 1) full processed chain (магия остаётся целой)
     _render_base_no_loudnorm(in_path, base_no_ln, base_wav)
     _apply_kicksafe_glue_if_needed(base_wav, glued_wav)
     _apply_harmonics_if_needed(glued_wav, harm_wav)
+    _apply_subdensity_if_needed(harm_wav, subden_wav)
 
-    if _bass_preserve_enabled():
-        _render_bass_preserve_dry(in_path, bassdry_wav)
-        _apply_bass_preserve_if_needed(bassdry_wav, harm_wav, preair_wav)
-    else:
-        _apply_subdensity_if_needed(harm_wav, subden_wav)
-        preair_wav = subden_wav
-
+    # 2) air bus поверх полного processed mix
     mask_expr = _build_mask_expr_from_sections(sections)
-    _apply_air_bus(preair_wav, mask_expr, mixed_wav)
+    _apply_air_bus(subden_wav, mask_expr, air_wav)
 
+    # 3) параллельный bass bus из исходника
+    _render_bass_bus(in_path, bassbus_wav)
+
+    # 4) подмешиваем bass bus обратно в full processed mix
+    _apply_bass_blend_if_needed(air_wav, bassbus_wav, finalmix_wav)
+
+    # 5) final loudnorm
     out_args, out_name, _mime = _out_args(fmt)
     out_path = os.path.join(td, out_name)
-    _build_loudnorm_two_pass(mixed_wav, base_params["loudnorm"], out_args, out_path)
+    _build_loudnorm_two_pass(finalmix_wav, base_params["loudnorm"], out_args, out_path)
 
     return out_path, out_name
 
@@ -648,9 +663,11 @@ def health():
         "SUBDEN_DRIVE_DB": os.getenv("SUBDEN_DRIVE_DB"),
         "SUBDEN_MIX": os.getenv("SUBDEN_MIX"),
 
-        "BASS_PRESERVE_ON": os.getenv("BASS_PRESERVE_ON"),
-        "BASS_PRESERVE_XOVER_HZ": os.getenv("BASS_PRESERVE_XOVER_HZ"),
-        "BASS_PRESERVE_GAIN_DB": os.getenv("BASS_PRESERVE_GAIN_DB"),
+        "BASS_BLEND_ON": os.getenv("BASS_BLEND_ON"),
+        "BASS_BLEND_LO_HZ": os.getenv("BASS_BLEND_LO_HZ"),
+        "BASS_BLEND_HI_HZ": os.getenv("BASS_BLEND_HI_HZ"),
+        "BASS_BLEND_MIX": os.getenv("BASS_BLEND_MIX"),
+        "BASS_BLEND_GAIN_DB": os.getenv("BASS_BLEND_GAIN_DB"),
     })
 
 @app.get("/analyze")
