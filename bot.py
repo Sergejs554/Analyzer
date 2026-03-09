@@ -23,7 +23,7 @@ import aiohttp
 # -------- ENV --------
 MASTER_API_BASE = os.getenv("MASTER_API_BASE", "https://web-production-51401.up.railway.app").rstrip("/")
 MAX_TG_FILE_MB = int(os.getenv("MAX_TG_FILE_MB", "19"))
-MAX_TG_SEND_MB = int(os.getenv("MAX_TG_SEND_MB", "49"))
+MAX_TG_SEND_MB = int(os.getenv("MAX_TG_SEND_MB", "50"))
 MAX_REMOTE_MB = int(os.getenv("MAX_REMOTE_MB", "256"))
 
 ALLOWED_EXT = (".mp3", ".wav", ".m4a", ".flac", ".aiff", ".aif")
@@ -216,7 +216,6 @@ def _norm_format(x: str) -> str:
     return "wav16"
 
 def _api_master_url(file_url: str, tone: str, intensity: str, fmt: str) -> str:
-    # file_url must be URL-encoded because it contains query params (and for tg token-url)
     fu = quote(file_url, safe="")
     return f"{MASTER_API_BASE}/master?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
 
@@ -248,13 +247,14 @@ def _guess_filename(fmt: str) -> str:
         return "mastered.aiff"
     return "mastered.wav"
 
+def _fallback_notice(fmt: str) -> str:
+    return (
+        f"⚠️ {label_format(fmt)} готов, но Telegram не пропускает файл по размеру.\n"
+        f"Ниже отправляю MP3 320 kbps для Telegram."
+    )
+
 async def _telegram_file_direct_url(file_id: str) -> str:
-    """
-    Use Telegram file hosting as the source URL for Railway API.
-    This URL includes BOT_TOKEN, but it is never shown to user (server-to-server only).
-    """
     fi = await bot.get_file(file_id)
-    # file_path like: 'documents/file_123.mp3'
     return f"https://api.telegram.org/file/bot{token}/{fi.file_path}"
 
 # -------- HANDLERS --------
@@ -290,7 +290,6 @@ async def on_audio(m: Message):
             out_name = _guess_filename(fmt)
             out_path = os.path.join(td, out_name)
 
-            # Use Telegram-hosted direct URL as API input
             src_url = await _telegram_file_direct_url(file_obj.file_id)
 
             async with aiohttp.ClientSession() as session:
@@ -298,7 +297,12 @@ async def on_audio(m: Message):
 
             out_size = os.path.getsize(out_path)
             if _too_big(out_size, MAX_TG_SEND_MB):
-                # Fallback: request mp3_320 from API (same source, same settings)
+                # === изменено ===
+                # Не делаем молчаливую подмену формата.
+                # Сначала явно говорим, что выбранный формат слишком большой для Telegram.
+                if fmt != "mp3_320":
+                    await m.reply(_fallback_notice(fmt), reply_markup=kb_home())
+
                 alt_name = _guess_filename("mp3_320")
                 alt_path = os.path.join(td, alt_name)
                 async with aiohttp.ClientSession() as session:
@@ -306,7 +310,11 @@ async def on_audio(m: Message):
 
                 await m.reply_document(
                     FSInputFile(alt_path, filename=alt_name),
-                    caption=f"✅ Готово! Результат: MP3 320 kbps (Telegram лимит по размеру)",
+                    caption=(
+                        "✅ Готово! Результат: MP3 320 kbps"
+                        if fmt == "mp3_320"
+                        else f"✅ Готово! Telegram-версия: MP3 320 kbps\nВыбранный формат: {label_format(fmt)}"
+                    ),
                     reply_markup=kb_home()
                 )
             else:
@@ -336,7 +344,6 @@ async def on_text(m: Message):
 
     try:
         with tempfile.TemporaryDirectory() as td:
-            # if gdrive -> direct
             if is_gdrive(url):
                 url = gdrive_direct(url) or url
 
@@ -348,6 +355,12 @@ async def on_text(m: Message):
 
             out_size = os.path.getsize(out_path)
             if _too_big(out_size, MAX_TG_SEND_MB):
+                # === изменено ===
+                # Не делаем молчаливую подмену формата.
+                # Сначала явно говорим, что выбранный формат слишком большой для Telegram.
+                if fmt != "mp3_320":
+                    await m.reply(_fallback_notice(fmt), reply_markup=kb_home())
+
                 alt_name = _guess_filename("mp3_320")
                 alt_path = os.path.join(td, alt_name)
                 async with aiohttp.ClientSession() as session:
@@ -355,7 +368,11 @@ async def on_text(m: Message):
 
                 await m.reply_document(
                     FSInputFile(alt_path, filename=alt_name),
-                    caption=f"✅ Готово! Результат: MP3 320 kbps (Telegram лимит по размеру)",
+                    caption=(
+                        "✅ Готово! Результат: MP3 320 kbps"
+                        if fmt == "mp3_320"
+                        else f"✅ Готово! Telegram-версия: MP3 320 kbps\nВыбранный формат: {label_format(fmt)}"
+                    ),
                     reply_markup=kb_home()
                 )
             else:
