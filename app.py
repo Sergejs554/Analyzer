@@ -265,10 +265,6 @@ def _subden_fc() -> str:
     )
 
 # PARALLEL BASS BLEND BUS
-# Главная идея:
-# 1) processed full mix остаётся целиком (вся магия не ломается)
-# 2) отдельно из исходника вытаскиваем только low band
-# 3) подмешиваем low band обратно параллельно
 _BASS_BLEND_ON = (os.getenv("BASS_BLEND_ON", "1").strip() == "1")
 _BASS_BLEND_LO_HZ = float(os.getenv("BASS_BLEND_LO_HZ", "32"))
 _BASS_BLEND_HI_HZ = float(os.getenv("BASS_BLEND_HI_HZ", "125"))
@@ -286,7 +282,6 @@ def _render_bass_bus(in_path: str, out_path: str):
 
     gain_db = _clamp(float(_BASS_BLEND_GAIN_DB), -3.0, 3.0)
 
-    # Берём low-band из почти чистого сигнала, без "убийства" магии
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
         f'-af "{_PRE_CLEAN_CHAIN},highpass=f={lo}:width=0.707,lowpass=f={hi}:width=0.707,volume={gain_db}dB" '
@@ -348,15 +343,15 @@ def _build_mask_expr_from_sections(sections: list[dict]) -> str:
 
     expr = f"{w[-1]:.6f}"
     for i in range(len(w) - 2, -1, -1):
-        b = max(starts[i+1], ends[i])
+        b = max(starts[i + 1], ends[i])
         prev_len = max(0.01, ends[i] - starts[i])
-        next_len = max(0.01, ends[i+1] - starts[i+1])
+        next_len = max(0.01, ends[i + 1] - starts[i + 1])
         r = _pick_ramp(prev_len, next_len)
 
         left = b - r
         right = b + r
         wi = w[i]
-        wj = w[i+1]
+        wj = w[i + 1]
 
         expr = (
             f"if(lt(t,{left:.6f}),{wi:.6f},"
@@ -395,7 +390,7 @@ def _extract_last_json_block(text: str):
             if depth > 0:
                 depth -= 1
                 if depth == 0 and start != -1:
-                    chunk = text[start:i+1]
+                    chunk = text[start:i + 1]
                     try:
                         last_obj = json.loads(chunk)
                     except Exception:
@@ -550,6 +545,102 @@ def _apply_air_bus(base_path: str, mask_expr: str, out_path: str):
     )
     _run(cmd)
 
+# === изменено ===
+# ---------------------------
+# AUTO ENHANCE (preserve core, enhance edges)
+# ---------------------------
+_ENH_AIR_ON = (os.getenv("ENH_AIR_ON", "1").strip() == "1")
+_ENH_AIR_SHELF_F = float(os.getenv("ENH_AIR_SHELF_F", "9500"))
+_ENH_AIR_SHELF_G = float(os.getenv("ENH_AIR_SHELF_G", "1.8"))
+_ENH_AIR_MIX = float(os.getenv("ENH_AIR_MIX", "0.10"))
+
+_ENH_WIDTH_ON = (os.getenv("ENH_WIDTH_ON", "1").strip() == "1")
+_ENH_WIDTH_HP_HZ = float(os.getenv("ENH_WIDTH_HP_HZ", "3500"))
+_ENH_WIDTH_DELAY = int(float(os.getenv("ENH_WIDTH_DELAY", "14")))
+_ENH_WIDTH_MIX = float(os.getenv("ENH_WIDTH_MIX", "0.09"))
+
+_ENH_GLOSS_ON = (os.getenv("ENH_GLOSS_ON", "1").strip() == "1")
+_ENH_GLOSS_HP_HZ = float(os.getenv("ENH_GLOSS_HP_HZ", "7000"))
+_ENH_GLOSS_LP_HZ = float(os.getenv("ENH_GLOSS_LP_HZ", "16000"))
+_ENH_GLOSS_DRIVE_DB = float(os.getenv("ENH_GLOSS_DRIVE_DB", "4.0"))
+_ENH_GLOSS_MIX = float(os.getenv("ENH_GLOSS_MIX", "0.035"))
+
+_ENH_LIMITER_ON = (os.getenv("ENH_LIMITER_ON", "1").strip() == "1")
+_ENH_LIMITER_CEILING_DB = float(os.getenv("ENH_LIMITER_CEILING_DB", "-1.2"))
+
+def _render_enhance(in_path: str, fmt: str, td: str) -> tuple[str, str]:
+    fmt = _normalize_format(fmt)
+
+    air_f = _clamp(float(_ENH_AIR_SHELF_F), 5000.0, 16000.0)
+    air_g = _clamp(float(_ENH_AIR_SHELF_G), 0.0, 4.0)
+    air_mix = _clamp(float(_ENH_AIR_MIX), 0.0, 0.30)
+
+    width_hp = _clamp(float(_ENH_WIDTH_HP_HZ), 1500.0, 10000.0)
+    width_delay = int(max(1, min(100, int(_ENH_WIDTH_DELAY))))
+    width_mix = _clamp(float(_ENH_WIDTH_MIX), 0.0, 0.25)
+
+    gloss_hp = _clamp(float(_ENH_GLOSS_HP_HZ), 4000.0, 12000.0)
+    gloss_lp = _clamp(float(_ENH_GLOSS_LP_HZ), max(gloss_hp + 1000.0, 7000.0), 19000.0)
+    gloss_drive = _clamp(float(_ENH_GLOSS_DRIVE_DB), 0.0, 10.0)
+    gloss_mix = _clamp(float(_ENH_GLOSS_MIX), 0.0, 0.12)
+
+    ceiling_db = _clamp(float(_ENH_LIMITER_CEILING_DB), -3.0, -0.3)
+    ceiling_lin = 10.0 ** (ceiling_db / 20.0)
+
+    parts = ["[0:a]asplit=4[dry][air][wid][gls]"]
+
+    parts.append("[dry]volume=1[d0]")
+
+    if _ENH_AIR_ON and air_mix > 0.0:
+        parts.append(
+            f"[air]highshelf=f={air_f}:g={air_g},volume={air_mix}[a1]"
+        )
+    else:
+        parts.append("[air]volume=0[a1]")
+
+    if _ENH_WIDTH_ON and width_mix > 0.0:
+        parts.append(
+            f"[wid]highpass=f={width_hp}:width=0.707,"
+            f"stereowiden=delay={width_delay},"
+            f"volume={width_mix}[w1]"
+        )
+    else:
+        parts.append("[wid]volume=0[w1]")
+
+    if _ENH_GLOSS_ON and gloss_mix > 0.0:
+        parts.append(
+            f"[gls]"
+            f"highpass=f={gloss_hp}:width=0.707,"
+            f"lowpass=f={gloss_lp}:width=0.707,"
+            f"volume={gloss_drive}dB,"
+            f"asoftclip,"
+            f"volume={gloss_mix}[g1]"
+        )
+    else:
+        parts.append("[gls]volume=0[g1]")
+
+    parts.append("[d0][a1][w1][g1]amix=inputs=4:normalize=0[m0]")
+
+    if _ENH_LIMITER_ON:
+        parts.append(f"[m0]alimiter=limit={ceiling_lin}:level=disabled[out]")
+    else:
+        parts.append("[m0]anull[out]")
+
+    fc = ";".join(parts)
+
+    out_args, out_name, _mime = _out_args(fmt)
+    out_path = os.path.join(td, out_name)
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'{out_args} {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+    return out_path, out_name
+# === /изменено ===
+
 def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     sec = analyze_sections(in_path, target_sr=48000)
     global_a = sec["global"]
@@ -578,23 +669,17 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
     bassbus_wav = os.path.join(td, "bassbus.wav")
     finalmix_wav = os.path.join(td, "finalmix.wav")
 
-    # 1) full processed chain (магия остаётся целой)
     _render_base_no_loudnorm(in_path, base_no_ln, base_wav)
     _apply_kicksafe_glue_if_needed(base_wav, glued_wav)
     _apply_harmonics_if_needed(glued_wav, harm_wav)
     _apply_subdensity_if_needed(harm_wav, subden_wav)
 
-    # 2) air bus поверх полного processed mix
     mask_expr = _build_mask_expr_from_sections(sections)
     _apply_air_bus(subden_wav, mask_expr, air_wav)
 
-    # 3) параллельный bass bus из исходника
     _render_bass_bus(in_path, bassbus_wav)
-
-    # 4) подмешиваем bass bus обратно в full processed mix
     _apply_bass_blend_if_needed(air_wav, bassbus_wav, finalmix_wav)
 
-    # 5) final loudnorm
     out_args, out_name, _mime = _out_args(fmt)
     out_path = os.path.join(td, out_name)
     _build_loudnorm_two_pass(finalmix_wav, base_params["loudnorm"], out_args, out_path)
@@ -608,7 +693,7 @@ def root():
     return jsonify({
         "ok": True,
         "service": "analysis_mastering_api",
-        "endpoints": ["/health", "/analyze", "/analyze_sections", "/compare_sections", "/master"]
+        "endpoints": ["/health", "/analyze", "/analyze_sections", "/compare_sections", "/master", "/enhance"]
     })
 
 @app.get("/health")
@@ -668,6 +753,26 @@ def health():
         "BASS_BLEND_HI_HZ": os.getenv("BASS_BLEND_HI_HZ"),
         "BASS_BLEND_MIX": os.getenv("BASS_BLEND_MIX"),
         "BASS_BLEND_GAIN_DB": os.getenv("BASS_BLEND_GAIN_DB"),
+
+        # === изменено ===
+        "ENH_AIR_ON": os.getenv("ENH_AIR_ON"),
+        "ENH_AIR_SHELF_F": os.getenv("ENH_AIR_SHELF_F"),
+        "ENH_AIR_SHELF_G": os.getenv("ENH_AIR_SHELF_G"),
+        "ENH_AIR_MIX": os.getenv("ENH_AIR_MIX"),
+
+        "ENH_WIDTH_ON": os.getenv("ENH_WIDTH_ON"),
+        "ENH_WIDTH_HP_HZ": os.getenv("ENH_WIDTH_HP_HZ"),
+        "ENH_WIDTH_DELAY": os.getenv("ENH_WIDTH_DELAY"),
+        "ENH_WIDTH_MIX": os.getenv("ENH_WIDTH_MIX"),
+
+        "ENH_GLOSS_ON": os.getenv("ENH_GLOSS_ON"),
+        "ENH_GLOSS_HP_HZ": os.getenv("ENH_GLOSS_HP_HZ"),
+        "ENH_GLOSS_LP_HZ": os.getenv("ENH_GLOSS_LP_HZ"),
+        "ENH_GLOSS_DRIVE_DB": os.getenv("ENH_GLOSS_DRIVE_DB"),
+        "ENH_GLOSS_MIX": os.getenv("ENH_GLOSS_MIX"),
+
+        "ENH_LIMITER_ON": os.getenv("ENH_LIMITER_ON"),
+        "ENH_LIMITER_CEILING_DB": os.getenv("ENH_LIMITER_CEILING_DB"),
     })
 
 @app.get("/analyze")
@@ -776,6 +881,34 @@ def master_route():
             )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# === изменено ===
+@app.get("/enhance")
+def enhance_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_enhance(in_path, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+# === /изменено ===
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
