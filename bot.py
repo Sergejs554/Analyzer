@@ -17,7 +17,9 @@ import aiohttp
 
 # ============================================================
 # MR MASTERING BOT -> ONLY WRAPPER
-# Everything mastering happens in Railway app.py (/master)
+# Everything audio processing happens in Railway app.py
+# /master   -> Smart Auto Mastering
+# /enhance  -> Auto Enhance
 # ============================================================
 
 # -------- ENV --------
@@ -57,9 +59,23 @@ def label_format(fmt_key: str) -> str:
         "aiff": "AIFF",
     }[fmt_key]
 
+# === изменено ===
+def label_process(process_key: str) -> str:
+    return {
+        "master": "Smart Master",
+        "enhance": "Auto Enhance",
+    }[process_key]
+# === /изменено ===
+
 def kb_main(uid: int) -> InlineKeyboardMarkup:
     st = USER_STATE.get(uid, PRESETS["defaults"])
+    # === изменено ===
+    process = st.get("process", "master")
+    # === /изменено ===
     return InlineKeyboardMarkup(inline_keyboard=[
+        # === изменено ===
+        [InlineKeyboardButton(text=f"✨ Mode: {label_process(process)}", callback_data="toggle_process")],
+        # === /изменено ===
         [InlineKeyboardButton(text=f"🎚 Intensity: {st['intensity']}", callback_data="menu_intensity")],
         [InlineKeyboardButton(text=f"🎛 Tone: {st['tone']}", callback_data="menu_tone")],
         [InlineKeyboardButton(text=f"💾 Output: {label_format(st['format'])}", callback_data="menu_format")],
@@ -118,6 +134,9 @@ async def start(m: Message):
         "intensity": PRESETS["defaults"]["intensity"],
         "tone": PRESETS["defaults"]["tone"],
         "format": PRESETS["defaults"]["format"],
+        # === изменено ===
+        "process": "master",
+        # === /изменено ===
     }
     await m.answer(
         "👋 Привет! Я — Mr. Mastering.\n"
@@ -137,6 +156,9 @@ async def settings_cmd(m: Message):
         "intensity": PRESETS["defaults"]["intensity"],
         "tone": PRESETS["defaults"]["tone"],
         "format": PRESETS["defaults"]["format"],
+        # === изменено ===
+        "process": "master",
+        # === /изменено ===
     }
     await m.answer("⚙️ Настройки сброшены.", reply_markup=kb_main(m.from_user.id))
 
@@ -155,6 +177,18 @@ async def callbacks(c):
         await c.message.edit_text("Главное меню:", reply_markup=kb_main(uid))
         await c.answer()
         return
+
+    # === изменено ===
+    if data == "toggle_process":
+        current = st.get("process", "master")
+        st["process"] = "enhance" if current == "master" else "master"
+        await c.message.edit_text(
+            f"Режим обработки: {label_process(st['process'])}",
+            reply_markup=kb_main(uid)
+        )
+        await c.answer()
+        return
+    # === /изменено ===
 
     if data == "menu_intensity":
         await c.message.edit_text("Выбери интенсивность мастеринга:", reply_markup=kb_intensity())
@@ -200,7 +234,6 @@ def _norm_tone(x: str) -> str:
 
 def _norm_intensity(x: str) -> str:
     x = (x or "balanced").lower().strip()
-    # поддержка старых алиасов на всякий
     if x in ("soft",): return "low"
     if x in ("normal",): return "balanced"
     if x in ("hard",): return "high"
@@ -215,9 +248,21 @@ def _norm_format(x: str) -> str:
     if x in ("aiff", "aif"): return "aiff"
     return "wav16"
 
+# === изменено ===
+def _norm_process(x: str) -> str:
+    x = (x or "master").lower().strip()
+    return x if x in ("master", "enhance") else "master"
+# === /изменено ===
+
 def _api_master_url(file_url: str, tone: str, intensity: str, fmt: str) -> str:
     fu = quote(file_url, safe="")
     return f"{MASTER_API_BASE}/master?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
+
+# === изменено ===
+def _api_enhance_url(file_url: str, fmt: str) -> str:
+    fu = quote(file_url, safe="")
+    return f"{MASTER_API_BASE}/enhance?file={fu}&format={fmt}"
+# === /изменено ===
 
 async def _download_to_file(session: aiohttp.ClientSession, url: str, dst_path: str, max_mb: int = 256):
     total = 0
@@ -235,6 +280,26 @@ async def _download_to_file(session: aiohttp.ClientSession, url: str, dst_path: 
 async def _master_via_api(session: aiohttp.ClientSession, file_url: str, tone: str, intensity: str, fmt: str, out_path: str):
     url = _api_master_url(file_url, tone, intensity, fmt)
     await _download_to_file(session, url, out_path, max_mb=MAX_REMOTE_MB)
+
+# === изменено ===
+async def _enhance_via_api(session: aiohttp.ClientSession, file_url: str, fmt: str, out_path: str):
+    url = _api_enhance_url(file_url, fmt)
+    await _download_to_file(session, url, out_path, max_mb=MAX_REMOTE_MB)
+
+async def _process_via_api(
+    session: aiohttp.ClientSession,
+    process_mode: str,
+    file_url: str,
+    tone: str,
+    intensity: str,
+    fmt: str,
+    out_path: str
+):
+    if process_mode == "enhance":
+        await _enhance_via_api(session, file_url, fmt, out_path)
+    else:
+        await _master_via_api(session, file_url, tone, intensity, fmt, out_path)
+# === /изменено ===
 
 def _guess_filename(fmt: str) -> str:
     if fmt == "mp3_320":
@@ -282,8 +347,12 @@ async def on_audio(m: Message):
     tone = _norm_tone(st.get("tone", "balanced"))
     intensity = _norm_intensity(st.get("intensity", "balanced"))
     fmt = _norm_format(st.get("format", "wav16"))
+    # === изменено ===
+    process_mode = _norm_process(st.get("process", "master"))
+    action_text = "🎧 Файл получен. Энхансю через API…" if process_mode == "enhance" else "🎧 Файл получен. Мастерю через API…"
+    # === /изменено ===
 
-    await m.reply("🎧 Файл получен. Мастерю через API…", reply_markup=kb_home())
+    await m.reply(action_text, reply_markup=kb_home())
 
     try:
         with tempfile.TemporaryDirectory() as td:
@@ -293,36 +362,39 @@ async def on_audio(m: Message):
             src_url = await _telegram_file_direct_url(file_obj.file_id)
 
             async with aiohttp.ClientSession() as session:
-                await _master_via_api(session, src_url, tone, intensity, fmt, out_path)
+                # === изменено ===
+                await _process_via_api(session, process_mode, src_url, tone, intensity, fmt, out_path)
+                # === /изменено ===
 
             out_size = os.path.getsize(out_path)
             if _too_big(out_size, MAX_TG_SEND_MB):
                 # === изменено ===
-                # Не делаем молчаливую подмену формата.
-                # Сначала явно говорим, что выбранный формат слишком большой для Telegram.
                 if fmt != "mp3_320":
                     await m.reply(_fallback_notice(fmt), reply_markup=kb_home())
 
                 alt_name = _guess_filename("mp3_320")
                 alt_path = os.path.join(td, alt_name)
                 async with aiohttp.ClientSession() as session:
-                    await _master_via_api(session, src_url, tone, intensity, "mp3_320", alt_path)
+                    await _process_via_api(session, process_mode, src_url, tone, intensity, "mp3_320", alt_path)
 
+                done_label = "Auto Enhance" if process_mode == "enhance" else "Smart Master"
                 await m.reply_document(
                     FSInputFile(alt_path, filename=alt_name),
                     caption=(
-                        "✅ Готово! Результат: MP3 320 kbps"
+                        f"✅ Готово! Результат: MP3 320 kbps\nРежим: {done_label}"
                         if fmt == "mp3_320"
-                        else f"✅ Готово! Telegram-версия: MP3 320 kbps\nВыбранный формат: {label_format(fmt)}"
+                        else f"✅ Готово! Telegram-версия: MP3 320 kbps\nРежим: {done_label}\nВыбранный формат: {label_format(fmt)}"
                     ),
                     reply_markup=kb_home()
                 )
             else:
+                done_label = "Auto Enhance" if process_mode == "enhance" else "Smart Master"
                 await m.reply_document(
                     FSInputFile(out_path, filename=out_name),
-                    caption=f"✅ Готово! Результат: {label_format(fmt)}",
+                    caption=f"✅ Готово! Результат: {label_format(fmt)}\nРежим: {done_label}",
                     reply_markup=kb_home()
                 )
+                # === /изменено ===
 
     except Exception as e:
         await m.reply(f"❌ Ошибка: {e}", reply_markup=kb_home())
@@ -339,8 +411,12 @@ async def on_text(m: Message):
     tone = _norm_tone(st.get("tone", "balanced"))
     intensity = _norm_intensity(st.get("intensity", "balanced"))
     fmt = _norm_format(st.get("format", "wav16"))
+    # === изменено ===
+    process_mode = _norm_process(st.get("process", "master"))
+    action_text = "⏬ Скачиваю по ссылке и энхансю через API…" if process_mode == "enhance" else "⏬ Скачиваю по ссылке и мастерю через API…"
+    # === /изменено ===
 
-    await m.reply("⏬ Скачиваю по ссылке и мастерю через API…", reply_markup=kb_home())
+    await m.reply(action_text, reply_markup=kb_home())
 
     try:
         with tempfile.TemporaryDirectory() as td:
@@ -351,36 +427,39 @@ async def on_text(m: Message):
             out_path = os.path.join(td, out_name)
 
             async with aiohttp.ClientSession() as session:
-                await _master_via_api(session, url, tone, intensity, fmt, out_path)
+                # === изменено ===
+                await _process_via_api(session, process_mode, url, tone, intensity, fmt, out_path)
+                # === /изменено ===
 
             out_size = os.path.getsize(out_path)
             if _too_big(out_size, MAX_TG_SEND_MB):
                 # === изменено ===
-                # Не делаем молчаливую подмену формата.
-                # Сначала явно говорим, что выбранный формат слишком большой для Telegram.
                 if fmt != "mp3_320":
                     await m.reply(_fallback_notice(fmt), reply_markup=kb_home())
 
                 alt_name = _guess_filename("mp3_320")
                 alt_path = os.path.join(td, alt_name)
                 async with aiohttp.ClientSession() as session:
-                    await _master_via_api(session, url, tone, intensity, "mp3_320", alt_path)
+                    await _process_via_api(session, process_mode, url, tone, intensity, "mp3_320", alt_path)
 
+                done_label = "Auto Enhance" if process_mode == "enhance" else "Smart Master"
                 await m.reply_document(
                     FSInputFile(alt_path, filename=alt_name),
                     caption=(
-                        "✅ Готово! Результат: MP3 320 kbps"
+                        f"✅ Готово! Результат: MP3 320 kbps\nРежим: {done_label}"
                         if fmt == "mp3_320"
-                        else f"✅ Готово! Telegram-версия: MP3 320 kbps\nВыбранный формат: {label_format(fmt)}"
+                        else f"✅ Готово! Telegram-версия: MP3 320 kbps\nРежим: {done_label}\nВыбранный формат: {label_format(fmt)}"
                     ),
                     reply_markup=kb_home()
                 )
             else:
+                done_label = "Auto Enhance" if process_mode == "enhance" else "Smart Master"
                 await m.reply_document(
                     FSInputFile(out_path, filename=out_name),
-                    caption=f"✅ Готово! Результат: {label_format(fmt)}",
+                    caption=f"✅ Готово! Результат: {label_format(fmt)}\nРежим: {done_label}",
                     reply_markup=kb_home()
                 )
+                # === /изменено ===
 
     except Exception as e:
         await m.reply(f"❌ Ошибка: {e}", reply_markup=kb_home())
