@@ -458,7 +458,6 @@ def _normalize_format(x: str) -> str:
     if x in ("aiff", "aif"): return "aiff"
     return "wav16"
 
-# === изменено ===
 # ---------------------------
 # OUR BANDLAB v1 — REVEAL / AIR / MID OPENING
 # ---------------------------
@@ -562,7 +561,147 @@ def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: 
     _run(cmd)
 
     return out_path, out_name
-# === /изменено ===
+
+# ---------------------------
+# OUR BAKUAGE v1 — LOW SUPPORT / BODY / DENSITY
+# ---------------------------
+_BK_LOW_ON = (os.getenv("BK_LOW_ON", "1").strip() == "1")
+_BK_LOW_LO_HZ = float(os.getenv("BK_LOW_LO_HZ", "32"))
+_BK_LOW_HI_HZ = float(os.getenv("BK_LOW_HI_HZ", "135"))
+_BK_LOW_DRIVE_DB = float(os.getenv("BK_LOW_DRIVE_DB", "2.0"))
+_BK_LOW_MIX = float(os.getenv("BK_LOW_MIX", "0.20"))
+
+_BK_BODY_ON = (os.getenv("BK_BODY_ON", "1").strip() == "1")
+_BK_BODY_F = float(os.getenv("BK_BODY_F", "220"))
+_BK_BODY_G = float(os.getenv("BK_BODY_G", "1.4"))
+_BK_BODY_W = float(os.getenv("BK_BODY_W", "0.9"))
+
+_BK_MID_ON = (os.getenv("BK_MID_ON", "1").strip() == "1")
+_BK_MID_F = float(os.getenv("BK_MID_F", "1150"))
+_BK_MID_G = float(os.getenv("BK_MID_G", "1.2"))
+_BK_MID_W = float(os.getenv("BK_MID_W", "0.95"))
+
+_BK_PRES_ON = (os.getenv("BK_PRES_ON", "1").strip() == "1")
+_BK_PRES_F = float(os.getenv("BK_PRES_F", "2200"))
+_BK_PRES_G = float(os.getenv("BK_PRES_G", "0.6"))
+_BK_PRES_W = float(os.getenv("BK_PRES_W", "1.0"))
+
+_BK_SOFTTOP_ON = (os.getenv("BK_SOFTTOP_ON", "1").strip() == "1")
+_BK_SOFTTOP_F = float(os.getenv("BK_SOFTTOP_F", "5200"))
+_BK_SOFTTOP_G = float(os.getenv("BK_SOFTTOP_G", "-1.4"))
+
+_BK_TONE_MIX = float(os.getenv("BK_TONE_MIX", "0.16"))
+
+_BK_LIMITER_ON = (os.getenv("BK_LIMITER_ON", "1").strip() == "1")
+_BK_LIMITER_CEILING_DB = float(os.getenv("BK_LIMITER_CEILING_DB", "-1.2"))
+
+def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    intensity_scale = {
+        "low": 0.90,
+        "balanced": 1.00,
+        "high": 1.12,
+    }[intensity]
+
+    tone_body_mul = {
+        "warm": 1.10,
+        "balanced": 1.00,
+        "bright": 0.92,
+    }[tone]
+
+    tone_pres_mul = {
+        "warm": 0.92,
+        "balanced": 1.00,
+        "bright": 1.08,
+    }[tone]
+
+    tone_softtop_mul = {
+        "warm": 1.10,
+        "balanced": 1.00,
+        "bright": 0.75,
+    }[tone]
+
+    low_lo = _clamp(float(_BK_LOW_LO_HZ), 20.0, 70.0)
+    low_hi = _clamp(float(_BK_LOW_HI_HZ), 80.0, 220.0)
+    if low_hi <= low_lo + 10:
+        low_hi = low_lo + 10
+    low_drive = _clamp(float(_BK_LOW_DRIVE_DB), 0.0, 8.0)
+    low_mix = _clamp(float(_BK_LOW_MIX) * intensity_scale, 0.0, 0.35)
+
+    body_f = _clamp(float(_BK_BODY_F), 120.0, 400.0)
+    body_g = _clamp(float(_BK_BODY_G) * tone_body_mul, -1.0, 3.0)
+    body_w = _clamp(float(_BK_BODY_W), 0.2, 3.0)
+
+    mid_f = _clamp(float(_BK_MID_F), 700.0, 1800.0)
+    mid_g = _clamp(float(_BK_MID_G), -1.0, 3.0)
+    mid_w = _clamp(float(_BK_MID_W), 0.2, 3.0)
+
+    pres_f = _clamp(float(_BK_PRES_F), 1200.0, 4000.0)
+    pres_g = _clamp(float(_BK_PRES_G) * tone_pres_mul, -1.0, 2.0)
+    pres_w = _clamp(float(_BK_PRES_W), 0.2, 3.0)
+
+    softtop_f = _clamp(float(_BK_SOFTTOP_F), 3500.0, 10000.0)
+    softtop_g = _clamp(float(_BK_SOFTTOP_G) * tone_softtop_mul, -4.0, 0.0)
+
+    tone_mix = _clamp(float(_BK_TONE_MIX) * intensity_scale, 0.0, 0.30)
+
+    ceiling_db = _clamp(float(_BK_LIMITER_CEILING_DB), -3.0, -0.3)
+    ceiling_lin = 10.0 ** (ceiling_db / 20.0)
+
+    tone_chain = []
+    if _BK_BODY_ON:
+        tone_chain.append(f"equalizer=f={body_f}:t=q:w={body_w}:g={body_g}")
+    if _BK_MID_ON:
+        tone_chain.append(f"equalizer=f={mid_f}:t=q:w={mid_w}:g={mid_g}")
+    if _BK_PRES_ON:
+        tone_chain.append(f"equalizer=f={pres_f}:t=q:w={pres_w}:g={pres_g}")
+    if _BK_SOFTTOP_ON:
+        tone_chain.append(f"highshelf=f={softtop_f}:g={softtop_g}")
+
+    tone_fc = ",".join(tone_chain) if tone_chain else "anull"
+
+    fc_parts = [
+        "[0:a]asplit=3[dry][low][tone]",
+        "[dry]volume=1[d0]",
+    ]
+
+    if _BK_LOW_ON and low_mix > 0.0:
+        fc_parts.append(
+            f"[low]"
+            f"highpass=f={low_lo}:width=0.707,"
+            f"lowpass=f={low_hi}:width=0.707,"
+            f"volume={low_drive}dB,"
+            f"asoftclip,"
+            f"volume={low_mix}[l1]"
+        )
+    else:
+        fc_parts.append("[low]volume=0[l1]")
+
+    fc_parts.append(f"[tone]{tone_fc},volume={tone_mix}[t1]")
+    fc_parts.append("[d0][l1][t1]amix=inputs=3:normalize=0[m0]")
+
+    if _BK_LIMITER_ON:
+        fc_parts.append(f"[m0]alimiter=limit={ceiling_lin}:level=disabled[out]")
+    else:
+        fc_parts.append("[m0]anull[out]")
+
+    fc = ";".join(fc_parts)
+
+    out_args, out_name, _mime = _out_args(fmt)
+    out_name = f"bakuage_like_{out_name}"
+    out_path = os.path.join(td, out_name)
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'{out_args} {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+    return out_path, out_name
 
 def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
     lm = _lowmid_filter()
@@ -703,7 +842,7 @@ def root():
     return jsonify({
         "ok": True,
         "service": "analysis_mastering_api",
-        "endpoints": ["/health", "/analyze", "/analyze_sections", "/compare_sections", "/master", "/bandlab"]
+        "endpoints": ["/health", "/analyze", "/analyze_sections", "/compare_sections", "/master", "/bandlab", "/bakuage"]
     })
 
 @app.get("/health")
@@ -764,7 +903,6 @@ def health():
         "BASS_BLEND_MIX": os.getenv("BASS_BLEND_MIX"),
         "BASS_BLEND_GAIN_DB": os.getenv("BASS_BLEND_GAIN_DB"),
 
-        # === изменено ===
         "BL_MID_ON": os.getenv("BL_MID_ON"),
         "BL_MID_F": os.getenv("BL_MID_F"),
         "BL_MID_G": os.getenv("BL_MID_G"),
@@ -784,7 +922,36 @@ def health():
         "BL_WIDTH_HP_HZ": os.getenv("BL_WIDTH_HP_HZ"),
         "BL_WIDTH_DELAY": os.getenv("BL_WIDTH_DELAY"),
         "BL_WIDTH_MIX": os.getenv("BL_WIDTH_MIX"),
-        # === /изменено ===
+
+        "BK_LOW_ON": os.getenv("BK_LOW_ON"),
+        "BK_LOW_LO_HZ": os.getenv("BK_LOW_LO_HZ"),
+        "BK_LOW_HI_HZ": os.getenv("BK_LOW_HI_HZ"),
+        "BK_LOW_DRIVE_DB": os.getenv("BK_LOW_DRIVE_DB"),
+        "BK_LOW_MIX": os.getenv("BK_LOW_MIX"),
+
+        "BK_BODY_ON": os.getenv("BK_BODY_ON"),
+        "BK_BODY_F": os.getenv("BK_BODY_F"),
+        "BK_BODY_G": os.getenv("BK_BODY_G"),
+        "BK_BODY_W": os.getenv("BK_BODY_W"),
+
+        "BK_MID_ON": os.getenv("BK_MID_ON"),
+        "BK_MID_F": os.getenv("BK_MID_F"),
+        "BK_MID_G": os.getenv("BK_MID_G"),
+        "BK_MID_W": os.getenv("BK_MID_W"),
+
+        "BK_PRES_ON": os.getenv("BK_PRES_ON"),
+        "BK_PRES_F": os.getenv("BK_PRES_F"),
+        "BK_PRES_G": os.getenv("BK_PRES_G"),
+        "BK_PRES_W": os.getenv("BK_PRES_W"),
+
+        "BK_SOFTTOP_ON": os.getenv("BK_SOFTTOP_ON"),
+        "BK_SOFTTOP_F": os.getenv("BK_SOFTTOP_F"),
+        "BK_SOFTTOP_G": os.getenv("BK_SOFTTOP_G"),
+
+        "BK_TONE_MIX": os.getenv("BK_TONE_MIX"),
+
+        "BK_LIMITER_ON": os.getenv("BK_LIMITER_ON"),
+        "BK_LIMITER_CEILING_DB": os.getenv("BK_LIMITER_CEILING_DB"),
     })
 
 @app.get("/analyze")
@@ -894,7 +1061,6 @@ def master_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# === изменено ===
 @app.get("/bandlab")
 def bandlab_route():
     url = request.args.get("file")
@@ -922,7 +1088,34 @@ def bandlab_route():
             )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-# === /изменено ===
+
+@app.get("/bakuage")
+def bakuage_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_bakuage_like(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
