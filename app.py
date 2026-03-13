@@ -703,6 +703,176 @@ def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: 
 
     return out_path, out_name
 
+# ---------------------------
+# OUR ENHANCE v1 — POLISH / GLUE / FINISH
+# ---------------------------
+_ENH_AIR_ON = (os.getenv("ENH_AIR_ON", "1").strip() == "1")
+_ENH_AIR_SHELF_F = float(os.getenv("ENH_AIR_SHELF_F", "9500"))
+_ENH_AIR_SHELF_G = float(os.getenv("ENH_AIR_SHELF_G", "1.8"))
+_ENH_AIR_MIX = float(os.getenv("ENH_AIR_MIX", "0.10"))
+
+_ENH_WIDTH_ON = (os.getenv("ENH_WIDTH_ON", "1").strip() == "1")
+_ENH_WIDTH_HP_HZ = float(os.getenv("ENH_WIDTH_HP_HZ", "3500"))
+_ENH_WIDTH_DELAY = int(float(os.getenv("ENH_WIDTH_DELAY", "14")))
+_ENH_WIDTH_MIX = float(os.getenv("ENH_WIDTH_MIX", "0.09"))
+
+_ENH_GLOSS_ON = (os.getenv("ENH_GLOSS_ON", "1").strip() == "1")
+_ENH_GLOSS_HP_HZ = float(os.getenv("ENH_GLOSS_HP_HZ", "7000"))
+_ENH_GLOSS_LP_HZ = float(os.getenv("ENH_GLOSS_LP_HZ", "16000"))
+_ENH_GLOSS_DRIVE_DB = float(os.getenv("ENH_GLOSS_DRIVE_DB", "4.0"))
+_ENH_GLOSS_MIX = float(os.getenv("ENH_GLOSS_MIX", "0.035"))
+
+_ENH_LIMITER_ON = (os.getenv("ENH_LIMITER_ON", "1").strip() == "1")
+_ENH_LIMITER_CEILING_DB = float(os.getenv("ENH_LIMITER_CEILING_DB", "-1.2"))
+
+def _render_enhance(in_path: str, fmt: str, td: str) -> tuple[str, str]:
+    fmt = _normalize_format(fmt)
+
+    air_f = _clamp(float(_ENH_AIR_SHELF_F), 5000.0, 16000.0)
+    air_g = _clamp(float(_ENH_AIR_SHELF_G), 0.0, 4.0)
+    air_mix = _clamp(float(_ENH_AIR_MIX), 0.0, 0.30)
+
+    width_hp = _clamp(float(_ENH_WIDTH_HP_HZ), 1500.0, 10000.0)
+    width_delay = int(max(1, min(100, int(_ENH_WIDTH_DELAY))))
+    width_mix = _clamp(float(_ENH_WIDTH_MIX), 0.0, 0.25)
+
+    gloss_hp = _clamp(float(_ENH_GLOSS_HP_HZ), 4000.0, 12000.0)
+    gloss_lp = _clamp(float(_ENH_GLOSS_LP_HZ), max(gloss_hp + 1000.0, 7000.0), 19000.0)
+    gloss_drive = _clamp(float(_ENH_GLOSS_DRIVE_DB), 0.0, 10.0)
+    gloss_mix = _clamp(float(_ENH_GLOSS_MIX), 0.0, 0.12)
+
+    ceiling_db = _clamp(float(_ENH_LIMITER_CEILING_DB), -3.0, -0.3)
+    ceiling_lin = 10.0 ** (ceiling_db / 20.0)
+
+    parts = ["[0:a]asplit=4[dry][air][wid][gls]"]
+    parts.append("[dry]volume=1[d0]")
+
+    if _ENH_AIR_ON and air_mix > 0.0:
+        parts.append(f"[air]highshelf=f={air_f}:g={air_g},volume={air_mix}[a1]")
+    else:
+        parts.append("[air]volume=0[a1]")
+
+    if _ENH_WIDTH_ON and width_mix > 0.0:
+        parts.append(
+            f"[wid]highpass=f={width_hp}:width=0.707,"
+            f"stereowiden=delay={width_delay},"
+            f"volume={width_mix}[w1]"
+        )
+    else:
+        parts.append("[wid]volume=0[w1]")
+
+    if _ENH_GLOSS_ON and gloss_mix > 0.0:
+        parts.append(
+            f"[gls]"
+            f"highpass=f={gloss_hp}:width=0.707,"
+            f"lowpass=f={gloss_lp}:width=0.707,"
+            f"volume={gloss_drive}dB,"
+            f"asoftclip,"
+            f"volume={gloss_mix}[g1]"
+        )
+    else:
+        parts.append("[gls]volume=0[g1]")
+
+    parts.append("[d0][a1][w1][g1]amix=inputs=4:normalize=0[m0]")
+
+    if _ENH_LIMITER_ON:
+        parts.append(f"[m0]alimiter=limit={ceiling_lin}:level=disabled[out]")
+    else:
+        parts.append("[m0]anull[out]")
+
+    fc = ";".join(parts)
+
+    out_args, out_name, _mime = _out_args(fmt)
+    out_name = f"enhance_{out_name}"
+    out_path = os.path.join(td, out_name)
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'{out_args} {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+    return out_path, out_name
+
+# ---------------------------
+# BLEND v1 — ORIGINAL BASE + LAYERS
+# ---------------------------
+_BLEND_BASE_GAIN = float(os.getenv("BLEND_BASE_GAIN", "1.0"))
+
+_BLEND_LOW_LO_HZ = float(os.getenv("BLEND_LOW_LO_HZ", "25"))
+_BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "125"))
+_BLEND_LOW_GAIN = float(os.getenv("BLEND_LOW_GAIN", "0.10"))
+
+_BLEND_REVEAL_LO_HZ = float(os.getenv("BLEND_REVEAL_LO_HZ", "500"))
+_BLEND_REVEAL_HI_HZ = float(os.getenv("BLEND_REVEAL_HI_HZ", "7000"))
+_BLEND_REVEAL_GAIN = float(os.getenv("BLEND_REVEAL_GAIN", "0.20"))
+
+_BLEND_POLISH_GAIN = float(os.getenv("BLEND_POLISH_GAIN", "0.12"))
+
+_BLEND_LIMITER_ON = (os.getenv("BLEND_LIMITER_ON", "1").strip() == "1")
+_BLEND_LIMITER_CEILING_DB = float(os.getenv("BLEND_LIMITER_CEILING_DB", "-1.0"))
+
+def _render_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    # Render source layers first
+    bak_path, _ = _render_bakuage_like(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    bl_path, _ = _render_bandlab_like(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    enh_path, _ = _render_enhance(in_path, fmt="wav16", td=td)
+
+    base_gain = _clamp(float(_BLEND_BASE_GAIN), 0.5, 1.5)
+    low_lo = _clamp(float(_BLEND_LOW_LO_HZ), 20.0, 70.0)
+    low_hi = _clamp(float(_BLEND_LOW_HI_HZ), 80.0, 220.0)
+    if low_hi <= low_lo + 10:
+        low_hi = low_lo + 10
+    low_gain = _clamp(float(_BLEND_LOW_GAIN), 0.0, 0.30)
+
+    reveal_lo = _clamp(float(_BLEND_REVEAL_LO_HZ), 250.0, 1200.0)
+    reveal_hi = _clamp(float(_BLEND_REVEAL_HI_HZ), 4000.0, 12000.0)
+    if reveal_hi <= reveal_lo + 100:
+        reveal_hi = reveal_lo + 100
+    reveal_gain = _clamp(float(_BLEND_REVEAL_GAIN), 0.0, 0.35)
+
+    polish_gain = _clamp(float(_BLEND_POLISH_GAIN), 0.0, 0.25)
+
+    ceiling_db = _clamp(float(_BLEND_LIMITER_CEILING_DB), -3.0, -0.3)
+    ceiling_lin = 10.0 ** (ceiling_db / 20.0)
+
+    fc_parts = [
+        f"[0:a]volume={base_gain}[base]",
+        f"[1:a]highpass=f={low_lo}:width=0.707,lowpass=f={low_hi}:width=0.707,volume={low_gain}[low]",
+        f"[2:a]highpass=f={reveal_lo}:width=0.707,lowpass=f={reveal_hi}:width=0.707,volume={reveal_gain}[reveal]",
+        f"[3:a]volume={polish_gain}[polish]",
+        "[base][low][reveal][polish]amix=inputs=4:normalize=0[m0]",
+    ]
+
+    if _BLEND_LIMITER_ON:
+        fc_parts.append(f"[m0]alimiter=limit={ceiling_lin}:level=disabled[out]")
+    else:
+        fc_parts.append("[m0]anull[out]")
+
+    fc = ";".join(fc_parts)
+
+    out_args, out_name, _mime = _out_args(fmt)
+    out_name = f"blend_{out_name}"
+    out_path = os.path.join(td, out_name)
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(in_path)} '
+        f'-i {shlex.quote(bak_path)} '
+        f'-i {shlex.quote(bl_path)} '
+        f'-i {shlex.quote(enh_path)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'{out_args} {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+    return out_path, out_name
+
 def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
     lm = _lowmid_filter()
 
@@ -842,7 +1012,17 @@ def root():
     return jsonify({
         "ok": True,
         "service": "analysis_mastering_api",
-        "endpoints": ["/health", "/analyze", "/analyze_sections", "/compare_sections", "/master", "/bandlab", "/bakuage"]
+        "endpoints": [
+            "/health",
+            "/analyze",
+            "/analyze_sections",
+            "/compare_sections",
+            "/master",
+            "/bandlab",
+            "/bakuage",
+            "/enhance",
+            "/blend",
+        ]
     })
 
 @app.get("/health")
@@ -949,9 +1129,38 @@ def health():
         "BK_SOFTTOP_G": os.getenv("BK_SOFTTOP_G"),
 
         "BK_TONE_MIX": os.getenv("BK_TONE_MIX"),
-
         "BK_LIMITER_ON": os.getenv("BK_LIMITER_ON"),
         "BK_LIMITER_CEILING_DB": os.getenv("BK_LIMITER_CEILING_DB"),
+
+        "ENH_AIR_ON": os.getenv("ENH_AIR_ON"),
+        "ENH_AIR_SHELF_F": os.getenv("ENH_AIR_SHELF_F"),
+        "ENH_AIR_SHELF_G": os.getenv("ENH_AIR_SHELF_G"),
+        "ENH_AIR_MIX": os.getenv("ENH_AIR_MIX"),
+
+        "ENH_WIDTH_ON": os.getenv("ENH_WIDTH_ON"),
+        "ENH_WIDTH_HP_HZ": os.getenv("ENH_WIDTH_HP_HZ"),
+        "ENH_WIDTH_DELAY": os.getenv("ENH_WIDTH_DELAY"),
+        "ENH_WIDTH_MIX": os.getenv("ENH_WIDTH_MIX"),
+
+        "ENH_GLOSS_ON": os.getenv("ENH_GLOSS_ON"),
+        "ENH_GLOSS_HP_HZ": os.getenv("ENH_GLOSS_HP_HZ"),
+        "ENH_GLOSS_LP_HZ": os.getenv("ENH_GLOSS_LP_HZ"),
+        "ENH_GLOSS_DRIVE_DB": os.getenv("ENH_GLOSS_DRIVE_DB"),
+        "ENH_GLOSS_MIX": os.getenv("ENH_GLOSS_MIX"),
+
+        "ENH_LIMITER_ON": os.getenv("ENH_LIMITER_ON"),
+        "ENH_LIMITER_CEILING_DB": os.getenv("ENH_LIMITER_CEILING_DB"),
+
+        "BLEND_BASE_GAIN": os.getenv("BLEND_BASE_GAIN"),
+        "BLEND_LOW_LO_HZ": os.getenv("BLEND_LOW_LO_HZ"),
+        "BLEND_LOW_HI_HZ": os.getenv("BLEND_LOW_HI_HZ"),
+        "BLEND_LOW_GAIN": os.getenv("BLEND_LOW_GAIN"),
+        "BLEND_REVEAL_LO_HZ": os.getenv("BLEND_REVEAL_LO_HZ"),
+        "BLEND_REVEAL_HI_HZ": os.getenv("BLEND_REVEAL_HI_HZ"),
+        "BLEND_REVEAL_GAIN": os.getenv("BLEND_REVEAL_GAIN"),
+        "BLEND_POLISH_GAIN": os.getenv("BLEND_POLISH_GAIN"),
+        "BLEND_LIMITER_ON": os.getenv("BLEND_LIMITER_ON"),
+        "BLEND_LIMITER_CEILING_DB": os.getenv("BLEND_LIMITER_CEILING_DB"),
     })
 
 @app.get("/analyze")
@@ -1048,7 +1257,7 @@ def master_route():
 
     try:
         with tempfile.TemporaryDirectory() as td:
-            in_path, dbg = _dl_to_named(td, "file", url)
+            in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_master(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
@@ -1076,7 +1285,7 @@ def bandlab_route():
 
     try:
         with tempfile.TemporaryDirectory() as td:
-            in_path, dbg = _dl_to_named(td, "file", url)
+            in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_bandlab_like(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
@@ -1104,8 +1313,62 @@ def bakuage_route():
 
     try:
         with tempfile.TemporaryDirectory() as td:
-            in_path, dbg = _dl_to_named(td, "file", url)
+            in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_bakuage_like(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/enhance")
+def enhance_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_enhance(in_path, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/blend")
+def blend_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
             return send_file(
