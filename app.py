@@ -567,13 +567,13 @@ def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: 
 # ---------------------------
 _BK_LOW_ON = (os.getenv("BK_LOW_ON", "1").strip() == "1")
 _BK_LOW_LO_HZ = float(os.getenv("BK_LOW_LO_HZ", "32"))
-_BK_LOW_HI_HZ = float(os.getenv("BK_LOW_HI_HZ", "135"))
-_BK_LOW_DRIVE_DB = float(os.getenv("BK_LOW_DRIVE_DB", "2.0"))
-_BK_LOW_MIX = float(os.getenv("BK_LOW_MIX", "0.20"))
+_BK_LOW_HI_HZ = float(os.getenv("BK_LOW_HI_HZ", "150"))
+_BK_LOW_DRIVE_DB = float(os.getenv("BK_LOW_DRIVE_DB", "1.2"))
+_BK_LOW_MIX = float(os.getenv("BK_LOW_MIX", "0.16"))
 
 _BK_BODY_ON = (os.getenv("BK_BODY_ON", "1").strip() == "1")
 _BK_BODY_F = float(os.getenv("BK_BODY_F", "220"))
-_BK_BODY_G = float(os.getenv("BK_BODY_G", "1.4"))
+_BK_BODY_G = float(os.getenv("BK_BODY_G", "0.9"))
 _BK_BODY_W = float(os.getenv("BK_BODY_W", "0.9"))
 
 _BK_MID_ON = (os.getenv("BK_MID_ON", "1").strip() == "1")
@@ -590,7 +590,7 @@ _BK_SOFTTOP_ON = (os.getenv("BK_SOFTTOP_ON", "1").strip() == "1")
 _BK_SOFTTOP_F = float(os.getenv("BK_SOFTTOP_F", "5200"))
 _BK_SOFTTOP_G = float(os.getenv("BK_SOFTTOP_G", "-1.4"))
 
-_BK_TONE_MIX = float(os.getenv("BK_TONE_MIX", "0.16"))
+_BK_TONE_MIX = float(os.getenv("BK_TONE_MIX", "0.11"))
 
 _BK_LIMITER_ON = (os.getenv("BK_LIMITER_ON", "1").strip() == "1")
 _BK_LIMITER_CEILING_DB = float(os.getenv("BK_LIMITER_CEILING_DB", "-1.2"))
