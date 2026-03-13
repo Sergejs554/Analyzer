@@ -801,14 +801,14 @@ def _render_enhance(in_path: str, fmt: str, td: str) -> tuple[str, str]:
 _BLEND_BASE_GAIN = float(os.getenv("BLEND_BASE_GAIN", "1.0"))
 
 _BLEND_LOW_LO_HZ = float(os.getenv("BLEND_LOW_LO_HZ", "25"))
-_BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "340"))
-_BLEND_LOW_GAIN = float(os.getenv("BLEND_LOW_GAIN", "0.18"))
+_BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "125"))
+_BLEND_LOW_GAIN = float(os.getenv("BLEND_LOW_GAIN", "0.13"))
 
-_BLEND_REVEAL_LO_HZ = float(os.getenv("BLEND_REVEAL_LO_HZ", "80"))
+_BLEND_REVEAL_LO_HZ = float(os.getenv("BLEND_REVEAL_LO_HZ", "500"))
 _BLEND_REVEAL_HI_HZ = float(os.getenv("BLEND_REVEAL_HI_HZ", "7000"))
-_BLEND_REVEAL_GAIN = float(os.getenv("BLEND_REVEAL_GAIN", "0.22"))
+_BLEND_REVEAL_GAIN = float(os.getenv("BLEND_REVEAL_GAIN", "0.18"))
 
-_BLEND_POLISH_GAIN = float(os.getenv("BLEND_POLISH_GAIN", "0.14"))
+_BLEND_POLISH_GAIN = float(os.getenv("BLEND_POLISH_GAIN", "0.10"))
 
 _BLEND_LIMITER_ON = (os.getenv("BLEND_LIMITER_ON", "1").strip() == "1")
 _BLEND_LIMITER_CEILING_DB = float(os.getenv("BLEND_LIMITER_CEILING_DB", "-1.0"))
