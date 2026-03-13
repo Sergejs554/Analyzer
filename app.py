@@ -804,7 +804,7 @@ _BLEND_LOW_LO_HZ = float(os.getenv("BLEND_LOW_LO_HZ", "25"))
 _BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "260"))
 _BLEND_LOW_GAIN = float(os.getenv("BLEND_LOW_GAIN", "0.18"))
 
-_BLEND_REVEAL_LO_HZ = float(os.getenv("BLEND_REVEAL_LO_HZ", "500"))
+_BLEND_REVEAL_LO_HZ = float(os.getenv("BLEND_REVEAL_LO_HZ", "80"))
 _BLEND_REVEAL_HI_HZ = float(os.getenv("BLEND_REVEAL_HI_HZ", "7000"))
 _BLEND_REVEAL_GAIN = float(os.getenv("BLEND_REVEAL_GAIN", "0.22"))
 
