@@ -796,19 +796,21 @@ def _render_enhance(in_path: str, fmt: str, td: str) -> tuple[str, str]:
     return out_path, out_name
 
 # ---------------------------
-# BLEND v1 — ORIGINAL BASE + LAYERS
+# BLEND v1.1 — ORIGINAL BASE + LAYERS
 # ---------------------------
 _BLEND_BASE_GAIN = float(os.getenv("BLEND_BASE_GAIN", "1.0"))
 
+# === изменено ===
 _BLEND_LOW_LO_HZ = float(os.getenv("BLEND_LOW_LO_HZ", "25"))
-_BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "125"))
-_BLEND_LOW_GAIN = float(os.getenv("BLEND_LOW_GAIN", "0.10"))
+_BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "220"))
+_BLEND_LOW_GAIN = float(os.getenv("BLEND_LOW_GAIN", "0.14"))
 
 _BLEND_REVEAL_LO_HZ = float(os.getenv("BLEND_REVEAL_LO_HZ", "500"))
 _BLEND_REVEAL_HI_HZ = float(os.getenv("BLEND_REVEAL_HI_HZ", "7000"))
-_BLEND_REVEAL_GAIN = float(os.getenv("BLEND_REVEAL_GAIN", "0.20"))
+_BLEND_REVEAL_GAIN = float(os.getenv("BLEND_REVEAL_GAIN", "0.22"))
 
-_BLEND_POLISH_GAIN = float(os.getenv("BLEND_POLISH_GAIN", "0.12"))
+_BLEND_POLISH_GAIN = float(os.getenv("BLEND_POLISH_GAIN", "0.14"))
+# === /изменено ===
 
 _BLEND_LIMITER_ON = (os.getenv("BLEND_LIMITER_ON", "1").strip() == "1")
 _BLEND_LIMITER_CEILING_DB = float(os.getenv("BLEND_LIMITER_CEILING_DB", "-1.0"))
@@ -818,25 +820,24 @@ def _render_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) ->
     intensity = _normalize_intensity(intensity)
     fmt = _normalize_format(fmt)
 
-    # Render source layers first
     bak_path, _ = _render_bakuage_like(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
     bl_path, _ = _render_bandlab_like(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
     enh_path, _ = _render_enhance(in_path, fmt="wav16", td=td)
 
     base_gain = _clamp(float(_BLEND_BASE_GAIN), 0.5, 1.5)
     low_lo = _clamp(float(_BLEND_LOW_LO_HZ), 20.0, 70.0)
-    low_hi = _clamp(float(_BLEND_LOW_HI_HZ), 80.0, 220.0)
+    low_hi = _clamp(float(_BLEND_LOW_HI_HZ), 80.0, 260.0)
     if low_hi <= low_lo + 10:
         low_hi = low_lo + 10
-    low_gain = _clamp(float(_BLEND_LOW_GAIN), 0.0, 0.30)
+    low_gain = _clamp(float(_BLEND_LOW_GAIN), 0.0, 0.35)
 
     reveal_lo = _clamp(float(_BLEND_REVEAL_LO_HZ), 250.0, 1200.0)
     reveal_hi = _clamp(float(_BLEND_REVEAL_HI_HZ), 4000.0, 12000.0)
     if reveal_hi <= reveal_lo + 100:
         reveal_hi = reveal_lo + 100
-    reveal_gain = _clamp(float(_BLEND_REVEAL_GAIN), 0.0, 0.35)
+    reveal_gain = _clamp(float(_BLEND_REVEAL_GAIN), 0.0, 0.40)
 
-    polish_gain = _clamp(float(_BLEND_POLISH_GAIN), 0.0, 0.25)
+    polish_gain = _clamp(float(_BLEND_POLISH_GAIN), 0.0, 0.30)
 
     ceiling_db = _clamp(float(_BLEND_LIMITER_CEILING_DB), -3.0, -0.3)
     ceiling_lin = 10.0 ** (ceiling_db / 20.0)
