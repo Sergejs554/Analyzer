@@ -796,13 +796,12 @@ def _render_enhance(in_path: str, fmt: str, td: str) -> tuple[str, str]:
     return out_path, out_name
 
 # ---------------------------
-# BLEND v1.1 — ORIGINAL BASE + LAYERS
+# BLEND v1.2 — ORIGINAL BASE + LAYERS
 # ---------------------------
 _BLEND_BASE_GAIN = float(os.getenv("BLEND_BASE_GAIN", "1.0"))
 
-# === изменено ===
 _BLEND_LOW_LO_HZ = float(os.getenv("BLEND_LOW_LO_HZ", "25"))
-_BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "220"))
+_BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "260"))
 _BLEND_LOW_GAIN = float(os.getenv("BLEND_LOW_GAIN", "0.14"))
 
 _BLEND_REVEAL_LO_HZ = float(os.getenv("BLEND_REVEAL_LO_HZ", "500"))
@@ -810,7 +809,6 @@ _BLEND_REVEAL_HI_HZ = float(os.getenv("BLEND_REVEAL_HI_HZ", "7000"))
 _BLEND_REVEAL_GAIN = float(os.getenv("BLEND_REVEAL_GAIN", "0.22"))
 
 _BLEND_POLISH_GAIN = float(os.getenv("BLEND_POLISH_GAIN", "0.14"))
-# === /изменено ===
 
 _BLEND_LIMITER_ON = (os.getenv("BLEND_LIMITER_ON", "1").strip() == "1")
 _BLEND_LIMITER_CEILING_DB = float(os.getenv("BLEND_LIMITER_CEILING_DB", "-1.0"))
@@ -826,7 +824,7 @@ def _render_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) ->
 
     base_gain = _clamp(float(_BLEND_BASE_GAIN), 0.5, 1.5)
     low_lo = _clamp(float(_BLEND_LOW_LO_HZ), 20.0, 70.0)
-    low_hi = _clamp(float(_BLEND_LOW_HI_HZ), 80.0, 260.0)
+    low_hi = _clamp(float(_BLEND_LOW_HI_HZ), 80.0, 300.0)
     if low_hi <= low_lo + 10:
         low_hi = low_lo + 10
     low_gain = _clamp(float(_BLEND_LOW_GAIN), 0.0, 0.35)
