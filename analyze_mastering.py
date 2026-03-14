@@ -18,6 +18,12 @@ ABS_GATE_LUFS = -70.0
 TRUE_PEAK_OVERSAMPLE = 4
 TRIM_TOP_DB = 40.0
 
+PSD_NFFT = 8192
+PSD_HOP = 2048
+
+WINDOW_BAND_NFFT = 4096
+WINDOW_BAND_HOP = 1024
+
 
 # ---------- helpers ----------
 
@@ -130,6 +136,11 @@ def _transient_index(y_mono: np.ndarray, sr: int) -> float:
     return float(flux / (energy + 1e-12))
 
 
+def _integrated_lufs(y_stereo: np.ndarray, sr: int) -> float:
+    meter = pyln.Meter(sr)
+    return float(meter.integrated_loudness(y_stereo.T))
+
+
 def _loudness_series(
     y_stereo: np.ndarray,
     sr: int,
@@ -173,12 +184,35 @@ def _loudness_series(
     return np.array(values, dtype=np.float64)
 
 
+def _gated_series_mean(values: np.ndarray, gate_lufs: float = ABS_GATE_LUFS) -> float:
+    if values.size == 0:
+        return float(gate_lufs)
+    vals = values[np.isfinite(values)]
+    if vals.size == 0:
+        return float(gate_lufs)
+    gated = vals[vals >= gate_lufs]
+    if gated.size == 0:
+        return float(np.max(vals))
+    return float(np.mean(gated))
+
+
+def _gated_series_max(values: np.ndarray, gate_lufs: float = ABS_GATE_LUFS) -> float:
+    if values.size == 0:
+        return float(gate_lufs)
+    vals = values[np.isfinite(values)]
+    if vals.size == 0:
+        return float(gate_lufs)
+    gated = vals[vals >= gate_lufs]
+    if gated.size == 0:
+        return float(np.max(vals))
+    return float(np.max(gated))
+
+
 def _ebu_lra_from_short_term(short_term_lufs: np.ndarray) -> float:
     """
-    Approximate EBU Tech 3342 / R128 LRA:
-    - use short-term loudness blocks
-    - absolute gate -70 LUFS
-    - relative gate = average of abs-gated blocks - 20 LU
+    EBU-style LRA approximation based on short-term loudness gating:
+    - absolute gate at -70 LUFS
+    - relative gate = mean(abs-gated short-term loudness) - 20 LU
     - LRA = p95 - p10 on doubly gated set
     """
     if short_term_lufs.size == 0:
@@ -202,12 +236,12 @@ def _ebu_lra_from_short_term(short_term_lufs: np.ndarray) -> float:
     return float(max(0.0, p95 - p10))
 
 
-def _integrated_lufs(y_stereo: np.ndarray, sr: int) -> float:
-    meter = pyln.Meter(sr)
-    return float(meter.integrated_loudness(y_stereo.T))
-
-
-def _fft_psd(y: np.ndarray, sr: int, n_fft: int = 8192, hop: int = 2048) -> Tuple[np.ndarray, np.ndarray]:
+def _fft_psd(
+    y: np.ndarray,
+    sr: int,
+    n_fft: int = PSD_NFFT,
+    hop: int = PSD_HOP,
+) -> Tuple[np.ndarray, np.ndarray]:
     S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop, window="hann")) ** 2
     if S.size == 0:
         freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
@@ -232,8 +266,7 @@ def _band_centers_31() -> np.ndarray:
     return np.array(centers, dtype=np.float64)
 
 
-def _band_db_31(y_mono: np.ndarray, sr: int) -> Tuple[np.ndarray, np.ndarray]:
-    freqs, psd = _fft_psd(y_mono, sr, n_fft=8192, hop=2048)
+def _band_db_31_from_psd(freqs: np.ndarray, psd: np.ndarray, sr: int) -> Tuple[np.ndarray, np.ndarray]:
     centers = _band_centers_31()
     band_db = []
 
@@ -247,9 +280,7 @@ def _band_db_31(y_mono: np.ndarray, sr: int) -> Tuple[np.ndarray, np.ndarray]:
     return centers, np.array(band_db, dtype=np.float64)
 
 
-def _compute_band_aggregates(y_mono: np.ndarray, sr: int) -> Dict[str, float]:
-    freqs, psd = _fft_psd(y_mono, sr, n_fft=8192, hop=2048)
-
+def _compute_band_aggregates_from_psd(freqs: np.ndarray, psd: np.ndarray) -> Dict[str, float]:
     bands = {
         "sub_20_60_db": _band_power_db(freqs, psd, 20.0, 60.0),
         "low_foundation_50_100_db": _band_power_db(freqs, psd, 50.0, 100.0),
@@ -337,7 +368,6 @@ def _stereo_metrics(y_stereo: np.ndarray, sr: int) -> Dict[str, float]:
     low_s_energy = float(np.mean(S_low * S_low) + EPS)
     low_side_mid_ratio_db = _safe_db10(low_s_energy / low_m_energy)
 
-    # coherence-like proxy: 1 means mono-safe / coherent, 0 worse
     low_band_coherence = float(np.clip((low_corr + 1.0) / 2.0, 0.0, 1.0))
 
     low_mono_risk = 0.0
@@ -374,13 +404,13 @@ def _window_band_series_db(
     values = []
 
     if n < win:
-        freqs, psd = _fft_psd(y_mono, sr, n_fft=4096, hop=1024)
+        freqs, psd = _fft_psd(y_mono, sr, n_fft=WINDOW_BAND_NFFT, hop=WINDOW_BAND_HOP)
         values.append(_band_power_db(freqs, psd, lo_hz, hi_hz))
         return np.array(values, dtype=np.float64)
 
     for start in range(0, n - win + 1, hop):
         seg = y_mono[start:start + win]
-        freqs, psd = _fft_psd(seg, sr, n_fft=4096, hop=1024)
+        freqs, psd = _fft_psd(seg, sr, n_fft=WINDOW_BAND_NFFT, hop=WINDOW_BAND_HOP)
         values.append(_band_power_db(freqs, psd, lo_hz, hi_hz))
 
     return np.array(values, dtype=np.float64)
@@ -395,16 +425,14 @@ def _risk_metrics(
 ) -> Dict[str, float]:
     mono = _mono(y_stereo)
 
-    st_mean = float(np.mean(short_term_lufs)) if short_term_lufs.size else metrics["integrated_lufs"]
-    st_max = float(np.max(short_term_lufs)) if short_term_lufs.size else metrics["integrated_lufs"]
-    m_max = float(np.max(momentary_lufs)) if momentary_lufs.size else metrics["integrated_lufs"]
+    st_max = _gated_series_max(short_term_lufs)
+    m_max = _gated_series_max(momentary_lufs)
 
     plr_proxy = float(metrics["true_peak_dbtp"] - metrics["integrated_lufs"])
     short_term_gap = float(st_max - metrics["integrated_lufs"])
     momentary_gap = float(m_max - metrics["integrated_lufs"])
-    tp_margin_db = float(-1.0 - metrics["true_peak_dbtp"])  # target safety example: -1 dBTP
+    tp_margin_db = float(-1.0 - metrics["true_peak_dbtp"])
 
-    # Windowed harshness / sibilance peaks
     harsh_series = _window_band_series_db(mono, sr, 2500.0, 6000.0, window_sec=0.4, hop_sec=0.1)
     sib_series = _window_band_series_db(mono, sr, 5000.0, 9000.0, window_sec=0.4, hop_sec=0.1)
     body_series = _window_band_series_db(mono, sr, 150.0, 400.0, window_sec=0.4, hop_sec=0.1)
@@ -413,9 +441,11 @@ def _risk_metrics(
     harsh_peak_ratio = 0.0
     sibilance_peak_ratio = 0.0
     if harsh_series.size and body_series.size:
-        harsh_peak_ratio = float(np.max(harsh_series[:min(harsh_series.size, body_series.size)] - body_series[:min(harsh_series.size, body_series.size)]))
+        n = min(harsh_series.size, body_series.size)
+        harsh_peak_ratio = float(np.max(harsh_series[:n] - body_series[:n]))
     if sib_series.size and mid_series.size:
-        sibilance_peak_ratio = float(np.max(sib_series[:min(sib_series.size, mid_series.size)] - mid_series[:min(sib_series.size, mid_series.size)]))
+        n = min(sib_series.size, mid_series.size)
+        sibilance_peak_ratio = float(np.max(sib_series[:n] - mid_series[:n]))
 
     harshness_index = float(
         0.65 * metrics["harshness_ratio_db"] +
@@ -591,16 +621,17 @@ def _analyze_one(path: str, target_sr: int = TARGET_SR) -> Dict[str, Any]:
     near_clip_ratio = _near_clip_ratio(y, threshold_dbfs=-1.0)
     clip_ratio = _clip_ratio(y, threshold_linear=0.9999)
 
-    centers, band_db = _band_db_31(mono, sr)
-    band_metrics = _compute_band_aggregates(mono, sr)
+    freqs, psd = _fft_psd(mono, sr, n_fft=PSD_NFFT, hop=PSD_HOP)
+    centers, band_db = _band_db_31_from_psd(freqs, psd, sr)
+    band_metrics = _compute_band_aggregates_from_psd(freqs, psd)
     stereo_metrics = _stereo_metrics(y, sr)
 
     metrics: Dict[str, float] = {
         "integrated_lufs": float(integrated_lufs),
-        "short_term_lufs_mean": float(np.mean(short_term_lufs)) if short_term_lufs.size else float(integrated_lufs),
-        "short_term_lufs_max": float(np.max(short_term_lufs)) if short_term_lufs.size else float(integrated_lufs),
-        "momentary_lufs_mean": float(np.mean(momentary_lufs)) if momentary_lufs.size else float(integrated_lufs),
-        "momentary_lufs_max": float(np.max(momentary_lufs)) if momentary_lufs.size else float(integrated_lufs),
+        "short_term_lufs_mean": _gated_series_mean(short_term_lufs),
+        "short_term_lufs_max": _gated_series_max(short_term_lufs),
+        "momentary_lufs_mean": _gated_series_mean(momentary_lufs),
+        "momentary_lufs_max": _gated_series_max(momentary_lufs),
         "lra_ebu": float(lra_ebu),
         "sample_peak_dbfs": float(sample_peak_dbfs),
         "true_peak_dbtp": float(true_peak_dbtp),
