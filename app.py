@@ -569,7 +569,7 @@ _BK_LOW_ON = (os.getenv("BK_LOW_ON", "1").strip() == "1")
 _BK_LOW_LO_HZ = float(os.getenv("BK_LOW_LO_HZ", "32"))
 _BK_LOW_HI_HZ = float(os.getenv("BK_LOW_HI_HZ", "150"))
 _BK_LOW_DRIVE_DB = float(os.getenv("BK_LOW_DRIVE_DB", "1.5"))
-_BK_LOW_MIX = float(os.getenv("BK_LOW_MIX", "0.19"))
+_BK_LOW_MIX = float(os.getenv("BK_LOW_MIX", "0.21"))
 
 _BK_BODY_ON = (os.getenv("BK_BODY_ON", "1").strip() == "1")
 _BK_BODY_F = float(os.getenv("BK_BODY_F", "220"))
