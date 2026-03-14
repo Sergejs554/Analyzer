@@ -573,7 +573,7 @@ _BK_LOW_MIX = float(os.getenv("BK_LOW_MIX", "0.21"))
 
 _BK_BODY_ON = (os.getenv("BK_BODY_ON", "1").strip() == "1")
 _BK_BODY_F = float(os.getenv("BK_BODY_F", "220"))
-_BK_BODY_G = float(os.getenv("BK_BODY_G", "1.1"))
+_BK_BODY_G = float(os.getenv("BK_BODY_G", "1.3"))
 _BK_BODY_W = float(os.getenv("BK_BODY_W", "0.9"))
 
 _BK_MID_ON = (os.getenv("BK_MID_ON", "1").strip() == "1")
