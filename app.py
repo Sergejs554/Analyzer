@@ -827,7 +827,7 @@ def _render_enhance(in_path: str, fmt: str, td: str) -> tuple[str, str]:
 _BLEND_BASE_GAIN = float(os.getenv("BLEND_BASE_GAIN", "1.0"))
 
 _BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "125"))
-_BLEND_LOW_GAIN_DB = float(os.getenv("BLEND_LOW_GAIN_DB", "-18"))
+_BLEND_LOW_GAIN_DB = float(os.getenv("BLEND_LOW_GAIN_DB", "-16"))
 
 _BLEND_REVEAL_LO_HZ = float(os.getenv("BLEND_REVEAL_LO_HZ", "500"))
 _BLEND_REVEAL_HI_HZ = float(os.getenv("BLEND_REVEAL_HI_HZ", "7000"))
