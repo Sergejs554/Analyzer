@@ -20,6 +20,7 @@ import aiohttp
 # Everything audio processing happens in Railway app.py
 # /master   -> Smart Auto Mastering
 # /enhance  -> Auto Enhance
+# /blend    -> Blend Research / Hybrid Render
 # ============================================================
 
 # -------- ENV --------
@@ -64,6 +65,7 @@ def label_process(process_key: str) -> str:
     return {
         "master": "Smart Master",
         "enhance": "Auto Enhance",
+        "blend": "Blend Research",
     }[process_key]
 # === /изменено ===
 
@@ -181,7 +183,13 @@ async def callbacks(c):
     # === изменено ===
     if data == "toggle_process":
         current = st.get("process", "master")
-        st["process"] = "enhance" if current == "master" else "master"
+        if current == "master":
+            st["process"] = "enhance"
+        elif current == "enhance":
+            st["process"] = "blend"
+        else:
+            st["process"] = "master"
+
         await c.message.edit_text(
             f"Режим обработки: {label_process(st['process'])}",
             reply_markup=kb_main(uid)
@@ -234,24 +242,32 @@ def _norm_tone(x: str) -> str:
 
 def _norm_intensity(x: str) -> str:
     x = (x or "balanced").lower().strip()
-    if x in ("soft",): return "low"
-    if x in ("normal",): return "balanced"
-    if x in ("hard",): return "high"
+    if x in ("soft",):
+        return "low"
+    if x in ("normal",):
+        return "balanced"
+    if x in ("hard",):
+        return "high"
     return x if x in ("low", "balanced", "high") else "balanced"
 
 def _norm_format(x: str) -> str:
     x = (x or "wav16").lower().strip()
-    if x in ("wav", "wav16"): return "wav16"
-    if x in ("wav24",): return "wav24"
-    if x in ("mp3", "mp3_320"): return "mp3_320"
-    if x in ("flac",): return "flac"
-    if x in ("aiff", "aif"): return "aiff"
+    if x in ("wav", "wav16"):
+        return "wav16"
+    if x in ("wav24",):
+        return "wav24"
+    if x in ("mp3", "mp3_320"):
+        return "mp3_320"
+    if x in ("flac",):
+        return "flac"
+    if x in ("aiff", "aif"):
+        return "aiff"
     return "wav16"
 
 # === изменено ===
 def _norm_process(x: str) -> str:
     x = (x or "master").lower().strip()
-    return x if x in ("master", "enhance") else "master"
+    return x if x in ("master", "enhance", "blend") else "master"
 # === /изменено ===
 
 def _api_master_url(file_url: str, tone: str, intensity: str, fmt: str) -> str:
@@ -262,6 +278,10 @@ def _api_master_url(file_url: str, tone: str, intensity: str, fmt: str) -> str:
 def _api_enhance_url(file_url: str, fmt: str) -> str:
     fu = quote(file_url, safe="")
     return f"{MASTER_API_BASE}/enhance?file={fu}&format={fmt}"
+
+def _api_blend_url(file_url: str, tone: str, intensity: str, fmt: str) -> str:
+    fu = quote(file_url, safe="")
+    return f"{MASTER_API_BASE}/blend?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
 # === /изменено ===
 
 async def _download_to_file(session: aiohttp.ClientSession, url: str, dst_path: str, max_mb: int = 256):
@@ -286,6 +306,10 @@ async def _enhance_via_api(session: aiohttp.ClientSession, file_url: str, fmt: s
     url = _api_enhance_url(file_url, fmt)
     await _download_to_file(session, url, out_path, max_mb=MAX_REMOTE_MB)
 
+async def _blend_via_api(session: aiohttp.ClientSession, file_url: str, tone: str, intensity: str, fmt: str, out_path: str):
+    url = _api_blend_url(file_url, tone, intensity, fmt)
+    await _download_to_file(session, url, out_path, max_mb=MAX_REMOTE_MB)
+
 async def _process_via_api(
     session: aiohttp.ClientSession,
     process_mode: str,
@@ -297,6 +321,8 @@ async def _process_via_api(
 ):
     if process_mode == "enhance":
         await _enhance_via_api(session, file_url, fmt, out_path)
+    elif process_mode == "blend":
+        await _blend_via_api(session, file_url, tone, intensity, fmt, out_path)
     else:
         await _master_via_api(session, file_url, tone, intensity, fmt, out_path)
 # === /изменено ===
@@ -349,7 +375,12 @@ async def on_audio(m: Message):
     fmt = _norm_format(st.get("format", "wav16"))
     # === изменено ===
     process_mode = _norm_process(st.get("process", "master"))
-    action_text = "🎧 Файл получен. Энхансю через API…" if process_mode == "enhance" else "🎧 Файл получен. Мастерю через API…"
+    if process_mode == "enhance":
+        action_text = "🎧 Файл получен. Энхансю через API…"
+    elif process_mode == "blend":
+        action_text = "🎧 Файл получен. Делаю blend-рендер через API…"
+    else:
+        action_text = "🎧 Файл получен. Мастерю через API…"
     # === /изменено ===
 
     await m.reply(action_text, reply_markup=kb_home())
@@ -377,7 +408,7 @@ async def on_audio(m: Message):
                 async with aiohttp.ClientSession() as session:
                     await _process_via_api(session, process_mode, src_url, tone, intensity, "mp3_320", alt_path)
 
-                done_label = "Auto Enhance" if process_mode == "enhance" else "Smart Master"
+                done_label = label_process(process_mode)
                 await m.reply_document(
                     FSInputFile(alt_path, filename=alt_name),
                     caption=(
@@ -388,7 +419,7 @@ async def on_audio(m: Message):
                     reply_markup=kb_home()
                 )
             else:
-                done_label = "Auto Enhance" if process_mode == "enhance" else "Smart Master"
+                done_label = label_process(process_mode)
                 await m.reply_document(
                     FSInputFile(out_path, filename=out_name),
                     caption=f"✅ Готово! Результат: {label_format(fmt)}\nРежим: {done_label}",
@@ -413,7 +444,12 @@ async def on_text(m: Message):
     fmt = _norm_format(st.get("format", "wav16"))
     # === изменено ===
     process_mode = _norm_process(st.get("process", "master"))
-    action_text = "⏬ Скачиваю по ссылке и энхансю через API…" if process_mode == "enhance" else "⏬ Скачиваю по ссылке и мастерю через API…"
+    if process_mode == "enhance":
+        action_text = "⏬ Скачиваю по ссылке и энхансю через API…"
+    elif process_mode == "blend":
+        action_text = "⏬ Скачиваю по ссылке и делаю blend-рендер через API…"
+    else:
+        action_text = "⏬ Скачиваю по ссылке и мастерю через API…"
     # === /изменено ===
 
     await m.reply(action_text, reply_markup=kb_home())
@@ -442,7 +478,7 @@ async def on_text(m: Message):
                 async with aiohttp.ClientSession() as session:
                     await _process_via_api(session, process_mode, url, tone, intensity, "mp3_320", alt_path)
 
-                done_label = "Auto Enhance" if process_mode == "enhance" else "Smart Master"
+                done_label = label_process(process_mode)
                 await m.reply_document(
                     FSInputFile(alt_path, filename=alt_name),
                     caption=(
@@ -453,7 +489,7 @@ async def on_text(m: Message):
                     reply_markup=kb_home()
                 )
             else:
-                done_label = "Auto Enhance" if process_mode == "enhance" else "Smart Master"
+                done_label = label_process(process_mode)
                 await m.reply_document(
                     FSInputFile(out_path, filename=out_name),
                     caption=f"✅ Готово! Результат: {label_format(fmt)}\nРежим: {done_label}",
