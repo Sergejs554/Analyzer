@@ -569,12 +569,18 @@ _BK_LOW_ON = (os.getenv("BK_LOW_ON", "1").strip() == "1")
 _BK_LOW_LO_HZ = float(os.getenv("BK_LOW_LO_HZ", "32"))
 _BK_LOW_HI_HZ = float(os.getenv("BK_LOW_HI_HZ", "150"))
 _BK_LOW_DRIVE_DB = float(os.getenv("BK_LOW_DRIVE_DB", "1.5"))
-_BK_LOW_MIX = float(os.getenv("BK_LOW_MIX", "0.21"))
+_BK_LOW_MIX = float(os.getenv("BK_LOW_MIX", "0.20"))
 
 _BK_BODY_ON = (os.getenv("BK_BODY_ON", "1").strip() == "1")
 _BK_BODY_F = float(os.getenv("BK_BODY_F", "220"))
-_BK_BODY_G = float(os.getenv("BK_BODY_G", "1.3"))
+_BK_BODY_G = float(os.getenv("BK_BODY_G", "1.1"))
 _BK_BODY_W = float(os.getenv("BK_BODY_W", "0.9"))
+
+_BK_UBASS_ON = (os.getenv("BK_UBASS_ON", "1").strip() == "1")
+_BK_UBASS_F = float(os.getenv("BK_UBASS_F", "115"))
+_BK_UBASS_G = float(os.getenv("BK_UBASS_G", "1.35"))
+_BK_UBASS_W = float(os.getenv("BK_UBASS_W", "1.0"))
+_BK_UBASS_MIX = float(os.getenv("BK_UBASS_MIX", "0.12"))
 
 _BK_MID_ON = (os.getenv("BK_MID_ON", "1").strip() == "1")
 _BK_MID_F = float(os.getenv("BK_MID_F", "1150"))
@@ -590,7 +596,7 @@ _BK_SOFTTOP_ON = (os.getenv("BK_SOFTTOP_ON", "1").strip() == "1")
 _BK_SOFTTOP_F = float(os.getenv("BK_SOFTTOP_F", "5200"))
 _BK_SOFTTOP_G = float(os.getenv("BK_SOFTTOP_G", "-1.4"))
 
-_BK_TONE_MIX = float(os.getenv("BK_TONE_MIX", "0.13"))
+_BK_TONE_MIX = float(os.getenv("BK_TONE_MIX", "0.12"))
 
 _BK_LIMITER_ON = (os.getenv("BK_LIMITER_ON", "1").strip() == "1")
 _BK_LIMITER_CEILING_DB = float(os.getenv("BK_LIMITER_CEILING_DB", "-1.2"))
@@ -624,6 +630,12 @@ def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: 
         "bright": 0.75,
     }[tone]
 
+    tone_ubass_mul = {
+        "warm": 1.08,
+        "balanced": 1.00,
+        "bright": 0.92,
+    }[tone]
+
     low_lo = _clamp(float(_BK_LOW_LO_HZ), 20.0, 70.0)
     low_hi = _clamp(float(_BK_LOW_HI_HZ), 80.0, 220.0)
     if low_hi <= low_lo + 10:
@@ -634,6 +646,11 @@ def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: 
     body_f = _clamp(float(_BK_BODY_F), 120.0, 400.0)
     body_g = _clamp(float(_BK_BODY_G) * tone_body_mul, -1.0, 3.0)
     body_w = _clamp(float(_BK_BODY_W), 0.2, 3.0)
+
+    ubass_f = _clamp(float(_BK_UBASS_F), 80.0, 150.0)
+    ubass_g = _clamp(float(_BK_UBASS_G) * tone_ubass_mul, -1.0, 3.0)
+    ubass_w = _clamp(float(_BK_UBASS_W), 0.2, 3.0)
+    ubass_mix = _clamp(float(_BK_UBASS_MIX) * intensity_scale, 0.0, 0.30)
 
     mid_f = _clamp(float(_BK_MID_F), 700.0, 1800.0)
     mid_g = _clamp(float(_BK_MID_G), -1.0, 3.0)
@@ -664,7 +681,7 @@ def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: 
     tone_fc = ",".join(tone_chain) if tone_chain else "anull"
 
     fc_parts = [
-        "[0:a]asplit=3[dry][low][tone]",
+        "[0:a]asplit=4[dry][low][tone][ub]",
         "[dry]volume=1[d0]",
     ]
 
@@ -681,7 +698,16 @@ def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: 
         fc_parts.append("[low]volume=0[l1]")
 
     fc_parts.append(f"[tone]{tone_fc},volume={tone_mix}[t1]")
-    fc_parts.append("[d0][l1][t1]amix=inputs=3:normalize=0[m0]")
+
+    if _BK_UBASS_ON and ubass_mix > 0.0:
+        fc_parts.append(
+            f"[ub]equalizer=f={ubass_f}:t=q:w={ubass_w}:g={ubass_g},"
+            f"volume={ubass_mix}[u1]"
+        )
+    else:
+        fc_parts.append("[ub]volume=0[u1]")
+
+    fc_parts.append("[d0][l1][t1][u1]amix=inputs=4:normalize=0[m0]")
 
     if _BK_LIMITER_ON:
         fc_parts.append(f"[m0]alimiter=limit={ceiling_lin}:level=disabled[out]")
@@ -1112,6 +1138,12 @@ def health():
         "BK_BODY_F": os.getenv("BK_BODY_F"),
         "BK_BODY_G": os.getenv("BK_BODY_G"),
         "BK_BODY_W": os.getenv("BK_BODY_W"),
+
+        "BK_UBASS_ON": os.getenv("BK_UBASS_ON"),
+        "BK_UBASS_F": os.getenv("BK_UBASS_F"),
+        "BK_UBASS_G": os.getenv("BK_UBASS_G"),
+        "BK_UBASS_W": os.getenv("BK_UBASS_W"),
+        "BK_UBASS_MIX": os.getenv("BK_UBASS_MIX"),
 
         "BK_MID_ON": os.getenv("BK_MID_ON"),
         "BK_MID_F": os.getenv("BK_MID_F"),
