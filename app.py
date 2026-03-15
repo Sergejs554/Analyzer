@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 from flask import Flask, request, jsonify, send_file
-import os, tempfile, requests, re, subprocess, shlex, json
+import os
+import tempfile
+import requests
+import re
+import subprocess
+import shlex
+import json
+import time
 
 from analyze_mastering import run_analysis
 from auto_analysis import analyze_sections
@@ -13,8 +21,10 @@ app = Flask(__name__)
 
 GDRIVE_RX = re.compile(r"(?:https?://)?(?:drive\.google\.com)/(?:file/d/|open\?id=|uc\?id=)([\w-]+)")
 
+
 def is_gdrive(url: str) -> bool:
     return GDRIVE_RX.search(url or "") is not None
+
 
 def gdrive_file_id(url: str):
     m = GDRIVE_RX.search(url or "")
@@ -22,55 +32,112 @@ def gdrive_file_id(url: str):
         return None
     return m.group(1)
 
+
 def gdrive_direct(url: str) -> str:
     fid = gdrive_file_id(url)
     if not fid:
         return url
     return f"https://drive.google.com/uc?export=download&id={fid}"
 
+
 def guess_ext(url: str, content_type: str | None) -> str:
     u = (url or "").lower()
-    if ".wav" in u: return ".wav"
-    if ".mp3" in u: return ".mp3"
-    if ".m4a" in u: return ".m4a"
-    if ".flac" in u: return ".flac"
-    if ".aiff" in u or ".aif" in u: return ".aiff"
+    if ".wav" in u:
+        return ".wav"
+    if ".mp3" in u:
+        return ".mp3"
+    if ".m4a" in u:
+        return ".m4a"
+    if ".flac" in u:
+        return ".flac"
+    if ".aiff" in u or ".aif" in u:
+        return ".aiff"
     if content_type:
         ct = content_type.lower()
-        if "audio/wav" in ct or "audio/x-wav" in ct: return ".wav"
-        if "audio/mpeg" in ct: return ".mp3"
-        if "audio/mp4" in ct or "audio/x-m4a" in ct: return ".m4a"
-        if "audio/flac" in ct: return ".flac"
-        if "audio/aiff" in ct or "audio/x-aiff" in ct: return ".aiff"
+        if "audio/wav" in ct or "audio/x-wav" in ct:
+            return ".wav"
+        if "audio/mpeg" in ct:
+            return ".mp3"
+        if "audio/mp4" in ct or "audio/x-m4a" in ct:
+            return ".m4a"
+        if "audio/flac" in ct:
+            return ".flac"
+        if "audio/aiff" in ct or "audio/x-aiff" in ct:
+            return ".aiff"
     return ".wav"
 
-def download_file(url: str, out_path: str, timeout: int = 120) -> tuple[int, str, str]:
+
+def _requests_session() -> requests.Session:
     sess = requests.Session()
-    r = sess.get(url, timeout=timeout, allow_redirects=True)
-    r.raise_for_status()
+    sess.headers.update({
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+        "Connection": "keep-alive",
+    })
+    return sess
 
-    ct = (r.headers.get("Content-Type") or "").lower()
-    if "text/html" in ct and "drive.google.com" in (r.url or ""):
-        confirm = None
-        for k, v in r.cookies.items():
-            if k.startswith("download_warning"):
-                confirm = v
-                break
-        if confirm:
-            fid = gdrive_file_id(url) or gdrive_file_id(r.url)
-            if fid:
-                url2 = f"https://drive.google.com/uc?export=download&id={fid}&confirm={confirm}"
-                r = sess.get(url2, timeout=timeout, allow_redirects=True)
-                r.raise_for_status()
-                ct = (r.headers.get("Content-Type") or "").lower()
 
-    if "text/html" in ct:
-        raise RuntimeError(f"Downloaded HTML instead of audio. final_url={r.url}")
+def download_file(url: str, out_path: str, timeout: int = 180) -> tuple[int, str, str]:
+    """
+    Stream download into temp file.
+    Safer for Railway than loading full file into RAM.
+    """
+    last_err = None
 
-    with open(out_path, "wb") as f:
-        f.write(r.content)
+    for attempt in range(3):
+        sess = _requests_session()
+        try:
+            r = sess.get(url, timeout=(20, timeout), allow_redirects=True, stream=True)
+            r.raise_for_status()
 
-    return len(r.content), (r.url or url), (r.headers.get("Content-Type") or "")
+            ct = (r.headers.get("Content-Type") or "").lower()
+            final_url = (r.url or url)
+
+            if "text/html" in ct and "drive.google.com" in final_url:
+                confirm = None
+                for k, v in r.cookies.items():
+                    if k.startswith("download_warning"):
+                        confirm = v
+                        break
+                if confirm:
+                    fid = gdrive_file_id(url) or gdrive_file_id(final_url)
+                    if fid:
+                        r.close()
+                        url2 = f"https://drive.google.com/uc?export=download&id={fid}&confirm={confirm}"
+                        r = sess.get(url2, timeout=(20, timeout), allow_redirects=True, stream=True)
+                        r.raise_for_status()
+                        ct = (r.headers.get("Content-Type") or "").lower()
+                        final_url = (r.url or url2)
+
+            if "text/html" in ct:
+                raise RuntimeError(f"Downloaded HTML instead of audio. final_url={final_url}")
+
+            total = 0
+            with open(out_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    total += len(chunk)
+            r.close()
+
+            if total <= 0:
+                raise RuntimeError(f"Downloaded empty file. final_url={final_url}")
+
+            return total, final_url, (r.headers.get("Content-Type") or "")
+
+        except Exception as e:
+            last_err = e
+            try:
+                if os.path.exists(out_path):
+                    os.remove(out_path)
+            except Exception:
+                pass
+            time.sleep(min(1 + attempt, 3))
+
+    raise RuntimeError(f"download_file failed: {last_err}")
+
 
 def _dl_to_named(td: str, label: str, url: str) -> tuple[str, dict]:
     tmp = os.path.join(td, f"{label}.tmp")
@@ -86,281 +153,115 @@ def _dl_to_named(td: str, label: str, url: str) -> tuple[str, dict]:
     }
     return path, dbg
 
+
 def _run(cmd: str):
     p = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if p.returncode != 0:
         raise RuntimeError(p.stderr.decode("utf-8", errors="ignore")[:4000])
     return p.stdout.decode("utf-8", errors="ignore"), p.stderr.decode("utf-8", errors="ignore")
 
-# ---------------------------
-# MR MASTERING v3.1 — PARALLEL BASS BLEND
-# ---------------------------
 
 def _clamp(x, lo, hi):
     return float(max(lo, min(hi, x)))
 
-# TEMP TEST: afftdn off by default
-_ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
 
-# Pre-Clean
+def _db_to_lin(db: float) -> float:
+    return 10.0 ** (float(db) / 20.0)
+
+
+def _os_softclip_chain(
+    drive_db: float,
+    hp: float | None = None,
+    lp: float | None = None,
+    post_gain_db: float = 0.0,
+) -> str:
+    parts = []
+    if hp is not None:
+        parts.append(f"highpass=f={_clamp(hp, 20.0, 18000.0)}:width=0.707")
+    if lp is not None:
+        parts.append(f"lowpass=f={_clamp(lp, 40.0, 20000.0)}:width=0.707")
+    parts.extend([
+        f"volume={_clamp(drive_db, 0.0, 24.0)}dB",
+        "aresample=192000",
+        "asoftclip",
+        "aresample=48000",
+    ])
+    if abs(post_gain_db) > 1e-9:
+        parts.append(f"volume={post_gain_db}dB")
+    return ",".join(parts)
+
+
+# ---------------------------
+# GLOBAL / BASE
+# ---------------------------
+
+_ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7" + (",afftdn=nf=-25" if _ENABLE_AFFTDN else "")
 
-# LOW-MID "ПЛЕЧИ"
-_LOWMID_ON = (os.getenv("LOWMID_ON", "1").strip() == "1")
-_LOWMID_F = float(os.getenv("LOWMID_F", "200"))
-_LOWMID_W = float(os.getenv("LOWMID_W", "0.7"))
-_LOWMID_G = float(os.getenv("LOWMID_G", "0.6"))
+_BASE_LOWMID_ON = (os.getenv("BASE_LOWMID_ON", "1").strip() == "1")
+_BASE_LOWMID_F = float(os.getenv("BASE_LOWMID_F", "220"))
+_BASE_LOWMID_W = float(os.getenv("BASE_LOWMID_W", "0.9"))
+_BASE_LOWMID_G = float(os.getenv("BASE_LOWMID_G", "-0.6"))
 
-def _lowmid_filter() -> str:
-    if not _LOWMID_ON:
-        return "anull"
-    f = _clamp(float(_LOWMID_F), 20.0, 800.0)
-    w = _clamp(float(_LOWMID_W), 0.2, 3.0)
-    g = _clamp(float(_LOWMID_G), -3.0, 3.0)
-    return f"equalizer=f={f}:t=q:w={w}:g={g}"
-
-# GLUE (legacy)
 _GLUE_ON = (os.getenv("GLUE_ON", "0").strip() == "1")
-_GLUE_RATIO = float(os.getenv("GLUE_RATIO", "1.6"))
+_GLUE_RATIO = float(os.getenv("GLUE_RATIO", "1.4"))
 _GLUE_THRESHOLD_DB = float(os.getenv("GLUE_THRESHOLD_DB", "-18"))
-_GLUE_ATTACK_MS = float(os.getenv("GLUE_ATTACK_MS", "10"))
-_GLUE_RELEASE_MS = float(os.getenv("GLUE_RELEASE_MS", "120"))
+_GLUE_ATTACK_MS = float(os.getenv("GLUE_ATTACK_MS", "15"))
+_GLUE_RELEASE_MS = float(os.getenv("GLUE_RELEASE_MS", "140"))
 _GLUE_KNEE_DB = float(os.getenv("GLUE_KNEE_DB", "2"))
 _GLUE_MAKEUP_DB = float(os.getenv("GLUE_MAKEUP_DB", "0"))
-_GLUE_MIX = float(os.getenv("GLUE_MIX", "1.0"))
+_GLUE_MIX = float(os.getenv("GLUE_MIX", "0.7"))
+
+_TRANSIENT_ON = (os.getenv("TRANSIENT_ON", "0").strip() == "1")
+_TRANSIENT_RATIO = float(os.getenv("TRANSIENT_RATIO", "1.4"))
+_TRANSIENT_THRESHOLD_DB = float(os.getenv("TRANSIENT_THRESHOLD_DB", "-20"))
+_TRANSIENT_ATTACK_MS = float(os.getenv("TRANSIENT_ATTACK_MS", "25"))
+_TRANSIENT_RELEASE_MS = float(os.getenv("TRANSIENT_RELEASE_MS", "100"))
+_TRANSIENT_KNEE_DB = float(os.getenv("TRANSIENT_KNEE_DB", "2"))
+_TRANSIENT_MAKEUP_DB = float(os.getenv("TRANSIENT_MAKEUP_DB", "0"))
+_TRANSIENT_MIX = float(os.getenv("TRANSIENT_MIX", "0.20"))
+
+
+def _base_lowmid_filter() -> str:
+    if not _BASE_LOWMID_ON:
+        return "anull"
+    f = _clamp(_BASE_LOWMID_F, 20.0, 800.0)
+    w = _clamp(_BASE_LOWMID_W, 0.2, 3.0)
+    g = _clamp(_BASE_LOWMID_G, -3.0, 3.0)
+    return f"equalizer=f={f}:t=q:w={w}:g={g}"
+
 
 def _glue_filter() -> str:
     if not _GLUE_ON:
         return "anull"
-    ratio = _clamp(float(_GLUE_RATIO), 1.0, 10.0)
-    thr = _clamp(float(_GLUE_THRESHOLD_DB), -60.0, 0.0)
-    att = _clamp(float(_GLUE_ATTACK_MS), 0.1, 200.0)
-    rel = _clamp(float(_GLUE_RELEASE_MS), 5.0, 2000.0)
-    knee = _clamp(float(_GLUE_KNEE_DB), 0.0, 12.0)
-    makeup = _clamp(float(_GLUE_MAKEUP_DB), -6.0, 12.0)
-    mix = _clamp(float(_GLUE_MIX), 0.0, 1.0)
+    ratio = _clamp(_GLUE_RATIO, 1.0, 10.0)
+    thr = _clamp(_GLUE_THRESHOLD_DB, -60.0, 0.0)
+    att = _clamp(_GLUE_ATTACK_MS, 0.1, 200.0)
+    rel = _clamp(_GLUE_RELEASE_MS, 5.0, 2000.0)
+    knee = _clamp(_GLUE_KNEE_DB, 0.0, 12.0)
+    makeup = _clamp(_GLUE_MAKEUP_DB, -6.0, 12.0)
+    mix = _clamp(_GLUE_MIX, 0.0, 1.0)
     return (
         f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
 
-# KICKSAFE GLUE
-_KICKSAFE_GLUE_ON = (os.getenv("KICKSAFE_GLUE_ON", "0").strip() == "1")
-_KICKSAFE_XOVER_HZ = float(os.getenv("KICKSAFE_XOVER_HZ", "140"))
-_KICKSAFE_RATIO = float(os.getenv("KICKSAFE_RATIO", "1.6"))
-_KICKSAFE_THRESHOLD_DB = float(os.getenv("KICKSAFE_THRESHOLD_DB", "-20"))
-_KICKSAFE_ATTACK_MS = float(os.getenv("KICKSAFE_ATTACK_MS", "10"))
-_KICKSAFE_RELEASE_MS = float(os.getenv("KICKSAFE_RELEASE_MS", "160"))
-_KICKSAFE_KNEE_DB = float(os.getenv("KICKSAFE_KNEE_DB", "2"))
-_KICKSAFE_MAKEUP_DB = float(os.getenv("KICKSAFE_MAKEUP_DB", "0"))
-_KICKSAFE_MIX = float(os.getenv("KICKSAFE_MIX", "0.25"))
-
-def _kicksafe_glue_enabled() -> bool:
-    return bool(_KICKSAFE_GLUE_ON)
-
-def _kicksafe_glue_fc() -> str:
-    xover = _clamp(float(_KICKSAFE_XOVER_HZ), 80.0, 240.0)
-    ratio = _clamp(float(_KICKSAFE_RATIO), 1.0, 10.0)
-    thr = _clamp(float(_KICKSAFE_THRESHOLD_DB), -60.0, 0.0)
-    att = _clamp(float(_KICKSAFE_ATTACK_MS), 0.1, 200.0)
-    rel = _clamp(float(_KICKSAFE_RELEASE_MS), 5.0, 2000.0)
-    knee = _clamp(float(_KICKSAFE_KNEE_DB), 0.0, 12.0)
-    makeup = _clamp(float(_KICKSAFE_MAKEUP_DB), -6.0, 12.0)
-    mix = _clamp(float(_KICKSAFE_MIX), 0.0, 1.0)
-
-    comp = (
-        f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
-        f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
-    )
-
-    return (
-        f"[0:a]asplit=2[aL][aH];"
-        f"[aL]lowpass=f={xover}:width=0.707[aLow];"
-        f"[aH]highpass=f={xover}:width=0.707,{comp}[aHigh];"
-        f"[aLow][aHigh]amix=inputs=2:normalize=0[aout]"
-    )
-
-# TRANSIENT
-_TRANSIENT_ON = (os.getenv("TRANSIENT_ON", "0").strip() == "1")
-_TRANSIENT_RATIO = float(os.getenv("TRANSIENT_RATIO", "1.8"))
-_TRANSIENT_THRESHOLD_DB = float(os.getenv("TRANSIENT_THRESHOLD_DB", "-22"))
-_TRANSIENT_ATTACK_MS = float(os.getenv("TRANSIENT_ATTACK_MS", "25"))
-_TRANSIENT_RELEASE_MS = float(os.getenv("TRANSIENT_RELEASE_MS", "90"))
-_TRANSIENT_KNEE_DB = float(os.getenv("TRANSIENT_KNEE_DB", "2"))
-_TRANSIENT_MAKEUP_DB = float(os.getenv("TRANSIENT_MAKEUP_DB", "0"))
-_TRANSIENT_MIX = float(os.getenv("TRANSIENT_MIX", "0.25"))
 
 def _transient_filter() -> str:
     if not _TRANSIENT_ON:
         return "anull"
-    ratio = _clamp(float(_TRANSIENT_RATIO), 1.0, 10.0)
-    thr = _clamp(float(_TRANSIENT_THRESHOLD_DB), -60.0, 0.0)
-    att = _clamp(float(_TRANSIENT_ATTACK_MS), 0.1, 200.0)
-    rel = _clamp(float(_TRANSIENT_RELEASE_MS), 5.0, 2000.0)
-    knee = _clamp(float(_TRANSIENT_KNEE_DB), 0.0, 12.0)
-    makeup = _clamp(float(_TRANSIENT_MAKEUP_DB), -6.0, 12.0)
-    mix = _clamp(float(_TRANSIENT_MIX), 0.0, 1.0)
+    ratio = _clamp(_TRANSIENT_RATIO, 1.0, 10.0)
+    thr = _clamp(_TRANSIENT_THRESHOLD_DB, -60.0, 0.0)
+    att = _clamp(_TRANSIENT_ATTACK_MS, 0.1, 200.0)
+    rel = _clamp(_TRANSIENT_RELEASE_MS, 5.0, 2000.0)
+    knee = _clamp(_TRANSIENT_KNEE_DB, 0.0, 12.0)
+    makeup = _clamp(_TRANSIENT_MAKEUP_DB, -6.0, 12.0)
+    mix = _clamp(_TRANSIENT_MIX, 0.0, 1.0)
     return (
         f"acompressor=threshold={thr}dB:ratio={ratio}:attack={att}:release={rel}:"
         f"knee={knee}dB:makeup={makeup}dB:mix={mix}"
     )
 
-# MICRO HARMONICS
-_HARM_ON = (os.getenv("HARM_ON", "0").strip() == "1")
-_HARM_HP_HZ = float(os.getenv("HARM_HP_HZ", "140"))
-_HARM_LP_HZ = float(os.getenv("HARM_LP_HZ", "12000"))
-_HARM_DRIVE_DB = float(os.getenv("HARM_DRIVE_DB", "6"))
-_HARM_MIX = float(os.getenv("HARM_MIX", "0.08"))
-
-def _harm_enabled() -> bool:
-    return bool(_HARM_ON)
-
-def _harm_fc() -> str:
-    hp = _clamp(float(_HARM_HP_HZ), 60.0, 300.0)
-    lp = _clamp(float(_HARM_LP_HZ), 6000.0, 18000.0)
-    drive_db = _clamp(float(_HARM_DRIVE_DB), 0.0, 18.0)
-    mix = _clamp(float(_HARM_MIX), 0.0, 0.35)
-
-    return (
-        f"[0:a]asplit=2[dry][h];"
-        f"[dry]volume=1[d0];"
-        f"[h]"
-        f"highpass=f={hp}:width=0.707,"
-        f"lowpass=f={lp}:width=0.707,"
-        f"volume={drive_db}dB,"
-        f"asoftclip,"
-        f"volume={mix}[h1];"
-        f"[d0][h1]amix=inputs=2:normalize=0[aout]"
-    )
-
-# SUB DENSITY
-_SUBDEN_ON = (os.getenv("SUBDEN_ON", "0").strip() == "1")
-_SUBDEN_LO_HZ = float(os.getenv("SUBDEN_LO_HZ", "55"))
-_SUBDEN_HI_HZ = float(os.getenv("SUBDEN_HI_HZ", "160"))
-_SUBDEN_DRIVE_DB = float(os.getenv("SUBDEN_DRIVE_DB", "10"))
-_SUBDEN_MIX = float(os.getenv("SUBDEN_MIX", "0.06"))
-
-def _subden_enabled() -> bool:
-    return bool(_SUBDEN_ON)
-
-def _subden_fc() -> str:
-    lo = _clamp(float(_SUBDEN_LO_HZ), 35.0, 90.0)
-    hi = _clamp(float(_SUBDEN_HI_HZ), 110.0, 260.0)
-    if hi <= lo + 10:
-        hi = lo + 10
-
-    drive_db = _clamp(float(_SUBDEN_DRIVE_DB), 0.0, 18.0)
-    mix = _clamp(float(_SUBDEN_MIX), 0.0, 0.20)
-
-    return (
-        f"[0:a]asplit=2[dry][s];"
-        f"[dry]volume=1[d0];"
-        f"[s]"
-        f"highpass=f={lo}:width=0.707,"
-        f"lowpass=f={hi}:width=0.707,"
-        f"volume={drive_db}dB,"
-        f"asoftclip,"
-        f"volume={mix}[s1];"
-        f"[d0][s1]amix=inputs=2:normalize=0[aout]"
-    )
-
-# PARALLEL BASS BLEND BUS
-_BASS_BLEND_ON = (os.getenv("BASS_BLEND_ON", "1").strip() == "1")
-_BASS_BLEND_LO_HZ = float(os.getenv("BASS_BLEND_LO_HZ", "32"))
-_BASS_BLEND_HI_HZ = float(os.getenv("BASS_BLEND_HI_HZ", "125"))
-_BASS_BLEND_MIX = float(os.getenv("BASS_BLEND_MIX", "0.22"))
-_BASS_BLEND_GAIN_DB = float(os.getenv("BASS_BLEND_GAIN_DB", "0.0"))
-
-def _bass_blend_enabled() -> bool:
-    return bool(_BASS_BLEND_ON)
-
-def _render_bass_bus(in_path: str, out_path: str):
-    lo = _clamp(float(_BASS_BLEND_LO_HZ), 20.0, 70.0)
-    hi = _clamp(float(_BASS_BLEND_HI_HZ), 80.0, 220.0)
-    if hi <= lo + 10:
-        hi = lo + 10
-
-    gain_db = _clamp(float(_BASS_BLEND_GAIN_DB), -3.0, 3.0)
-
-    cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-af "{_PRE_CLEAN_CHAIN},highpass=f={lo}:width=0.707,lowpass=f={hi}:width=0.707,volume={gain_db}dB" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
-    )
-    _run(cmd)
-
-def _apply_bass_blend_if_needed(processed_src: str, bass_src: str, out_path: str):
-    if not _bass_blend_enabled():
-        cmd = (
-            f'ffmpeg -y -hide_banner -i {shlex.quote(processed_src)} '
-            f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
-        )
-        _run(cmd)
-        return
-
-    mix = _clamp(float(_BASS_BLEND_MIX), 0.0, 0.60)
-
-    fc = (
-        f"[0:a]volume=1[p0];"
-        f"[1:a]volume={mix}[b0];"
-        f"[p0][b0]amix=inputs=2:normalize=0[aout]"
-    )
-    cmd = (
-        f'ffmpeg -y -hide_banner '
-        f'-i {shlex.quote(processed_src)} '
-        f'-i {shlex.quote(bass_src)} '
-        f'-filter_complex "{fc}" -map "[aout]" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
-    )
-    _run(cmd)
-
-# AIR BUS
-_AIR_AMOUNT = 0.16
-_AIR_SHELF_F = 9000
-_AIR_SHELF_G = 2.6
-_AIR_WIDEN = 0.12
-
-_RAMP_MIN = 0.08
-_RAMP_MAX = 0.80
-
-def _stereowiden_filter() -> str:
-    d = int(round(_clamp(_AIR_WIDEN, 0.0, 1.0) * 100.0))
-    d = max(1, min(100, d))
-    return f"stereowiden=delay={d}"
-
-def _pick_ramp(prev_len: float, next_len: float) -> float:
-    r = min(_RAMP_MAX, 0.25 * prev_len, 0.25 * next_len)
-    return _clamp(r, _RAMP_MIN, _RAMP_MAX)
-
-def _build_mask_expr_from_sections(sections: list[dict]) -> str:
-    if not sections:
-        return "0.5"
-
-    secs = sorted(sections, key=lambda s: float(s.get("start", 0.0)))
-    starts = [float(s.get("start", 0.0)) for s in secs]
-    ends = [float(s.get("end", 0.0)) for s in secs]
-    w = [_clamp(float(s.get("level", 0.5)), 0.0, 1.0) for s in secs]
-
-    expr = f"{w[-1]:.6f}"
-    for i in range(len(w) - 2, -1, -1):
-        b = max(starts[i+1], ends[i])
-        prev_len = max(0.01, ends[i] - starts[i])
-        next_len = max(0.01, ends[i+1] - starts[i+1])
-        r = _pick_ramp(prev_len, next_len)
-
-        left = b - r
-        right = b + r
-        wi = w[i]
-        wj = w[i+1]
-
-        expr = (
-            f"if(lt(t,{left:.6f}),{wi:.6f},"
-            f"if(lt(t,{right:.6f}),"
-            f"({wi:.6f}+({wj:.6f}-{wi:.6f})*(t-{left:.6f})/{(2*r):.6f}),"
-            f"({expr})"
-            f"))"
-        )
-    return expr
 
 def _strip_loudnorm(chain: str) -> tuple[str, str]:
     if "loudnorm=" not in chain:
@@ -370,12 +271,14 @@ def _strip_loudnorm(chain: str) -> tuple[str, str]:
     ln = "loudnorm=" + ln
     return pre, ln
 
+
 def _force_print_format_json(loudnorm_part: str) -> str:
     if "loudnorm=" not in loudnorm_part:
         return loudnorm_part
     if "print_format=" in loudnorm_part:
         return re.sub(r"(print_format=)(\w+)", r"\1json", loudnorm_part, count=1)
     return loudnorm_part + ":print_format=json"
+
 
 def _extract_last_json_block(text: str):
     start = -1
@@ -390,13 +293,14 @@ def _extract_last_json_block(text: str):
             if depth > 0:
                 depth -= 1
                 if depth == 0 and start != -1:
-                    chunk = text[start:i+1]
+                    chunk = text[start:i + 1]
                     try:
                         last_obj = json.loads(chunk)
                     except Exception:
                         pass
                     start = -1
     return last_obj
+
 
 def _build_loudnorm_two_pass(in_path: str, ln: dict, out_args: str, out_path: str):
     target_I = float(ln["I"])
@@ -426,6 +330,7 @@ def _build_loudnorm_two_pass(in_path: str, ln: dict, out_args: str, out_path: st
     pass2_cmd = f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} -af "{pass2_ln}" {out_args} {shlex.quote(out_path)}'
     _run(pass2_cmd)
 
+
 def _out_args(fmt: str) -> tuple[str, str, str]:
     fmt = (fmt or "wav16").lower()
     if fmt == "wav24":
@@ -438,176 +343,93 @@ def _out_args(fmt: str) -> tuple[str, str, str]:
         return "-ar 48000 -ac 2 -f aiff -c:a pcm_s16be", "mastered.aiff", "audio/aiff"
     return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav", "audio/wav"
 
+
 def _normalize_tone(x: str) -> str:
     x = (x or "balanced").lower().strip()
     return x if x in ("warm", "balanced", "bright") else "balanced"
 
+
 def _normalize_intensity(x: str) -> str:
     x = (x or "balanced").lower().strip()
-    if x in ("low", "soft"): return "low"
-    if x in ("high", "hard"): return "high"
-    if x in ("normal", "balanced", "mid", "medium"): return "balanced"
+    if x in ("low", "soft"):
+        return "low"
+    if x in ("high", "hard"):
+        return "high"
+    if x in ("normal", "balanced", "mid", "medium"):
+        return "balanced"
     return "balanced"
+
 
 def _normalize_format(x: str) -> str:
     x = (x or "wav16").lower().strip()
-    if x in ("wav", "wav16"): return "wav16"
-    if x in ("wav24",): return "wav24"
-    if x in ("flac",): return "flac"
-    if x in ("mp3", "mp3_320"): return "mp3_320"
-    if x in ("aiff", "aif"): return "aiff"
+    if x in ("wav", "wav16"):
+        return "wav16"
+    if x in ("wav24",):
+        return "wav24"
+    if x in ("flac",):
+        return "flac"
+    if x in ("mp3", "mp3_320"):
+        return "mp3_320"
+    if x in ("aiff", "aif"):
+        return "aiff"
     return "wav16"
 
-# ---------------------------
-# OUR BANDLAB v1 — REVEAL / AIR / MID OPENING
-# ---------------------------
-_BL_MID_ON = (os.getenv("BL_MID_ON", "1").strip() == "1")
-_BL_MID_F = float(os.getenv("BL_MID_F", "1100"))
-_BL_MID_G = float(os.getenv("BL_MID_G", "1.2"))
-_BL_MID_W = float(os.getenv("BL_MID_W", "0.9"))
 
-_BL_PRES_ON = (os.getenv("BL_PRES_ON", "1").strip() == "1")
-_BL_PRES_F = float(os.getenv("BL_PRES_F", "2200"))
-_BL_PRES_G = float(os.getenv("BL_PRES_G", "0.5"))
-_BL_PRES_W = float(os.getenv("BL_PRES_W", "1.0"))
-
-_BL_AIR_ON = (os.getenv("BL_AIR_ON", "1").strip() == "1")
-_BL_AIR_SHELF_F = float(os.getenv("BL_AIR_SHELF_F", "7800"))
-_BL_AIR_SHELF_G = float(os.getenv("BL_AIR_SHELF_G", "1.6"))
-_BL_AIR_MIX = float(os.getenv("BL_AIR_MIX", "0.12"))
-
-_BL_WIDTH_ON = (os.getenv("BL_WIDTH_ON", "1").strip() == "1")
-_BL_WIDTH_HP_HZ = float(os.getenv("BL_WIDTH_HP_HZ", "4200"))
-_BL_WIDTH_DELAY = int(float(os.getenv("BL_WIDTH_DELAY", "16")))
-_BL_WIDTH_MIX = float(os.getenv("BL_WIDTH_MIX", "0.10"))
-
-def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
-    tone = _normalize_tone(tone)
-    intensity = _normalize_intensity(intensity)
-    fmt = _normalize_format(fmt)
-
-    intensity_scale = {
-        "low": 0.85,
-        "balanced": 1.00,
-        "high": 1.15,
-    }[intensity]
-
-    tone_air_mul = {
-        "warm": 0.90,
-        "balanced": 1.00,
-        "bright": 1.15,
-    }[tone]
-
-    tone_mid_mul = {
-        "warm": 1.08,
-        "balanced": 1.00,
-        "bright": 0.95,
-    }[tone]
-
-    mid_f = _clamp(float(_BL_MID_F), 500.0, 2200.0)
-    mid_g = _clamp(float(_BL_MID_G) * tone_mid_mul, -1.0, 3.0)
-    mid_w = _clamp(float(_BL_MID_W), 0.2, 3.0)
-
-    pres_f = _clamp(float(_BL_PRES_F), 1200.0, 4500.0)
-    pres_g = _clamp(float(_BL_PRES_G), -1.0, 2.0)
-    pres_w = _clamp(float(_BL_PRES_W), 0.2, 3.0)
-
-    air_f = _clamp(float(_BL_AIR_SHELF_F), 5000.0, 14000.0)
-    air_g = _clamp(float(_BL_AIR_SHELF_G) * tone_air_mul, 0.0, 4.0)
-    air_mix = _clamp(float(_BL_AIR_MIX) * intensity_scale, 0.0, 0.25)
-
-    width_hp = _clamp(float(_BL_WIDTH_HP_HZ), 2500.0, 10000.0)
-    width_delay = int(max(1, min(100, int(_BL_WIDTH_DELAY))))
-    width_mix = _clamp(float(_BL_WIDTH_MIX) * intensity_scale, 0.0, 0.20)
-
-    tone_chain = []
-    if _BL_MID_ON:
-        tone_chain.append(f"equalizer=f={mid_f}:t=q:w={mid_w}:g={mid_g}")
-    if _BL_PRES_ON:
-        tone_chain.append(f"equalizer=f={pres_f}:t=q:w={pres_w}:g={pres_g}")
-    if _BL_AIR_ON:
-        tone_chain.append(f"highshelf=f={air_f}:g={air_g}")
-
-    tone_fc = ",".join(tone_chain) if tone_chain else "anull"
-
-    if _BL_WIDTH_ON and width_mix > 0.0:
-        width_fc = (
-            f"highpass=f={width_hp}:width=0.707,"
-            f"stereowiden=delay={width_delay},"
-            f"volume={width_mix}"
-        )
-    else:
-        width_fc = "volume=0"
-
-    fc = (
-        f"[0:a]asplit=2[dry][fx];"
-        f"[dry]volume=1[d0];"
-        f"[fx]{tone_fc}[fx0];"
-        f"[fx0]asplit=2[fxd][fxw];"
-        f"[fxd]volume={air_mix}[fx1];"
-        f"[fxw]{width_fc}[fx2];"
-        f"[d0][fx1][fx2]amix=inputs=3:normalize=0[out]"
-    )
-
-    out_args, out_name, _mime = _out_args(fmt)
-    out_name = f"bandlab_like_{out_name}"
-    out_path = os.path.join(td, out_name)
+def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
+    lm = _base_lowmid_filter()
+    glue = _glue_filter()
+    tr = _transient_filter()
 
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-filter_complex "{fc}" -map "[out]" '
-        f'{out_args} {shlex.quote(out_path)}'
+        f'-af "{_PRE_CLEAN_CHAIN},{lm},{glue},{tr},{chain_no_ln}" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
 
-    return out_path, out_name
 
 # ---------------------------
-# OUR BAKUAGE v1 — LOW SUPPORT / BODY / DENSITY
+# LOW SUPPORT BRANCH
+# donor only, pre-limiter
 # ---------------------------
-_BK_LOW_ON = (os.getenv("BK_LOW_ON", "1").strip() == "1")
-_BK_LOW_LO_HZ = float(os.getenv("BK_LOW_LO_HZ", "32"))
-_BK_LOW_HI_HZ = float(os.getenv("BK_LOW_HI_HZ", "150"))
-_BK_LOW_DRIVE_DB = float(os.getenv("BK_LOW_DRIVE_DB", "1.5"))
-_BK_LOW_MIX = float(os.getenv("BK_LOW_MIX", "0.20"))
 
-_BK_BODY_ON = (os.getenv("BK_BODY_ON", "1").strip() == "1")
-_BK_BODY_F = float(os.getenv("BK_BODY_F", "220"))
-_BK_BODY_G = float(os.getenv("BK_BODY_G", "1.1"))
-_BK_BODY_W = float(os.getenv("BK_BODY_W", "0.9"))
+_LS_FOUND_ON = (os.getenv("LS_FOUND_ON", "1").strip() == "1")
+_LS_FOUND_LO_HZ = float(os.getenv("LS_FOUND_LO_HZ", "32"))
+_LS_FOUND_HI_HZ = float(os.getenv("LS_FOUND_HI_HZ", "120"))
+_LS_FOUND_RATIO = float(os.getenv("LS_FOUND_RATIO", "1.5"))
+_LS_FOUND_THRESHOLD_DB = float(os.getenv("LS_FOUND_THRESHOLD_DB", "-22"))
+_LS_FOUND_ATTACK_MS = float(os.getenv("LS_FOUND_ATTACK_MS", "28"))
+_LS_FOUND_RELEASE_MS = float(os.getenv("LS_FOUND_RELEASE_MS", "180"))
+_LS_FOUND_MIX = float(os.getenv("LS_FOUND_MIX", "0.18"))
 
-_BK_UBASS_ON = (os.getenv("BK_UBASS_ON", "1").strip() == "1")
-_BK_UBASS_F = float(os.getenv("BK_UBASS_F", "115"))
-_BK_UBASS_G = float(os.getenv("BK_UBASS_G", "1.35"))
-_BK_UBASS_W = float(os.getenv("BK_UBASS_W", "1.0"))
-_BK_UBASS_MIX = float(os.getenv("BK_UBASS_MIX", "0.12"))
+_LS_HARM_ON = (os.getenv("LS_HARM_ON", "1").strip() == "1")
+_LS_HARM_HP_HZ = float(os.getenv("LS_HARM_HP_HZ", "48"))
+_LS_HARM_LP_HZ = float(os.getenv("LS_HARM_LP_HZ", "165"))
+_LS_HARM_DRIVE_DB = float(os.getenv("LS_HARM_DRIVE_DB", "6"))
+_LS_HARM_MIX = float(os.getenv("LS_HARM_MIX", "0.08"))
 
-_BK_MID_ON = (os.getenv("BK_MID_ON", "1").strip() == "1")
-_BK_MID_F = float(os.getenv("BK_MID_F", "1150"))
-_BK_MID_G = float(os.getenv("BK_MID_G", "1.2"))
-_BK_MID_W = float(os.getenv("BK_MID_W", "0.95"))
+_LS_BODY_ON = (os.getenv("LS_BODY_ON", "1").strip() == "1")
+_LS_BODY_F = float(os.getenv("LS_BODY_F", "220"))
+_LS_BODY_G = float(os.getenv("LS_BODY_G", "0.8"))
+_LS_BODY_W = float(os.getenv("LS_BODY_W", "0.9"))
+_LS_BODY_MIX = float(os.getenv("LS_BODY_MIX", "0.08"))
 
-_BK_PRES_ON = (os.getenv("BK_PRES_ON", "1").strip() == "1")
-_BK_PRES_F = float(os.getenv("BK_PRES_F", "2200"))
-_BK_PRES_G = float(os.getenv("BK_PRES_G", "0.6"))
-_BK_PRES_W = float(os.getenv("BK_PRES_W", "1.0"))
+_LS_GUARD_ON = (os.getenv("LS_GUARD_ON", "1").strip() == "1")
+_LS_GUARD_F = float(os.getenv("LS_GUARD_F", "280"))
+_LS_GUARD_G = float(os.getenv("LS_GUARD_G", "-1.2"))
+_LS_GUARD_W = float(os.getenv("LS_GUARD_W", "1.1"))
 
-_BK_SOFTTOP_ON = (os.getenv("BK_SOFTTOP_ON", "1").strip() == "1")
-_BK_SOFTTOP_F = float(os.getenv("BK_SOFTTOP_F", "5200"))
-_BK_SOFTTOP_G = float(os.getenv("BK_SOFTTOP_G", "-1.4"))
+_LS_MONO_ON = (os.getenv("LS_MONO_ON", "1").strip() == "1")
+_LS_OUT_TRIM_DB = float(os.getenv("LS_OUT_TRIM_DB", "-1.0"))
 
-_BK_TONE_MIX = float(os.getenv("BK_TONE_MIX", "0.12"))
 
-_BK_LIMITER_ON = (os.getenv("BK_LIMITER_ON", "1").strip() == "1")
-_BK_LIMITER_CEILING_DB = float(os.getenv("BK_LIMITER_CEILING_DB", "-1.2"))
-
-def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
     intensity = _normalize_intensity(intensity)
     fmt = _normalize_format(fmt)
 
     intensity_scale = {
-        "low": 0.90,
+        "low": 0.88,
         "balanced": 1.00,
         "high": 1.12,
     }[intensity]
@@ -618,198 +440,84 @@ def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: 
         "bright": 0.92,
     }[tone]
 
-    tone_pres_mul = {
-        "warm": 0.92,
-        "balanced": 1.00,
-        "bright": 1.08,
-    }[tone]
+    found_lo = _clamp(_LS_FOUND_LO_HZ, 20.0, 70.0)
+    found_hi = _clamp(_LS_FOUND_HI_HZ, 70.0, 220.0)
+    if found_hi <= found_lo + 10:
+        found_hi = found_lo + 10
 
-    tone_softtop_mul = {
-        "warm": 1.10,
-        "balanced": 1.00,
-        "bright": 0.75,
-    }[tone]
+    found_ratio = _clamp(_LS_FOUND_RATIO, 1.0, 4.0)
+    found_thr = _clamp(_LS_FOUND_THRESHOLD_DB, -60.0, 0.0)
+    found_att = _clamp(_LS_FOUND_ATTACK_MS, 1.0, 200.0)
+    found_rel = _clamp(_LS_FOUND_RELEASE_MS, 20.0, 1200.0)
+    found_mix = _clamp(_LS_FOUND_MIX * intensity_scale, 0.0, 0.40)
 
-    tone_ubass_mul = {
-        "warm": 1.08,
-        "balanced": 1.00,
-        "bright": 0.92,
-    }[tone]
+    harm_hp = _clamp(_LS_HARM_HP_HZ, 35.0, 100.0)
+    harm_lp = _clamp(_LS_HARM_LP_HZ, 90.0, 260.0)
+    if harm_lp <= harm_hp + 10:
+        harm_lp = harm_hp + 10
+    harm_drive = _clamp(_LS_HARM_DRIVE_DB, 0.0, 18.0)
+    harm_mix = _clamp(_LS_HARM_MIX * intensity_scale, 0.0, 0.25)
 
-    low_lo = _clamp(float(_BK_LOW_LO_HZ), 20.0, 70.0)
-    low_hi = _clamp(float(_BK_LOW_HI_HZ), 80.0, 220.0)
-    if low_hi <= low_lo + 10:
-        low_hi = low_lo + 10
-    low_drive = _clamp(float(_BK_LOW_DRIVE_DB), 0.0, 8.0)
-    low_mix = _clamp(float(_BK_LOW_MIX) * intensity_scale, 0.0, 0.35)
+    body_f = _clamp(_LS_BODY_F, 120.0, 380.0)
+    body_g = _clamp(_LS_BODY_G * tone_body_mul, -1.0, 3.0)
+    body_w = _clamp(_LS_BODY_W, 0.2, 3.0)
+    body_mix = _clamp(_LS_BODY_MIX * intensity_scale, 0.0, 0.20)
 
-    body_f = _clamp(float(_BK_BODY_F), 120.0, 400.0)
-    body_g = _clamp(float(_BK_BODY_G) * tone_body_mul, -1.0, 3.0)
-    body_w = _clamp(float(_BK_BODY_W), 0.2, 3.0)
+    guard_f = _clamp(_LS_GUARD_F, 180.0, 450.0)
+    guard_g = _clamp(_LS_GUARD_G, -6.0, 0.0)
+    guard_w = _clamp(_LS_GUARD_W, 0.2, 3.0)
 
-    ubass_f = _clamp(float(_BK_UBASS_F), 80.0, 150.0)
-    ubass_g = _clamp(float(_BK_UBASS_G) * tone_ubass_mul, -1.0, 3.0)
-    ubass_w = _clamp(float(_BK_UBASS_W), 0.2, 3.0)
-    ubass_mix = _clamp(float(_BK_UBASS_MIX) * intensity_scale, 0.0, 0.30)
+    out_trim_db = _clamp(_LS_OUT_TRIM_DB, -18.0, 6.0)
 
-    mid_f = _clamp(float(_BK_MID_F), 700.0, 1800.0)
-    mid_g = _clamp(float(_BK_MID_G), -1.0, 3.0)
-    mid_w = _clamp(float(_BK_MID_W), 0.2, 3.0)
+    parts = ["[0:a]asplit=3[fnd][harm][body]"]
 
-    pres_f = _clamp(float(_BK_PRES_F), 1200.0, 4000.0)
-    pres_g = _clamp(float(_BK_PRES_G) * tone_pres_mul, -1.0, 2.0)
-    pres_w = _clamp(float(_BK_PRES_W), 0.2, 3.0)
+    if _LS_FOUND_ON and found_mix > 0.0:
+        parts.append(
+            f"[fnd]"
+            f"highpass=f={found_lo}:width=0.707,"
+            f"lowpass=f={found_hi}:width=0.707,"
+            f"acompressor=threshold={found_thr}dB:ratio={found_ratio}:attack={found_att}:release={found_rel}:knee=2dB:makeup=0dB:mix=1,"
+            f"volume={found_mix}[f1]"
+        )
+    else:
+        parts.append("[fnd]volume=0[f1]")
 
-    softtop_f = _clamp(float(_BK_SOFTTOP_F), 3500.0, 10000.0)
-    softtop_g = _clamp(float(_BK_SOFTTOP_G) * tone_softtop_mul, -4.0, 0.0)
+    if _LS_HARM_ON and harm_mix > 0.0:
+        parts.append(
+            f"[harm]"
+            f"{_os_softclip_chain(drive_db=harm_drive, hp=harm_hp, lp=harm_lp)},"
+            f"lowpass=f={max(harm_lp, 120.0)}:width=0.707,"
+            f"volume={harm_mix}[h1]"
+        )
+    else:
+        parts.append("[harm]volume=0[h1]")
 
-    tone_mix = _clamp(float(_BK_TONE_MIX) * intensity_scale, 0.0, 0.30)
-
-    ceiling_db = _clamp(float(_BK_LIMITER_CEILING_DB), -3.0, -0.3)
-    ceiling_lin = 10.0 ** (ceiling_db / 20.0)
-
-    tone_chain = []
-    if _BK_BODY_ON:
-        tone_chain.append(f"equalizer=f={body_f}:t=q:w={body_w}:g={body_g}")
-    if _BK_MID_ON:
-        tone_chain.append(f"equalizer=f={mid_f}:t=q:w={mid_w}:g={mid_g}")
-    if _BK_PRES_ON:
-        tone_chain.append(f"equalizer=f={pres_f}:t=q:w={pres_w}:g={pres_g}")
-    if _BK_SOFTTOP_ON:
-        tone_chain.append(f"highshelf=f={softtop_f}:g={softtop_g}")
-
-    tone_fc = ",".join(tone_chain) if tone_chain else "anull"
-
-    fc_parts = [
-        "[0:a]asplit=4[dry][low][tone][ub]",
-        "[dry]volume=1[d0]",
+    body_chain = [
+        f"highpass=f={max(found_hi - 20.0, 80.0)}:width=0.707",
+        f"lowpass=f={max(body_f + 130.0, 240.0)}:width=0.707",
+        f"equalizer=f={body_f}:t=q:w={body_w}:g={body_g}",
     ]
+    if _LS_GUARD_ON:
+        body_chain.append(f"equalizer=f={guard_f}:t=q:w={guard_w}:g={guard_g}")
+    body_chain.append(f"volume={body_mix}")
+    if _LS_MONO_ON:
+        body_chain.append("pan=stereo|c0=.5*c0+.5*c1|c1=.5*c0+.5*c1")
 
-    if _BK_LOW_ON and low_mix > 0.0:
-        fc_parts.append(
-            f"[low]"
-            f"highpass=f={low_lo}:width=0.707,"
-            f"lowpass=f={low_hi}:width=0.707,"
-            f"volume={low_drive}dB,"
-            f"asoftclip,"
-            f"volume={low_mix}[l1]"
-        )
+    if _LS_BODY_ON and body_mix > 0.0:
+        parts.append(f"[body]{','.join(body_chain)}[b1]")
     else:
-        fc_parts.append("[low]volume=0[l1]")
+        parts.append("[body]volume=0[b1]")
 
-    fc_parts.append(f"[tone]{tone_fc},volume={tone_mix}[t1]")
-
-    if _BK_UBASS_ON and ubass_mix > 0.0:
-        fc_parts.append(
-            f"[ub]equalizer=f={ubass_f}:t=q:w={ubass_w}:g={ubass_g},"
-            f"volume={ubass_mix}[u1]"
-        )
-    else:
-        fc_parts.append("[ub]volume=0[u1]")
-
-    fc_parts.append("[d0][l1][t1][u1]amix=inputs=4:normalize=0[m0]")
-
-    if _BK_LIMITER_ON:
-        fc_parts.append(f"[m0]alimiter=limit={ceiling_lin}:level=disabled[out]")
-    else:
-        fc_parts.append("[m0]anull[out]")
-
-    fc = ";".join(fc_parts)
-
-    out_args, out_name, _mime = _out_args(fmt)
-    out_name = f"bakuage_like_{out_name}"
-    out_path = os.path.join(td, out_name)
-
-    cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-filter_complex "{fc}" -map "[out]" '
-        f'{out_args} {shlex.quote(out_path)}'
-    )
-    _run(cmd)
-
-    return out_path, out_name
-
-# ---------------------------
-# OUR ENHANCE v1 — POLISH / GLUE / FINISH
-# ---------------------------
-_ENH_AIR_ON = (os.getenv("ENH_AIR_ON", "1").strip() == "1")
-_ENH_AIR_SHELF_F = float(os.getenv("ENH_AIR_SHELF_F", "9500"))
-_ENH_AIR_SHELF_G = float(os.getenv("ENH_AIR_SHELF_G", "1.8"))
-_ENH_AIR_MIX = float(os.getenv("ENH_AIR_MIX", "0.10"))
-
-_ENH_WIDTH_ON = (os.getenv("ENH_WIDTH_ON", "1").strip() == "1")
-_ENH_WIDTH_HP_HZ = float(os.getenv("ENH_WIDTH_HP_HZ", "3500"))
-_ENH_WIDTH_DELAY = int(float(os.getenv("ENH_WIDTH_DELAY", "14")))
-_ENH_WIDTH_MIX = float(os.getenv("ENH_WIDTH_MIX", "0.09"))
-
-_ENH_GLOSS_ON = (os.getenv("ENH_GLOSS_ON", "1").strip() == "1")
-_ENH_GLOSS_HP_HZ = float(os.getenv("ENH_GLOSS_HP_HZ", "7000"))
-_ENH_GLOSS_LP_HZ = float(os.getenv("ENH_GLOSS_LP_HZ", "16000"))
-_ENH_GLOSS_DRIVE_DB = float(os.getenv("ENH_GLOSS_DRIVE_DB", "4.0"))
-_ENH_GLOSS_MIX = float(os.getenv("ENH_GLOSS_MIX", "0.035"))
-
-_ENH_LIMITER_ON = (os.getenv("ENH_LIMITER_ON", "1").strip() == "1")
-_ENH_LIMITER_CEILING_DB = float(os.getenv("ENH_LIMITER_CEILING_DB", "-1.2"))
-
-def _render_enhance(in_path: str, fmt: str, td: str) -> tuple[str, str]:
-    fmt = _normalize_format(fmt)
-
-    air_f = _clamp(float(_ENH_AIR_SHELF_F), 5000.0, 16000.0)
-    air_g = _clamp(float(_ENH_AIR_SHELF_G), 0.0, 4.0)
-    air_mix = _clamp(float(_ENH_AIR_MIX), 0.0, 0.30)
-
-    width_hp = _clamp(float(_ENH_WIDTH_HP_HZ), 1500.0, 10000.0)
-    width_delay = int(max(1, min(100, int(_ENH_WIDTH_DELAY))))
-    width_mix = _clamp(float(_ENH_WIDTH_MIX), 0.0, 0.25)
-
-    gloss_hp = _clamp(float(_ENH_GLOSS_HP_HZ), 4000.0, 12000.0)
-    gloss_lp = _clamp(float(_ENH_GLOSS_LP_HZ), max(gloss_hp + 1000.0, 7000.0), 19000.0)
-    gloss_drive = _clamp(float(_ENH_GLOSS_DRIVE_DB), 0.0, 10.0)
-    gloss_mix = _clamp(float(_ENH_GLOSS_MIX), 0.0, 0.12)
-
-    ceiling_db = _clamp(float(_ENH_LIMITER_CEILING_DB), -3.0, -0.3)
-    ceiling_lin = 10.0 ** (ceiling_db / 20.0)
-
-    parts = ["[0:a]asplit=4[dry][air][wid][gls]"]
-    parts.append("[dry]volume=1[d0]")
-
-    if _ENH_AIR_ON and air_mix > 0.0:
-        parts.append(f"[air]highshelf=f={air_f}:g={air_g},volume={air_mix}[a1]")
-    else:
-        parts.append("[air]volume=0[a1]")
-
-    if _ENH_WIDTH_ON and width_mix > 0.0:
-        parts.append(
-            f"[wid]highpass=f={width_hp}:width=0.707,"
-            f"stereowiden=delay={width_delay},"
-            f"volume={width_mix}[w1]"
-        )
-    else:
-        parts.append("[wid]volume=0[w1]")
-
-    if _ENH_GLOSS_ON and gloss_mix > 0.0:
-        parts.append(
-            f"[gls]"
-            f"highpass=f={gloss_hp}:width=0.707,"
-            f"lowpass=f={gloss_lp}:width=0.707,"
-            f"volume={gloss_drive}dB,"
-            f"asoftclip,"
-            f"volume={gloss_mix}[g1]"
-        )
-    else:
-        parts.append("[gls]volume=0[g1]")
-
-    parts.append("[d0][a1][w1][g1]amix=inputs=4:normalize=0[m0]")
-
-    if _ENH_LIMITER_ON:
-        parts.append(f"[m0]alimiter=limit={ceiling_lin}:level=disabled[out]")
+    parts.append("[f1][h1][b1]amix=inputs=3:normalize=0[m0]")
+    if abs(out_trim_db) > 1e-9:
+        parts.append(f"[m0]volume={out_trim_db}dB[out]")
     else:
         parts.append("[m0]anull[out]")
 
     fc = ";".join(parts)
 
     out_args, out_name, _mime = _out_args(fmt)
-    out_name = f"enhance_{out_name}"
+    out_name = f"low_support_{out_name}"
     out_path = os.path.join(td, out_name)
 
     cmd = (
@@ -818,169 +526,408 @@ def _render_enhance(in_path: str, fmt: str, td: str) -> tuple[str, str]:
         f'{out_args} {shlex.quote(out_path)}'
     )
     _run(cmd)
-
     return out_path, out_name
 
+
 # ---------------------------
-# BLEND v6-style — ORIGINAL + LAYERS
+# REVEAL / PRESENCE / MID-AIR BRANCH
+# donor only, pre-limiter
 # ---------------------------
-_BLEND_BASE_GAIN = float(os.getenv("BLEND_BASE_GAIN", "1.0"))
 
-_BLEND_LOW_HI_HZ = float(os.getenv("BLEND_LOW_HI_HZ", "125"))
-_BLEND_LOW_GAIN_DB = float(os.getenv("BLEND_LOW_GAIN_DB", "-16"))
+_RV_CORE_ON = (os.getenv("RV_CORE_ON", "1").strip() == "1")
+_RV_LO_HZ = float(os.getenv("RV_LO_HZ", "550"))
+_RV_HI_HZ = float(os.getenv("RV_HI_HZ", "7000"))
+_RV_MID_F = float(os.getenv("RV_MID_F", "1200"))
+_RV_MID_G = float(os.getenv("RV_MID_G", "1.0"))
+_RV_MID_W = float(os.getenv("RV_MID_W", "0.9"))
+_RV_PRES_F = float(os.getenv("RV_PRES_F", "2300"))
+_RV_PRES_G = float(os.getenv("RV_PRES_G", "0.7"))
+_RV_PRES_W = float(os.getenv("RV_PRES_W", "1.0"))
+_RV_CORE_MIX = float(os.getenv("RV_CORE_MIX", "0.12"))
 
-_BLEND_REVEAL_LO_HZ = float(os.getenv("BLEND_REVEAL_LO_HZ", "500"))
-_BLEND_REVEAL_HI_HZ = float(os.getenv("BLEND_REVEAL_HI_HZ", "7000"))
-_BLEND_REVEAL_GAIN_DB = float(os.getenv("BLEND_REVEAL_GAIN_DB", "-15"))
+_RV_EXCITE_ON = (os.getenv("RV_EXCITE_ON", "1").strip() == "1")
+_RV_EXCITE_HP_HZ = float(os.getenv("RV_EXCITE_HP_HZ", "1800"))
+_RV_EXCITE_LP_HZ = float(os.getenv("RV_EXCITE_LP_HZ", "9000"))
+_RV_EXCITE_DRIVE_DB = float(os.getenv("RV_EXCITE_DRIVE_DB", "4.0"))
+_RV_EXCITE_MIX = float(os.getenv("RV_EXCITE_MIX", "0.05"))
 
-_BLEND_POLISH_GAIN_DB = float(os.getenv("BLEND_POLISH_GAIN_DB", "-20"))
+_RV_AIR_ON = (os.getenv("RV_AIR_ON", "1").strip() == "1")
+_RV_AIR_F = float(os.getenv("RV_AIR_F", "9000"))
+_RV_AIR_G = float(os.getenv("RV_AIR_G", "1.8"))
+_RV_AIR_MIX = float(os.getenv("RV_AIR_MIX", "0.08"))
 
-_BLEND_LIMITER_ON = (os.getenv("BLEND_LIMITER_ON", "1").strip() == "1")
-_BLEND_LIMITER_CEILING_DB = float(os.getenv("BLEND_LIMITER_CEILING_DB", "-1.0"))
+_RV_WIDTH_ON = (os.getenv("RV_WIDTH_ON", "1").strip() == "1")
+_RV_WIDTH_HP_HZ = float(os.getenv("RV_WIDTH_HP_HZ", "4500"))
+_RV_WIDTH_M = float(os.getenv("RV_WIDTH_M", "1.18"))
+_RV_WIDTH_MIX = float(os.getenv("RV_WIDTH_MIX", "0.08"))
 
-def _render_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+_RV_GUARD_ON = (os.getenv("RV_GUARD_ON", "1").strip() == "1")
+_RV_GUARD_F = float(os.getenv("RV_GUARD_F", "3500"))
+_RV_GUARD_G = float(os.getenv("RV_GUARD_G", "-0.8"))
+_RV_GUARD_W = float(os.getenv("RV_GUARD_W", "1.2"))
+_RV_SIB_F = float(os.getenv("RV_SIB_F", "7000"))
+_RV_SIB_G = float(os.getenv("RV_SIB_G", "-0.8"))
+_RV_SIB_W = float(os.getenv("RV_SIB_W", "1.4"))
+
+_RV_OUT_TRIM_DB = float(os.getenv("RV_OUT_TRIM_DB", "-1.5"))
+
+
+def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
     intensity = _normalize_intensity(intensity)
     fmt = _normalize_format(fmt)
 
-    bak_path, _ = _render_bakuage_like(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
-    bl_path, _ = _render_bandlab_like(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
-    enh_path, _ = _render_enhance(in_path, fmt="wav16", td=td)
+    intensity_scale = {
+        "low": 0.85,
+        "balanced": 1.00,
+        "high": 1.12,
+    }[intensity]
 
-    base_gain = _clamp(float(_BLEND_BASE_GAIN), 0.5, 1.5)
+    tone_air_mul = {
+        "warm": 0.85,
+        "balanced": 1.00,
+        "bright": 1.15,
+    }[tone]
 
-    low_hi = _clamp(float(_BLEND_LOW_HI_HZ), 80.0, 300.0)
+    tone_pres_mul = {
+        "warm": 0.88,
+        "balanced": 1.00,
+        "bright": 1.10,
+    }[tone]
 
-    reveal_lo = _clamp(float(_BLEND_REVEAL_LO_HZ), 250.0, 2000.0)
-    reveal_hi = _clamp(float(_BLEND_REVEAL_HI_HZ), 3000.0, 12000.0)
-    if reveal_hi <= reveal_lo + 100:
-        reveal_hi = reveal_lo + 100
+    lo_hz = _clamp(_RV_LO_HZ, 250.0, 2000.0)
+    hi_hz = _clamp(_RV_HI_HZ, 3000.0, 14000.0)
+    if hi_hz <= lo_hz + 200:
+        hi_hz = lo_hz + 200
 
-    low_gain_db = _clamp(float(_BLEND_LOW_GAIN_DB), -36.0, 0.0)
-    reveal_gain_db = _clamp(float(_BLEND_REVEAL_GAIN_DB), -36.0, 0.0)
-    polish_gain_db = _clamp(float(_BLEND_POLISH_GAIN_DB), -36.0, 0.0)
+    mid_f = _clamp(_RV_MID_F, 600.0, 2200.0)
+    mid_g = _clamp(_RV_MID_G, -2.0, 3.0)
+    mid_w = _clamp(_RV_MID_W, 0.2, 3.0)
 
-    ceiling_db = _clamp(float(_BLEND_LIMITER_CEILING_DB), -3.0, -0.3)
-    ceiling_lin = 10.0 ** (ceiling_db / 20.0)
+    pres_f = _clamp(_RV_PRES_F, 1200.0, 4500.0)
+    pres_g = _clamp(_RV_PRES_G * tone_pres_mul, -1.0, 3.0)
+    pres_w = _clamp(_RV_PRES_W, 0.2, 3.0)
 
-    fc_parts = [
-        f"[0:a]volume={base_gain}[base]",
-        f"[1:a]lowpass=f={low_hi}:width=0.707,volume={low_gain_db}dB[low]",
-        f"[2:a]highpass=f={reveal_lo}:width=0.707,lowpass=f={reveal_hi}:width=0.707,volume={reveal_gain_db}dB[reveal]",
-        f"[3:a]volume={polish_gain_db}dB[polish]",
-        "[base][low][reveal][polish]amix=inputs=4:normalize=0[m0]",
+    core_mix = _clamp(_RV_CORE_MIX * intensity_scale, 0.0, 0.25)
+
+    excite_hp = _clamp(_RV_EXCITE_HP_HZ, 1000.0, 6000.0)
+    excite_lp = _clamp(_RV_EXCITE_LP_HZ, 5000.0, 16000.0)
+    if excite_lp <= excite_hp + 1000:
+        excite_lp = excite_hp + 1000
+    excite_drive = _clamp(_RV_EXCITE_DRIVE_DB, 0.0, 12.0)
+    excite_mix = _clamp(_RV_EXCITE_MIX * intensity_scale, 0.0, 0.15)
+
+    air_f = _clamp(_RV_AIR_F, 6000.0, 16000.0)
+    air_g = _clamp(_RV_AIR_G * tone_air_mul, 0.0, 4.0)
+    air_mix = _clamp(_RV_AIR_MIX * intensity_scale, 0.0, 0.20)
+
+    width_hp = _clamp(_RV_WIDTH_HP_HZ, 2500.0, 12000.0)
+    width_m = _clamp(_RV_WIDTH_M, 1.0, 2.0)
+    width_mix = _clamp(_RV_WIDTH_MIX * intensity_scale, 0.0, 0.20)
+
+    guard_f = _clamp(_RV_GUARD_F, 2200.0, 6000.0)
+    guard_g = _clamp(_RV_GUARD_G, -4.0, 0.0)
+    guard_w = _clamp(_RV_GUARD_W, 0.2, 4.0)
+
+    sib_f = _clamp(_RV_SIB_F, 5000.0, 12000.0)
+    sib_g = _clamp(_RV_SIB_G, -4.0, 0.0)
+    sib_w = _clamp(_RV_SIB_W, 0.2, 4.0)
+
+    out_trim_db = _clamp(_RV_OUT_TRIM_DB, -18.0, 6.0)
+
+    parts = ["[0:a]asplit=4[core][exc][air][wid]"]
+
+    core_chain = [
+        f"highpass=f={lo_hz}:width=0.707",
+        f"lowpass=f={hi_hz}:width=0.707",
+        f"equalizer=f={mid_f}:t=q:w={mid_w}:g={mid_g}",
+        f"equalizer=f={pres_f}:t=q:w={pres_w}:g={pres_g}",
     ]
+    if _RV_GUARD_ON:
+        core_chain.append(f"equalizer=f={guard_f}:t=q:w={guard_w}:g={guard_g}")
+        core_chain.append(f"equalizer=f={sib_f}:t=q:w={sib_w}:g={sib_g}")
+    core_chain.append(f"volume={core_mix}")
 
-    if _BLEND_LIMITER_ON:
-        fc_parts.append(f"[m0]alimiter=limit={ceiling_lin}:level=disabled[out]")
+    if _RV_CORE_ON and core_mix > 0.0:
+        parts.append(f"[core]{','.join(core_chain)}[c1]")
     else:
-        fc_parts.append("[m0]anull[out]")
+        parts.append("[core]volume=0[c1]")
 
-    fc = ";".join(fc_parts)
+    if _RV_EXCITE_ON and excite_mix > 0.0:
+        exc_chain = _os_softclip_chain(
+            drive_db=excite_drive,
+            hp=excite_hp,
+            lp=excite_lp,
+            post_gain_db=0.0,
+        )
+        if _RV_GUARD_ON:
+            exc_chain = exc_chain + f",equalizer=f={guard_f}:t=q:w={guard_w}:g={guard_g},equalizer=f={sib_f}:t=q:w={sib_w}:g={sib_g}"
+        exc_chain = exc_chain + f",volume={excite_mix}"
+        parts.append(f"[exc]{exc_chain}[e1]")
+    else:
+        parts.append("[exc]volume=0[e1]")
+
+    if _RV_AIR_ON and air_mix > 0.0:
+        parts.append(
+            f"[air]"
+            f"highpass=f={max(air_f * 0.6, 4500.0)}:width=0.707,"
+            f"highshelf=f={air_f}:g={air_g},"
+            f"volume={air_mix}[a1]"
+        )
+    else:
+        parts.append("[air]volume=0[a1]")
+
+    if _RV_WIDTH_ON and width_mix > 0.0:
+        parts.append(
+            f"[wid]"
+            f"highpass=f={width_hp}:width=0.707,"
+            f"extrastereo=m={width_m},"
+            f"highpass=f={width_hp}:width=0.707,"
+            f"volume={width_mix}[w1]"
+        )
+    else:
+        parts.append("[wid]volume=0[w1]")
+
+    parts.append("[c1][e1][a1][w1]amix=inputs=4:normalize=0[m0]")
+    if abs(out_trim_db) > 1e-9:
+        parts.append(f"[m0]volume={out_trim_db}dB[out]")
+    else:
+        parts.append("[m0]anull[out]")
+
+    fc = ";".join(parts)
 
     out_args, out_name, _mime = _out_args(fmt)
-    out_name = f"blend_{out_name}"
+    out_name = f"reveal_{out_name}"
     out_path = os.path.join(td, out_name)
 
     cmd = (
-        f'ffmpeg -y -hide_banner '
-        f'-i {shlex.quote(in_path)} '
-        f'-i {shlex.quote(bak_path)} '
-        f'-i {shlex.quote(bl_path)} '
-        f'-i {shlex.quote(enh_path)} '
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
         f'-filter_complex "{fc}" -map "[out]" '
         f'{out_args} {shlex.quote(out_path)}'
     )
     _run(cmd)
-
     return out_path, out_name
 
-def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
-    lm = _lowmid_filter()
 
-    glue = "anull"
-    if _kicksafe_glue_enabled():
-        glue = "anull"
+# ---------------------------
+# POLISH / ENHANCE BRANCH
+# donor only, pre-limiter
+# ---------------------------
+
+_PL_GLUE_ON = (os.getenv("PL_GLUE_ON", "1").strip() == "1")
+_PL_GLUE_RATIO = float(os.getenv("PL_GLUE_RATIO", "1.22"))
+_PL_GLUE_THRESHOLD_DB = float(os.getenv("PL_GLUE_THRESHOLD_DB", "-19"))
+_PL_GLUE_ATTACK_MS = float(os.getenv("PL_GLUE_ATTACK_MS", "12"))
+_PL_GLUE_RELEASE_MS = float(os.getenv("PL_GLUE_RELEASE_MS", "140"))
+_PL_GLUE_MIX = float(os.getenv("PL_GLUE_MIX", "0.10"))
+
+_PL_AIR_ON = (os.getenv("PL_AIR_ON", "1").strip() == "1")
+_PL_AIR_F = float(os.getenv("PL_AIR_F", "9500"))
+_PL_AIR_G = float(os.getenv("PL_AIR_G", "1.4"))
+_PL_AIR_MIX = float(os.getenv("PL_AIR_MIX", "0.06"))
+
+_PL_GLOSS_ON = (os.getenv("PL_GLOSS_ON", "1").strip() == "1")
+_PL_GLOSS_HP_HZ = float(os.getenv("PL_GLOSS_HP_HZ", "6500"))
+_PL_GLOSS_LP_HZ = float(os.getenv("PL_GLOSS_LP_HZ", "15500"))
+_PL_GLOSS_DRIVE_DB = float(os.getenv("PL_GLOSS_DRIVE_DB", "3.5"))
+_PL_GLOSS_MIX = float(os.getenv("PL_GLOSS_MIX", "0.03"))
+
+_PL_WIDTH_ON = (os.getenv("PL_WIDTH_ON", "1").strip() == "1")
+_PL_WIDTH_HP_HZ = float(os.getenv("PL_WIDTH_HP_HZ", "4200"))
+_PL_WIDTH_M = float(os.getenv("PL_WIDTH_M", "1.10"))
+_PL_WIDTH_MIX = float(os.getenv("PL_WIDTH_MIX", "0.05"))
+
+_PL_OUT_TRIM_DB = float(os.getenv("PL_OUT_TRIM_DB", "-1.5"))
+
+
+def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    intensity_scale = {
+        "low": 0.85,
+        "balanced": 1.00,
+        "high": 1.10,
+    }[intensity]
+
+    tone_air_mul = {
+        "warm": 0.88,
+        "balanced": 1.00,
+        "bright": 1.12,
+    }[tone]
+
+    glue_ratio = _clamp(_PL_GLUE_RATIO, 1.0, 2.0)
+    glue_thr = _clamp(_PL_GLUE_THRESHOLD_DB, -60.0, 0.0)
+    glue_att = _clamp(_PL_GLUE_ATTACK_MS, 1.0, 200.0)
+    glue_rel = _clamp(_PL_GLUE_RELEASE_MS, 20.0, 2000.0)
+    glue_mix = _clamp(_PL_GLUE_MIX * intensity_scale, 0.0, 0.30)
+
+    air_f = _clamp(_PL_AIR_F, 6000.0, 16000.0)
+    air_g = _clamp(_PL_AIR_G * tone_air_mul, 0.0, 4.0)
+    air_mix = _clamp(_PL_AIR_MIX * intensity_scale, 0.0, 0.20)
+
+    gloss_hp = _clamp(_PL_GLOSS_HP_HZ, 3500.0, 12000.0)
+    gloss_lp = _clamp(_PL_GLOSS_LP_HZ, 7000.0, 19000.0)
+    if gloss_lp <= gloss_hp + 1000:
+        gloss_lp = gloss_hp + 1000
+    gloss_drive = _clamp(_PL_GLOSS_DRIVE_DB, 0.0, 10.0)
+    gloss_mix = _clamp(_PL_GLOSS_MIX * intensity_scale, 0.0, 0.10)
+
+    width_hp = _clamp(_PL_WIDTH_HP_HZ, 2500.0, 12000.0)
+    width_m = _clamp(_PL_WIDTH_M, 1.0, 1.8)
+    width_mix = _clamp(_PL_WIDTH_MIX * intensity_scale, 0.0, 0.15)
+
+    out_trim_db = _clamp(_PL_OUT_TRIM_DB, -18.0, 6.0)
+
+    parts = ["[0:a]asplit=4[gl][air][gls][wid]"]
+
+    if _PL_GLUE_ON and glue_mix > 0.0:
+        parts.append(
+            f"[gl]"
+            f"acompressor=threshold={glue_thr}dB:ratio={glue_ratio}:attack={glue_att}:release={glue_rel}:knee=2dB:makeup=0dB:mix=1,"
+            f"volume={glue_mix}[g0]"
+        )
     else:
-        glue = _glue_filter()
+        parts.append("[gl]volume=0[g0]")
 
-    tr = _transient_filter()
+    if _PL_AIR_ON and air_mix > 0.0:
+        parts.append(
+            f"[air]"
+            f"highpass=f={max(air_f * 0.55, 4500.0)}:width=0.707,"
+            f"highshelf=f={air_f}:g={air_g},"
+            f"volume={air_mix}[a0]"
+        )
+    else:
+        parts.append("[air]volume=0[a0]")
+
+    if _PL_GLOSS_ON and gloss_mix > 0.0:
+        gloss_chain = _os_softclip_chain(
+            drive_db=gloss_drive,
+            hp=gloss_hp,
+            lp=gloss_lp,
+            post_gain_db=0.0,
+        )
+        parts.append(f"[gls]{gloss_chain},volume={gloss_mix}[s0]")
+    else:
+        parts.append("[gls]volume=0[s0]")
+
+    if _PL_WIDTH_ON and width_mix > 0.0:
+        parts.append(
+            f"[wid]"
+            f"highpass=f={width_hp}:width=0.707,"
+            f"extrastereo=m={width_m},"
+            f"highpass=f={width_hp}:width=0.707,"
+            f"volume={width_mix}[w0]"
+        )
+    else:
+        parts.append("[wid]volume=0[w0]")
+
+    parts.append("[g0][a0][s0][w0]amix=inputs=4:normalize=0[m0]")
+    if abs(out_trim_db) > 1e-9:
+        parts.append(f"[m0]volume={out_trim_db}dB[out]")
+    else:
+        parts.append("[m0]anull[out]")
+
+    fc = ";".join(parts)
+
+    out_args, out_name, _mime = _out_args(fmt)
+    out_name = f"polish_{out_name}"
+    out_path = os.path.join(td, out_name)
 
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-af "{_PRE_CLEAN_CHAIN},{lm},{glue},{tr},{chain_no_ln}" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'{out_args} {shlex.quote(out_path)}'
     )
     _run(cmd)
+    return out_path, out_name
 
-def _apply_kicksafe_glue_if_needed(base_path: str, out_path: str):
-    if not _kicksafe_glue_enabled():
-        cmd = (
-            f'ffmpeg -y -hide_banner -i {shlex.quote(base_path)} '
-            f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
+
+# wrappers to preserve route names
+def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    return _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+
+
+def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    return _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+
+
+def _render_enhance(in_path: str, fmt: str, td: str, tone: str = "balanced", intensity: str = "balanced") -> tuple[str, str]:
+    return _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+
+
+# ---------------------------
+# FINAL BLEND + POST
+# ---------------------------
+
+_BLEND_BASE_GAIN = float(os.getenv("BLEND_BASE_GAIN", "1.0"))
+_BLEND_LOW_GAIN_DB = float(os.getenv("BLEND_LOW_GAIN_DB", "-13.0"))
+_BLEND_REVEAL_GAIN_DB = float(os.getenv("BLEND_REVEAL_GAIN_DB", "-15.0"))
+_BLEND_POLISH_GAIN_DB = float(os.getenv("BLEND_POLISH_GAIN_DB", "-18.0"))
+
+_PREPOST_CLIP_ON = (os.getenv("PREPOST_CLIP_ON", "1").strip() == "1")
+_PREPOST_CLIP_DRIVE_DB = float(os.getenv("PREPOST_CLIP_DRIVE_DB", "1.0"))
+_PREPOST_CLIP_POST_GAIN_DB = float(os.getenv("PREPOST_CLIP_POST_GAIN_DB", "-1.0"))
+
+_BLEND_POST_I = float(os.getenv("BLEND_POST_I", "-10.8"))
+_BLEND_POST_TP = float(os.getenv("BLEND_POST_TP", "-1.0"))
+_BLEND_POST_LRA = float(os.getenv("BLEND_POST_LRA", "7.0"))
+
+
+def _render_final_blend(base_src: str, low_src: str, reveal_src: str, polish_src: str, out_path: str):
+    base_gain = _clamp(_BLEND_BASE_GAIN, 0.5, 1.5)
+    low_gain_db = _clamp(_BLEND_LOW_GAIN_DB, -36.0, 6.0)
+    reveal_gain_db = _clamp(_BLEND_REVEAL_GAIN_DB, -36.0, 6.0)
+    polish_gain_db = _clamp(_BLEND_POLISH_GAIN_DB, -36.0, 6.0)
+
+    parts = [
+        f"[0:a]volume={base_gain}[base]",
+        f"[1:a]volume={low_gain_db}dB[low]",
+        f"[2:a]volume={reveal_gain_db}dB[reveal]",
+        f"[3:a]volume={polish_gain_db}dB[polish]",
+        "[base][low][reveal][polish]amix=inputs=4:normalize=0[m0]",
+    ]
+
+    if _PREPOST_CLIP_ON:
+        parts.append(
+            f"[m0]{_os_softclip_chain(drive_db=_PREPOST_CLIP_DRIVE_DB, hp=None, lp=None, post_gain_db=_PREPOST_CLIP_POST_GAIN_DB)}[out]"
         )
-        _run(cmd)
-        return
+    else:
+        parts.append("[m0]anull[out]")
 
-    fc = _kicksafe_glue_fc()
+    fc = ";".join(parts)
     cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(base_path)} '
-        f'-filter_complex "{fc}" -map "[aout]" '
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(base_src)} '
+        f'-i {shlex.quote(low_src)} '
+        f'-i {shlex.quote(reveal_src)} '
+        f'-i {shlex.quote(polish_src)} '
+        f'-filter_complex "{fc}" -map "[out]" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
 
-def _apply_harmonics_if_needed(in_path: str, out_path: str):
-    if not _harm_enabled():
-        cmd = (
-            f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-            f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
-        )
-        _run(cmd)
-        return
 
-    fc = _harm_fc()
-    cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-filter_complex "{fc}" -map "[aout]" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
-    )
-    _run(cmd)
+def _render_post_stage(in_path: str, fmt: str, td: str, loudnorm_params: dict | None = None) -> tuple[str, str]:
+    fmt = _normalize_format(fmt)
+    out_args, out_name, _mime = _out_args(fmt)
+    out_path = os.path.join(td, out_name)
 
-def _apply_subdensity_if_needed(in_path: str, out_path: str):
-    if not _subden_enabled():
-        cmd = (
-            f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-            f'-c:a pcm_s16le -ar 48000 -ac 2 {shlex.quote(out_path)}'
-        )
-        _run(cmd)
-        return
+    if loudnorm_params is None:
+        loudnorm_params = {
+            "I": _BLEND_POST_I,
+            "TP": _BLEND_POST_TP,
+            "LRA": _BLEND_POST_LRA,
+        }
 
-    fc = _subden_fc()
-    cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-filter_complex "{fc}" -map "[aout]" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
-    )
-    _run(cmd)
+    _build_loudnorm_two_pass(in_path, loudnorm_params, out_args, out_path)
+    return out_path, out_name
 
-def _apply_air_bus(base_path: str, mask_expr: str, out_path: str):
-    air_gain_expr = f"(({mask_expr})*{_AIR_AMOUNT:.6f})"
-    fc = (
-        f"[0:a]asplit=2[dry][air];"
-        f"[dry]volume=1[d0];"
-        f"[air]"
-        f"highshelf=f={_AIR_SHELF_F}:g={_AIR_SHELF_G},"
-        f"{_stereowiden_filter()},"
-        f"volume='{air_gain_expr}':eval=frame[a1];"
-        f"[d0][a1]amix=inputs=2:normalize=0[aout]"
-    )
-    cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(base_path)} '
-        f'-filter_complex "{fc}" -map "[aout]" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
-    )
-    _run(cmd)
+
+# ---------------------------
+# MASTER / BLEND RENDERS
+# ---------------------------
 
 def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     sec = analyze_sections(in_path, target_sr=48000)
@@ -1003,29 +950,51 @@ def _render_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -
     base_no_ln, _ = _strip_loudnorm(base_chain)
 
     base_wav = os.path.join(td, "base.wav")
-    glued_wav = os.path.join(td, "glued.wav")
-    harm_wav = os.path.join(td, "harm.wav")
-    subden_wav = os.path.join(td, "subden.wav")
-    air_wav = os.path.join(td, "air.wav")
-    bassbus_wav = os.path.join(td, "bassbus.wav")
-    finalmix_wav = os.path.join(td, "finalmix.wav")
+    low_wav = os.path.join(td, "low.wav")
+    reveal_wav = os.path.join(td, "reveal.wav")
+    polish_wav = os.path.join(td, "polish.wav")
+    premix_wav = os.path.join(td, "premix.wav")
 
     _render_base_no_loudnorm(in_path, base_no_ln, base_wav)
-    _apply_kicksafe_glue_if_needed(base_wav, glued_wav)
-    _apply_harmonics_if_needed(glued_wav, harm_wav)
-    _apply_subdensity_if_needed(harm_wav, subden_wav)
+    low_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    reveal_wav, _ = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
 
-    mask_expr = _build_mask_expr_from_sections(sections)
-    _apply_air_bus(subden_wav, mask_expr, air_wav)
-
-    _render_bass_bus(in_path, bassbus_wav)
-    _apply_bass_blend_if_needed(air_wav, bassbus_wav, finalmix_wav)
-
-    out_args, out_name, _mime = _out_args(fmt)
-    out_path = os.path.join(td, out_name)
-    _build_loudnorm_two_pass(finalmix_wav, base_params["loudnorm"], out_args, out_path)
+    _render_final_blend(base_wav, low_wav, reveal_wav, polish_wav, premix_wav)
+    out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=base_params["loudnorm"])
 
     return out_path, out_name
+
+
+def _render_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    base_wav = os.path.join(td, "base_original.wav")
+    low_wav = os.path.join(td, "low.wav")
+    reveal_wav = os.path.join(td, "reveal.wav")
+    polish_wav = os.path.join(td, "polish.wav")
+    premix_wav = os.path.join(td, "premix.wav")
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-af "{_PRE_CLEAN_CHAIN}" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(base_wav)}'
+    )
+    _run(cmd)
+
+    low_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    reveal_wav, _ = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+
+    _render_final_blend(base_wav, low_wav, reveal_wav, polish_wav, premix_wav)
+    out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
+
+    blend_name = f"blend_{out_name}"
+    blend_path = os.path.join(td, blend_name)
+    os.replace(out_path, blend_path)
+    return blend_path, blend_name
+
 
 # --- routes ---
 
@@ -1047,6 +1016,7 @@ def root():
         ]
     })
 
+
 @app.get("/health")
 def health():
     return jsonify({
@@ -1054,141 +1024,80 @@ def health():
 
         "ENABLE_AFFTDN": os.getenv("ENABLE_AFFTDN"),
 
-        "LOWMID_ON": os.getenv("LOWMID_ON"),
-        "LOWMID_F": os.getenv("LOWMID_F"),
-        "LOWMID_W": os.getenv("LOWMID_W"),
-        "LOWMID_G": os.getenv("LOWMID_G"),
+        "BASE_LOWMID_ON": os.getenv("BASE_LOWMID_ON"),
+        "BASE_LOWMID_F": os.getenv("BASE_LOWMID_F"),
+        "BASE_LOWMID_W": os.getenv("BASE_LOWMID_W"),
+        "BASE_LOWMID_G": os.getenv("BASE_LOWMID_G"),
 
         "GLUE_ON": os.getenv("GLUE_ON"),
         "GLUE_RATIO": os.getenv("GLUE_RATIO"),
         "GLUE_THRESHOLD_DB": os.getenv("GLUE_THRESHOLD_DB"),
         "GLUE_ATTACK_MS": os.getenv("GLUE_ATTACK_MS"),
         "GLUE_RELEASE_MS": os.getenv("GLUE_RELEASE_MS"),
-        "GLUE_KNEE_DB": os.getenv("GLUE_KNEE_DB"),
-        "GLUE_MAKEUP_DB": os.getenv("GLUE_MAKEUP_DB"),
         "GLUE_MIX": os.getenv("GLUE_MIX"),
 
-        "KICKSAFE_GLUE_ON": os.getenv("KICKSAFE_GLUE_ON"),
-        "KICKSAFE_XOVER_HZ": os.getenv("KICKSAFE_XOVER_HZ"),
-        "KICKSAFE_RATIO": os.getenv("KICKSAFE_RATIO"),
-        "KICKSAFE_THRESHOLD_DB": os.getenv("KICKSAFE_THRESHOLD_DB"),
-        "KICKSAFE_ATTACK_MS": os.getenv("KICKSAFE_ATTACK_MS"),
-        "KICKSAFE_RELEASE_MS": os.getenv("KICKSAFE_RELEASE_MS"),
-        "KICKSAFE_KNEE_DB": os.getenv("KICKSAFE_KNEE_DB"),
-        "KICKSAFE_MAKEUP_DB": os.getenv("KICKSAFE_MAKEUP_DB"),
-        "KICKSAFE_MIX": os.getenv("KICKSAFE_MIX"),
-
         "TRANSIENT_ON": os.getenv("TRANSIENT_ON"),
-        "TRANSIENT_RATIO": os.getenv("TRANSIENT_RATIO"),
-        "TRANSIENT_THRESHOLD_DB": os.getenv("TRANSIENT_THRESHOLD_DB"),
-        "TRANSIENT_ATTACK_MS": os.getenv("TRANSIENT_ATTACK_MS"),
-        "TRANSIENT_RELEASE_MS": os.getenv("TRANSIENT_RELEASE_MS"),
-        "TRANSIENT_KNEE_DB": os.getenv("TRANSIENT_KNEE_DB"),
-        "TRANSIENT_MAKEUP_DB": os.getenv("TRANSIENT_MAKEUP_DB"),
-        "TRANSIENT_MIX": os.getenv("TRANSIENT_MIX"),
 
-        "HARM_ON": os.getenv("HARM_ON"),
-        "HARM_HP_HZ": os.getenv("HARM_HP_HZ"),
-        "HARM_LP_HZ": os.getenv("HARM_LP_HZ"),
-        "HARM_DRIVE_DB": os.getenv("HARM_DRIVE_DB"),
-        "HARM_MIX": os.getenv("HARM_MIX"),
+        "LS_FOUND_ON": os.getenv("LS_FOUND_ON"),
+        "LS_FOUND_LO_HZ": os.getenv("LS_FOUND_LO_HZ"),
+        "LS_FOUND_HI_HZ": os.getenv("LS_FOUND_HI_HZ"),
+        "LS_FOUND_MIX": os.getenv("LS_FOUND_MIX"),
+        "LS_HARM_ON": os.getenv("LS_HARM_ON"),
+        "LS_HARM_DRIVE_DB": os.getenv("LS_HARM_DRIVE_DB"),
+        "LS_HARM_MIX": os.getenv("LS_HARM_MIX"),
+        "LS_BODY_ON": os.getenv("LS_BODY_ON"),
+        "LS_BODY_F": os.getenv("LS_BODY_F"),
+        "LS_BODY_G": os.getenv("LS_BODY_G"),
+        "LS_BODY_MIX": os.getenv("LS_BODY_MIX"),
+        "LS_GUARD_ON": os.getenv("LS_GUARD_ON"),
+        "LS_GUARD_F": os.getenv("LS_GUARD_F"),
+        "LS_GUARD_G": os.getenv("LS_GUARD_G"),
+        "LS_MONO_ON": os.getenv("LS_MONO_ON"),
 
-        "SUBDEN_ON": os.getenv("SUBDEN_ON"),
-        "SUBDEN_LO_HZ": os.getenv("SUBDEN_LO_HZ"),
-        "SUBDEN_HI_HZ": os.getenv("SUBDEN_HI_HZ"),
-        "SUBDEN_DRIVE_DB": os.getenv("SUBDEN_DRIVE_DB"),
-        "SUBDEN_MIX": os.getenv("SUBDEN_MIX"),
+        "RV_CORE_ON": os.getenv("RV_CORE_ON"),
+        "RV_LO_HZ": os.getenv("RV_LO_HZ"),
+        "RV_HI_HZ": os.getenv("RV_HI_HZ"),
+        "RV_MID_F": os.getenv("RV_MID_F"),
+        "RV_MID_G": os.getenv("RV_MID_G"),
+        "RV_PRES_F": os.getenv("RV_PRES_F"),
+        "RV_PRES_G": os.getenv("RV_PRES_G"),
+        "RV_EXCITE_ON": os.getenv("RV_EXCITE_ON"),
+        "RV_EXCITE_DRIVE_DB": os.getenv("RV_EXCITE_DRIVE_DB"),
+        "RV_AIR_ON": os.getenv("RV_AIR_ON"),
+        "RV_AIR_F": os.getenv("RV_AIR_F"),
+        "RV_AIR_G": os.getenv("RV_AIR_G"),
+        "RV_WIDTH_ON": os.getenv("RV_WIDTH_ON"),
+        "RV_WIDTH_HP_HZ": os.getenv("RV_WIDTH_HP_HZ"),
+        "RV_WIDTH_M": os.getenv("RV_WIDTH_M"),
+        "RV_GUARD_ON": os.getenv("RV_GUARD_ON"),
 
-        "BASS_BLEND_ON": os.getenv("BASS_BLEND_ON"),
-        "BASS_BLEND_LO_HZ": os.getenv("BASS_BLEND_LO_HZ"),
-        "BASS_BLEND_HI_HZ": os.getenv("BASS_BLEND_HI_HZ"),
-        "BASS_BLEND_MIX": os.getenv("BASS_BLEND_MIX"),
-        "BASS_BLEND_GAIN_DB": os.getenv("BASS_BLEND_GAIN_DB"),
-
-        "BL_MID_ON": os.getenv("BL_MID_ON"),
-        "BL_MID_F": os.getenv("BL_MID_F"),
-        "BL_MID_G": os.getenv("BL_MID_G"),
-        "BL_MID_W": os.getenv("BL_MID_W"),
-
-        "BL_PRES_ON": os.getenv("BL_PRES_ON"),
-        "BL_PRES_F": os.getenv("BL_PRES_F"),
-        "BL_PRES_G": os.getenv("BL_PRES_G"),
-        "BL_PRES_W": os.getenv("BL_PRES_W"),
-
-        "BL_AIR_ON": os.getenv("BL_AIR_ON"),
-        "BL_AIR_SHELF_F": os.getenv("BL_AIR_SHELF_F"),
-        "BL_AIR_SHELF_G": os.getenv("BL_AIR_SHELF_G"),
-        "BL_AIR_MIX": os.getenv("BL_AIR_MIX"),
-
-        "BL_WIDTH_ON": os.getenv("BL_WIDTH_ON"),
-        "BL_WIDTH_HP_HZ": os.getenv("BL_WIDTH_HP_HZ"),
-        "BL_WIDTH_DELAY": os.getenv("BL_WIDTH_DELAY"),
-        "BL_WIDTH_MIX": os.getenv("BL_WIDTH_MIX"),
-
-        "BK_LOW_ON": os.getenv("BK_LOW_ON"),
-        "BK_LOW_LO_HZ": os.getenv("BK_LOW_LO_HZ"),
-        "BK_LOW_HI_HZ": os.getenv("BK_LOW_HI_HZ"),
-        "BK_LOW_DRIVE_DB": os.getenv("BK_LOW_DRIVE_DB"),
-        "BK_LOW_MIX": os.getenv("BK_LOW_MIX"),
-
-        "BK_BODY_ON": os.getenv("BK_BODY_ON"),
-        "BK_BODY_F": os.getenv("BK_BODY_F"),
-        "BK_BODY_G": os.getenv("BK_BODY_G"),
-        "BK_BODY_W": os.getenv("BK_BODY_W"),
-
-        "BK_UBASS_ON": os.getenv("BK_UBASS_ON"),
-        "BK_UBASS_F": os.getenv("BK_UBASS_F"),
-        "BK_UBASS_G": os.getenv("BK_UBASS_G"),
-        "BK_UBASS_W": os.getenv("BK_UBASS_W"),
-        "BK_UBASS_MIX": os.getenv("BK_UBASS_MIX"),
-
-        "BK_MID_ON": os.getenv("BK_MID_ON"),
-        "BK_MID_F": os.getenv("BK_MID_F"),
-        "BK_MID_G": os.getenv("BK_MID_G"),
-        "BK_MID_W": os.getenv("BK_MID_W"),
-
-        "BK_PRES_ON": os.getenv("BK_PRES_ON"),
-        "BK_PRES_F": os.getenv("BK_PRES_F"),
-        "BK_PRES_G": os.getenv("BK_PRES_G"),
-        "BK_PRES_W": os.getenv("BK_PRES_W"),
-
-        "BK_SOFTTOP_ON": os.getenv("BK_SOFTTOP_ON"),
-        "BK_SOFTTOP_F": os.getenv("BK_SOFTTOP_F"),
-        "BK_SOFTTOP_G": os.getenv("BK_SOFTTOP_G"),
-
-        "BK_TONE_MIX": os.getenv("BK_TONE_MIX"),
-        "BK_LIMITER_ON": os.getenv("BK_LIMITER_ON"),
-        "BK_LIMITER_CEILING_DB": os.getenv("BK_LIMITER_CEILING_DB"),
-
-        "ENH_AIR_ON": os.getenv("ENH_AIR_ON"),
-        "ENH_AIR_SHELF_F": os.getenv("ENH_AIR_SHELF_F"),
-        "ENH_AIR_SHELF_G": os.getenv("ENH_AIR_SHELF_G"),
-        "ENH_AIR_MIX": os.getenv("ENH_AIR_MIX"),
-
-        "ENH_WIDTH_ON": os.getenv("ENH_WIDTH_ON"),
-        "ENH_WIDTH_HP_HZ": os.getenv("ENH_WIDTH_HP_HZ"),
-        "ENH_WIDTH_DELAY": os.getenv("ENH_WIDTH_DELAY"),
-        "ENH_WIDTH_MIX": os.getenv("ENH_WIDTH_MIX"),
-
-        "ENH_GLOSS_ON": os.getenv("ENH_GLOSS_ON"),
-        "ENH_GLOSS_HP_HZ": os.getenv("ENH_GLOSS_HP_HZ"),
-        "ENH_GLOSS_LP_HZ": os.getenv("ENH_GLOSS_LP_HZ"),
-        "ENH_GLOSS_DRIVE_DB": os.getenv("ENH_GLOSS_DRIVE_DB"),
-        "ENH_GLOSS_MIX": os.getenv("ENH_GLOSS_MIX"),
-
-        "ENH_LIMITER_ON": os.getenv("ENH_LIMITER_ON"),
-        "ENH_LIMITER_CEILING_DB": os.getenv("ENH_LIMITER_CEILING_DB"),
+        "PL_GLUE_ON": os.getenv("PL_GLUE_ON"),
+        "PL_GLUE_RATIO": os.getenv("PL_GLUE_RATIO"),
+        "PL_GLUE_THRESHOLD_DB": os.getenv("PL_GLUE_THRESHOLD_DB"),
+        "PL_GLUE_MIX": os.getenv("PL_GLUE_MIX"),
+        "PL_AIR_ON": os.getenv("PL_AIR_ON"),
+        "PL_AIR_F": os.getenv("PL_AIR_F"),
+        "PL_AIR_G": os.getenv("PL_AIR_G"),
+        "PL_GLOSS_ON": os.getenv("PL_GLOSS_ON"),
+        "PL_GLOSS_HP_HZ": os.getenv("PL_GLOSS_HP_HZ"),
+        "PL_GLOSS_LP_HZ": os.getenv("PL_GLOSS_LP_HZ"),
+        "PL_GLOSS_DRIVE_DB": os.getenv("PL_GLOSS_DRIVE_DB"),
+        "PL_WIDTH_ON": os.getenv("PL_WIDTH_ON"),
+        "PL_WIDTH_HP_HZ": os.getenv("PL_WIDTH_HP_HZ"),
 
         "BLEND_BASE_GAIN": os.getenv("BLEND_BASE_GAIN"),
-        "BLEND_LOW_HI_HZ": os.getenv("BLEND_LOW_HI_HZ"),
         "BLEND_LOW_GAIN_DB": os.getenv("BLEND_LOW_GAIN_DB"),
-        "BLEND_REVEAL_LO_HZ": os.getenv("BLEND_REVEAL_LO_HZ"),
-        "BLEND_REVEAL_HI_HZ": os.getenv("BLEND_REVEAL_HI_HZ"),
         "BLEND_REVEAL_GAIN_DB": os.getenv("BLEND_REVEAL_GAIN_DB"),
         "BLEND_POLISH_GAIN_DB": os.getenv("BLEND_POLISH_GAIN_DB"),
-        "BLEND_LIMITER_ON": os.getenv("BLEND_LIMITER_ON"),
-        "BLEND_LIMITER_CEILING_DB": os.getenv("BLEND_LIMITER_CEILING_DB"),
+        "PREPOST_CLIP_ON": os.getenv("PREPOST_CLIP_ON"),
+        "PREPOST_CLIP_DRIVE_DB": os.getenv("PREPOST_CLIP_DRIVE_DB"),
+        "PREPOST_CLIP_POST_GAIN_DB": os.getenv("PREPOST_CLIP_POST_GAIN_DB"),
+
+        "BLEND_POST_I": os.getenv("BLEND_POST_I"),
+        "BLEND_POST_TP": os.getenv("BLEND_POST_TP"),
+        "BLEND_POST_LRA": os.getenv("BLEND_POST_LRA"),
     })
+
 
 @app.get("/analyze")
 def analyze():
@@ -1220,6 +1129,7 @@ def analyze():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.get("/analyze_sections")
 def analyze_sections_route():
     url = request.args.get("file")
@@ -1236,6 +1146,7 @@ def analyze_sections_route():
             return jsonify({"result": result, "debug": dbg})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.get("/compare_sections")
 def compare_sections_route():
@@ -1269,6 +1180,7 @@ def compare_sections_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.get("/master")
 def master_route():
     url = request.args.get("file")
@@ -1297,6 +1209,7 @@ def master_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.get("/bandlab")
 def bandlab_route():
     url = request.args.get("file")
@@ -1313,7 +1226,7 @@ def bandlab_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_bandlab_like(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            out_path, out_name = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
             return send_file(
@@ -1324,6 +1237,7 @@ def bandlab_route():
             )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.get("/bakuage")
 def bakuage_route():
@@ -1341,7 +1255,7 @@ def bakuage_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_bakuage_like(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            out_path, out_name = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
             return send_file(
@@ -1353,12 +1267,15 @@ def bakuage_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.get("/enhance")
 def enhance_route():
     url = request.args.get("file")
     if not url:
         return jsonify({"error": "provide ?file=<url>"}), 400
 
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
     fmt = _normalize_format(request.args.get("format") or "wav16")
 
     if is_gdrive(url):
@@ -1367,7 +1284,7 @@ def enhance_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_enhance(in_path, fmt=fmt, td=td)
+            out_path, out_name = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
             return send_file(
@@ -1378,6 +1295,7 @@ def enhance_route():
             )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.get("/blend")
 def blend_route():
@@ -1406,6 +1324,7 @@ def blend_route():
             )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
