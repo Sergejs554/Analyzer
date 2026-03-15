@@ -544,10 +544,10 @@ _RV_MID_G = float(os.getenv("RV_MID_G", "1.00"))
 _RV_MID_W = float(os.getenv("RV_MID_W", "0.95"))
 
 _RV_PRES_F = float(os.getenv("RV_PRES_F", "2100"))
-_RV_PRES_G = float(os.getenv("RV_PRES_G", "0.40"))
+_RV_PRES_G = float(os.getenv("RV_PRES_G", "0.48"))
 _RV_PRES_W = float(os.getenv("RV_PRES_W", "0.95"))
 
-_RV_CORE_MIX = float(os.getenv("RV_CORE_MIX", "0.125"))
+_RV_CORE_MIX = float(os.getenv("RV_CORE_MIX", "0.135"))
 
 _RV_EXCITE_ON = (os.getenv("RV_EXCITE_ON", "1").strip() == "1")
 _RV_EXCITE_HP_HZ = float(os.getenv("RV_EXCITE_HP_HZ", "2200"))
@@ -558,12 +558,12 @@ _RV_EXCITE_MIX = float(os.getenv("RV_EXCITE_MIX", "0.040"))
 _RV_AIR_ON = (os.getenv("RV_AIR_ON", "1").strip() == "1")
 _RV_AIR_F = float(os.getenv("RV_AIR_F", "9000"))
 _RV_AIR_G = float(os.getenv("RV_AIR_G", "1.35"))
-_RV_AIR_MIX = float(os.getenv("RV_AIR_MIX", "0.080"))
+_RV_AIR_MIX = float(os.getenv("RV_AIR_MIX", "0.085"))
 
 _RV_WIDTH_ON = (os.getenv("RV_WIDTH_ON", "1").strip() == "1")
 _RV_WIDTH_HP_HZ = float(os.getenv("RV_WIDTH_HP_HZ", "5200"))
 _RV_WIDTH_M = float(os.getenv("RV_WIDTH_M", "1.12"))
-_RV_WIDTH_MIX = float(os.getenv("RV_WIDTH_MIX", "0.070"))
+_RV_WIDTH_MIX = float(os.getenv("RV_WIDTH_MIX", "0.080"))
 
 _RV_GUARD_ON = (os.getenv("RV_GUARD_ON", "1").strip() == "1")
 _RV_GUARD_F = float(os.getenv("RV_GUARD_F", "3400"))
