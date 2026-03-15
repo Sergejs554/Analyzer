@@ -881,8 +881,8 @@ _BLEND_REVEAL_GAIN_DB = float(os.getenv("BLEND_REVEAL_GAIN_DB", "-15.0"))
 _BLEND_POLISH_GAIN_DB = float(os.getenv("BLEND_POLISH_GAIN_DB", "-18.0"))
 
 _PREPOST_CLIP_ON = (os.getenv("PREPOST_CLIP_ON", "1").strip() == "1")
-_PREPOST_CLIP_DRIVE_DB = float(os.getenv("PREPOST_CLIP_DRIVE_DB", "1.0"))
-_PREPOST_CLIP_POST_GAIN_DB = float(os.getenv("PREPOST_CLIP_POST_GAIN_DB", "-1.0"))
+_PREPOST_CLIP_DRIVE_DB = float(os.getenv("PREPOST_CLIP_DRIVE_DB", "0.6"))
+_PREPOST_CLIP_POST_GAIN_DB = float(os.getenv("PREPOST_CLIP_POST_GAIN_DB", "-0.4"))
 
 _BLEND_POST_I = float(os.getenv("BLEND_POST_I", "-10.8"))
 _BLEND_POST_TP = float(os.getenv("BLEND_POST_TP", "-1.0"))
