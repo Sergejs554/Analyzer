@@ -858,7 +858,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     return out_path, out_name
 
 
-# wrappers to preserve route names
+# wrappers to preserve internal naming
 def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     return _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
 
@@ -887,6 +887,10 @@ _PREPOST_CLIP_POST_GAIN_DB = float(os.getenv("PREPOST_CLIP_POST_GAIN_DB", "-1.0"
 _BLEND_POST_I = float(os.getenv("BLEND_POST_I", "-10.8"))
 _BLEND_POST_TP = float(os.getenv("BLEND_POST_TP", "-1.0"))
 _BLEND_POST_LRA = float(os.getenv("BLEND_POST_LRA", "7.0"))
+
+_BANDLAB_PREVIEW_GAIN_DB = float(os.getenv("BANDLAB_PREVIEW_GAIN_DB", "0.0"))
+_BAKUAGE_PREVIEW_GAIN_DB = float(os.getenv("BAKUAGE_PREVIEW_GAIN_DB", "0.0"))
+_ENHANCE_PREVIEW_GAIN_DB = float(os.getenv("ENHANCE_PREVIEW_GAIN_DB", "0.0"))
 
 
 def _render_final_blend(base_src: str, low_src: str, reveal_src: str, polish_src: str, out_path: str):
@@ -937,6 +941,74 @@ def _render_post_stage(in_path: str, fmt: str, td: str, loudnorm_params: dict | 
 
     _build_loudnorm_two_pass(in_path, loudnorm_params, out_args, out_path)
     return out_path, out_name
+
+
+def _render_single_branch_preview(
+    in_path: str,
+    tone: str,
+    intensity: str,
+    fmt: str,
+    td: str,
+    branch_kind: str,
+) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    base_wav = os.path.join(td, f"{branch_kind}_base.wav")
+    branch_wav = os.path.join(td, f"{branch_kind}_branch.wav")
+    premix_wav = os.path.join(td, f"{branch_kind}_premix.wav")
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-af "{_PRE_CLEAN_CHAIN}" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(base_wav)}'
+    )
+    _run(cmd)
+
+    if branch_kind == "bandlab":
+        branch_wav, _ = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+        preview_gain_db = _clamp(_BANDLAB_PREVIEW_GAIN_DB, -24.0, 18.0)
+        preview_name = "bandlab_preview"
+    elif branch_kind == "bakuage":
+        branch_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+        preview_gain_db = _clamp(_BAKUAGE_PREVIEW_GAIN_DB, -24.0, 18.0)
+        preview_name = "bakuage_preview"
+    elif branch_kind == "enhance":
+        branch_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+        preview_gain_db = _clamp(_ENHANCE_PREVIEW_GAIN_DB, -24.0, 18.0)
+        preview_name = "enhance_preview"
+    else:
+        raise RuntimeError(f"Unknown branch_kind: {branch_kind}")
+
+    parts = [
+        "[0:a]volume=1[base]",
+        f"[1:a]volume={preview_gain_db}dB[br]",
+        "[base][br]amix=inputs=2:normalize=0[m0]",
+    ]
+
+    if _PREPOST_CLIP_ON:
+        parts.append(
+            f"[m0]{_os_softclip_chain(drive_db=_PREPOST_CLIP_DRIVE_DB, hp=None, lp=None, post_gain_db=_PREPOST_CLIP_POST_GAIN_DB)}[out]"
+        )
+    else:
+        parts.append("[m0]anull[out]")
+
+    fc = ";".join(parts)
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(base_wav)} '
+        f'-i {shlex.quote(branch_wav)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(premix_wav)}'
+    )
+    _run(cmd)
+
+    out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
+    final_name = f"{preview_name}_{out_name}"
+    final_path = os.path.join(td, final_name)
+    os.replace(out_path, final_path)
+    return final_path, final_name
 
 
 # ---------------------------
@@ -1027,6 +1099,9 @@ def root():
             "/bakuage",
             "/enhance",
             "/blend",
+            "/bandlab_branch",
+            "/bakuage_branch",
+            "/enhance_branch",
         ]
     })
 
@@ -1110,6 +1185,10 @@ def health():
         "BLEND_POST_I": os.getenv("BLEND_POST_I"),
         "BLEND_POST_TP": os.getenv("BLEND_POST_TP"),
         "BLEND_POST_LRA": os.getenv("BLEND_POST_LRA"),
+
+        "BANDLAB_PREVIEW_GAIN_DB": os.getenv("BANDLAB_PREVIEW_GAIN_DB"),
+        "BAKUAGE_PREVIEW_GAIN_DB": os.getenv("BAKUAGE_PREVIEW_GAIN_DB"),
+        "ENHANCE_PREVIEW_GAIN_DB": os.getenv("ENHANCE_PREVIEW_GAIN_DB"),
     })
 
 
@@ -1240,9 +1319,15 @@ def bandlab_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            out_path, out_name = _render_single_branch_preview(
+                in_path=in_path,
+                tone=tone,
+                intensity=intensity,
+                fmt=fmt,
+                td=td,
+                branch_kind="bandlab",
+            )
             _out_args_str, _out_name2, mime = _out_args(fmt)
-
             return send_file(
                 out_path,
                 mimetype=mime,
@@ -1269,9 +1354,15 @@ def bakuage_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            out_path, out_name = _render_single_branch_preview(
+                in_path=in_path,
+                tone=tone,
+                intensity=intensity,
+                fmt=fmt,
+                td=td,
+                branch_kind="bakuage",
+            )
             _out_args_str, _out_name2, mime = _out_args(fmt)
-
             return send_file(
                 out_path,
                 mimetype=mime,
@@ -1298,9 +1389,99 @@ def enhance_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_single_branch_preview(
+                in_path=in_path,
+                tone=tone,
+                intensity=intensity,
+                fmt=fmt,
+                td=td,
+                branch_kind="enhance",
+            )
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/bandlab_branch")
+def bandlab_branch_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/bakuage_branch")
+def bakuage_branch_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/enhance_branch")
+def enhance_branch_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-
             return send_file(
                 out_path,
                 mimetype=mime,
