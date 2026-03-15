@@ -542,17 +542,17 @@ _RV_MID_F = float(os.getenv("RV_MID_F", "1150"))
 _RV_MID_G = float(os.getenv("RV_MID_G", "0.9"))
 _RV_MID_W = float(os.getenv("RV_MID_W", "0.95"))
 
-_RV_PRES_F = float(os.getenv("RV_PRES_F", "2100"))
+_RV_PRES_F = float(os.getenv("RV_PRES_F", "1950"))
 _RV_PRES_G = float(os.getenv("RV_PRES_G", "0.28"))
 _RV_PRES_W = float(os.getenv("RV_PRES_W", "0.95"))
 
-_RV_CORE_MIX = float(os.getenv("RV_CORE_MIX", "0.10"))
+_RV_CORE_MIX = float(os.getenv("RV_CORE_MIX", "0.095"))
 
 _RV_EXCITE_ON = (os.getenv("RV_EXCITE_ON", "1").strip() == "1")
-_RV_EXCITE_HP_HZ = float(os.getenv("RV_EXCITE_HP_HZ", "2200"))
-_RV_EXCITE_LP_HZ = float(os.getenv("RV_EXCITE_LP_HZ", "8200"))
+_RV_EXCITE_HP_HZ = float(os.getenv("RV_EXCITE_HP_HZ", "2600"))
+_RV_EXCITE_LP_HZ = float(os.getenv("RV_EXCITE_LP_HZ", "7600"))
 _RV_EXCITE_DRIVE_DB = float(os.getenv("RV_EXCITE_DRIVE_DB", "2.5"))
-_RV_EXCITE_MIX = float(os.getenv("RV_EXCITE_MIX", "0.035"))
+_RV_EXCITE_MIX = float(os.getenv("RV_EXCITE_MIX", "0.030"))
 
 _RV_AIR_ON = (os.getenv("RV_AIR_ON", "1").strip() == "1")
 _RV_AIR_F = float(os.getenv("RV_AIR_F", "9000"))
