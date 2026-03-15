@@ -4,6 +4,7 @@
 import os
 import json
 from typing import Dict, Tuple, Any, List
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import librosa
@@ -23,6 +24,8 @@ PSD_HOP = 2048
 
 WINDOW_BAND_NFFT = 4096
 WINDOW_BAND_HOP = 1024
+
+ANALYZE_PARALLEL = (os.getenv("ANALYZE_PARALLEL", "1").strip() == "1")
 
 
 # ---------- helpers ----------
@@ -149,6 +152,7 @@ def _loudness_series(
 ) -> np.ndarray:
     """
     Windowed BS.1770-style loudness series using pyloudnorm per window.
+    Kept exact in spirit, but stripped of redundant conversions.
     """
     if y_stereo.ndim == 1:
         y_stereo = np.vstack([y_stereo, y_stereo])
@@ -390,29 +394,53 @@ def _stereo_metrics(y_stereo: np.ndarray, sr: int) -> Dict[str, float]:
     }
 
 
-def _window_band_series_db(
+def _make_window_band_cache(
     y_mono: np.ndarray,
     sr: int,
-    lo_hz: float,
-    hi_hz: float,
-    window_sec: float,
-    hop_sec: float,
-) -> np.ndarray:
+    window_sec: float = 0.4,
+    hop_sec: float = 0.1,
+    n_fft: int = WINDOW_BAND_NFFT,
+    stft_hop: int = WINDOW_BAND_HOP,
+) -> Dict[str, Any]:
+    """
+    One pass over windows. Reused later for harsh/sibilance/body/mid series.
+    """
     win = max(1, int(round(window_sec * sr)))
     hop = max(1, int(round(hop_sec * sr)))
     n = y_mono.size
-    values = []
 
     if n < win:
-        freqs, psd = _fft_psd(y_mono, sr, n_fft=WINDOW_BAND_NFFT, hop=WINDOW_BAND_HOP)
-        values.append(_band_power_db(freqs, psd, lo_hz, hi_hz))
-        return np.array(values, dtype=np.float64)
+        freqs, psd = _fft_psd(y_mono, sr, n_fft=n_fft, hop=stft_hop)
+        return {
+            "freqs": freqs,
+            "psd_list": [psd],
+        }
 
+    freqs = None
+    psd_list: List[np.ndarray] = []
     for start in range(0, n - win + 1, hop):
         seg = y_mono[start:start + win]
-        freqs, psd = _fft_psd(seg, sr, n_fft=WINDOW_BAND_NFFT, hop=WINDOW_BAND_HOP)
-        values.append(_band_power_db(freqs, psd, lo_hz, hi_hz))
+        f, psd = _fft_psd(seg, sr, n_fft=n_fft, hop=stft_hop)
+        if freqs is None:
+            freqs = f
+        psd_list.append(psd)
 
+    if freqs is None:
+        freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+
+    return {
+        "freqs": freqs,
+        "psd_list": psd_list,
+    }
+
+
+def _window_band_series_from_cache(
+    cache: Dict[str, Any],
+    lo_hz: float,
+    hi_hz: float,
+) -> np.ndarray:
+    freqs = cache["freqs"]
+    values = [_band_power_db(freqs, psd, lo_hz, hi_hz) for psd in cache["psd_list"]]
     return np.array(values, dtype=np.float64)
 
 
@@ -433,10 +461,19 @@ def _risk_metrics(
     momentary_gap = float(m_max - metrics["integrated_lufs"])
     tp_margin_db = float(-1.0 - metrics["true_peak_dbtp"])
 
-    harsh_series = _window_band_series_db(mono, sr, 2500.0, 6000.0, window_sec=0.4, hop_sec=0.1)
-    sib_series = _window_band_series_db(mono, sr, 5000.0, 9000.0, window_sec=0.4, hop_sec=0.1)
-    body_series = _window_band_series_db(mono, sr, 150.0, 400.0, window_sec=0.4, hop_sec=0.1)
-    mid_series = _window_band_series_db(mono, sr, 1000.0, 2000.0, window_sec=0.4, hop_sec=0.1)
+    band_cache = _make_window_band_cache(
+        mono,
+        sr,
+        window_sec=0.4,
+        hop_sec=0.1,
+        n_fft=WINDOW_BAND_NFFT,
+        stft_hop=WINDOW_BAND_HOP,
+    )
+
+    harsh_series = _window_band_series_from_cache(band_cache, 2500.0, 6000.0)
+    sib_series = _window_band_series_from_cache(band_cache, 5000.0, 9000.0)
+    body_series = _window_band_series_from_cache(band_cache, 150.0, 400.0)
+    mid_series = _window_band_series_from_cache(band_cache, 1000.0, 2000.0)
 
     harsh_peak_ratio = 0.0
     sibilance_peak_ratio = 0.0
@@ -823,8 +860,16 @@ def run_analysis(before_path: str, after_path: str, out_dir: str) -> Tuple[Dict[
     """
     os.makedirs(out_dir, exist_ok=True)
 
-    before = _analyze_one(before_path, target_sr=TARGET_SR)
-    after = _analyze_one(after_path, target_sr=TARGET_SR)
+    if ANALYZE_PARALLEL:
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_before = ex.submit(_analyze_one, before_path, TARGET_SR)
+            f_after = ex.submit(_analyze_one, after_path, TARGET_SR)
+            before = f_before.result()
+            after = f_after.result()
+    else:
+        before = _analyze_one(before_path, target_sr=TARGET_SR)
+        after = _analyze_one(after_path, target_sr=TARGET_SR)
+
     diff = _diff_report(before, after)
 
     report = {
