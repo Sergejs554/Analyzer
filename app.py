@@ -536,38 +536,42 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
 
 _RV_CORE_ON = (os.getenv("RV_CORE_ON", "1").strip() == "1")
 _RV_LO_HZ = float(os.getenv("RV_LO_HZ", "550"))
-_RV_HI_HZ = float(os.getenv("RV_HI_HZ", "7000"))
-_RV_MID_F = float(os.getenv("RV_MID_F", "1200"))
-_RV_MID_G = float(os.getenv("RV_MID_G", "1.0"))
-_RV_MID_W = float(os.getenv("RV_MID_W", "0.9"))
-_RV_PRES_F = float(os.getenv("RV_PRES_F", "2300"))
-_RV_PRES_G = float(os.getenv("RV_PRES_G", "0.7"))
-_RV_PRES_W = float(os.getenv("RV_PRES_W", "1.0"))
-_RV_CORE_MIX = float(os.getenv("RV_CORE_MIX", "0.12"))
+_RV_HI_HZ = float(os.getenv("RV_HI_HZ", "7800"))
+
+_RV_MID_F = float(os.getenv("RV_MID_F", "1150"))
+_RV_MID_G = float(os.getenv("RV_MID_G", "0.9"))
+_RV_MID_W = float(os.getenv("RV_MID_W", "0.95"))
+
+_RV_PRES_F = float(os.getenv("RV_PRES_F", "2100"))
+_RV_PRES_G = float(os.getenv("RV_PRES_G", "0.28"))
+_RV_PRES_W = float(os.getenv("RV_PRES_W", "0.95"))
+
+_RV_CORE_MIX = float(os.getenv("RV_CORE_MIX", "0.10"))
 
 _RV_EXCITE_ON = (os.getenv("RV_EXCITE_ON", "1").strip() == "1")
-_RV_EXCITE_HP_HZ = float(os.getenv("RV_EXCITE_HP_HZ", "1800"))
-_RV_EXCITE_LP_HZ = float(os.getenv("RV_EXCITE_LP_HZ", "9000"))
-_RV_EXCITE_DRIVE_DB = float(os.getenv("RV_EXCITE_DRIVE_DB", "4.0"))
-_RV_EXCITE_MIX = float(os.getenv("RV_EXCITE_MIX", "0.05"))
+_RV_EXCITE_HP_HZ = float(os.getenv("RV_EXCITE_HP_HZ", "2200"))
+_RV_EXCITE_LP_HZ = float(os.getenv("RV_EXCITE_LP_HZ", "8200"))
+_RV_EXCITE_DRIVE_DB = float(os.getenv("RV_EXCITE_DRIVE_DB", "2.5"))
+_RV_EXCITE_MIX = float(os.getenv("RV_EXCITE_MIX", "0.035"))
 
 _RV_AIR_ON = (os.getenv("RV_AIR_ON", "1").strip() == "1")
 _RV_AIR_F = float(os.getenv("RV_AIR_F", "9000"))
-_RV_AIR_G = float(os.getenv("RV_AIR_G", "1.8"))
-_RV_AIR_MIX = float(os.getenv("RV_AIR_MIX", "0.08"))
+_RV_AIR_G = float(os.getenv("RV_AIR_G", "1.25"))
+_RV_AIR_MIX = float(os.getenv("RV_AIR_MIX", "0.075"))
 
 _RV_WIDTH_ON = (os.getenv("RV_WIDTH_ON", "1").strip() == "1")
-_RV_WIDTH_HP_HZ = float(os.getenv("RV_WIDTH_HP_HZ", "4500"))
-_RV_WIDTH_M = float(os.getenv("RV_WIDTH_M", "1.18"))
-_RV_WIDTH_MIX = float(os.getenv("RV_WIDTH_MIX", "0.08"))
+_RV_WIDTH_HP_HZ = float(os.getenv("RV_WIDTH_HP_HZ", "5200"))
+_RV_WIDTH_M = float(os.getenv("RV_WIDTH_M", "1.10"))
+_RV_WIDTH_MIX = float(os.getenv("RV_WIDTH_MIX", "0.055"))
 
 _RV_GUARD_ON = (os.getenv("RV_GUARD_ON", "1").strip() == "1")
-_RV_GUARD_F = float(os.getenv("RV_GUARD_F", "3500"))
-_RV_GUARD_G = float(os.getenv("RV_GUARD_G", "-0.8"))
-_RV_GUARD_W = float(os.getenv("RV_GUARD_W", "1.2"))
-_RV_SIB_F = float(os.getenv("RV_SIB_F", "7000"))
-_RV_SIB_G = float(os.getenv("RV_SIB_G", "-0.8"))
-_RV_SIB_W = float(os.getenv("RV_SIB_W", "1.4"))
+_RV_GUARD_F = float(os.getenv("RV_GUARD_F", "3400"))
+_RV_GUARD_G = float(os.getenv("RV_GUARD_G", "-1.0"))
+_RV_GUARD_W = float(os.getenv("RV_GUARD_W", "1.3"))
+
+_RV_SIB_F = float(os.getenv("RV_SIB_F", "7200"))
+_RV_SIB_G = float(os.getenv("RV_SIB_G", "-0.9"))
+_RV_SIB_W = float(os.getenv("RV_SIB_W", "1.5"))
 
 _RV_OUT_TRIM_DB = float(os.getenv("RV_OUT_TRIM_DB", "-1.5"))
 
@@ -578,58 +582,64 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     fmt = _normalize_format(fmt)
 
     intensity_scale = {
-        "low": 0.85,
+        "low": 0.86,
         "balanced": 1.00,
-        "high": 1.12,
+        "high": 1.10,
     }[intensity]
 
     tone_air_mul = {
-        "warm": 0.85,
+        "warm": 0.88,
         "balanced": 1.00,
-        "bright": 1.15,
+        "bright": 1.12,
     }[tone]
 
     tone_pres_mul = {
-        "warm": 0.88,
+        "warm": 0.90,
         "balanced": 1.00,
-        "bright": 1.10,
+        "bright": 1.08,
+    }[tone]
+
+    tone_mid_mul = {
+        "warm": 1.04,
+        "balanced": 1.00,
+        "bright": 0.96,
     }[tone]
 
     lo_hz = _clamp(_RV_LO_HZ, 250.0, 2000.0)
-    hi_hz = _clamp(_RV_HI_HZ, 3000.0, 14000.0)
-    if hi_hz <= lo_hz + 200:
-        hi_hz = lo_hz + 200
+    hi_hz = _clamp(_RV_HI_HZ, 3500.0, 14000.0)
+    if hi_hz <= lo_hz + 300:
+        hi_hz = lo_hz + 300
 
-    mid_f = _clamp(_RV_MID_F, 600.0, 2200.0)
-    mid_g = _clamp(_RV_MID_G, -2.0, 3.0)
+    mid_f = _clamp(_RV_MID_F, 700.0, 2200.0)
+    mid_g = _clamp(_RV_MID_G * tone_mid_mul, -1.0, 2.5)
     mid_w = _clamp(_RV_MID_W, 0.2, 3.0)
 
-    pres_f = _clamp(_RV_PRES_F, 1200.0, 4500.0)
-    pres_g = _clamp(_RV_PRES_G * tone_pres_mul, -1.0, 3.0)
+    pres_f = _clamp(_RV_PRES_F, 1400.0, 4200.0)
+    pres_g = _clamp(_RV_PRES_G * tone_pres_mul, -1.0, 2.0)
     pres_w = _clamp(_RV_PRES_W, 0.2, 3.0)
 
-    core_mix = _clamp(_RV_CORE_MIX * intensity_scale, 0.0, 0.25)
+    core_mix = _clamp(_RV_CORE_MIX * intensity_scale, 0.0, 0.20)
 
-    excite_hp = _clamp(_RV_EXCITE_HP_HZ, 1000.0, 6000.0)
-    excite_lp = _clamp(_RV_EXCITE_LP_HZ, 5000.0, 16000.0)
-    if excite_lp <= excite_hp + 1000:
-        excite_lp = excite_hp + 1000
-    excite_drive = _clamp(_RV_EXCITE_DRIVE_DB, 0.0, 12.0)
-    excite_mix = _clamp(_RV_EXCITE_MIX * intensity_scale, 0.0, 0.15)
+    excite_hp = _clamp(_RV_EXCITE_HP_HZ, 1400.0, 6000.0)
+    excite_lp = _clamp(_RV_EXCITE_LP_HZ, 5000.0, 14000.0)
+    if excite_lp <= excite_hp + 1200:
+        excite_lp = excite_hp + 1200
+    excite_drive = _clamp(_RV_EXCITE_DRIVE_DB, 0.0, 8.0)
+    excite_mix = _clamp(_RV_EXCITE_MIX * intensity_scale, 0.0, 0.10)
 
-    air_f = _clamp(_RV_AIR_F, 6000.0, 16000.0)
-    air_g = _clamp(_RV_AIR_G * tone_air_mul, 0.0, 4.0)
-    air_mix = _clamp(_RV_AIR_MIX * intensity_scale, 0.0, 0.20)
+    air_f = _clamp(_RV_AIR_F, 6500.0, 16000.0)
+    air_g = _clamp(_RV_AIR_G * tone_air_mul, 0.0, 3.0)
+    air_mix = _clamp(_RV_AIR_MIX * intensity_scale, 0.0, 0.16)
 
-    width_hp = _clamp(_RV_WIDTH_HP_HZ, 2500.0, 12000.0)
-    width_m = _clamp(_RV_WIDTH_M, 1.0, 2.0)
-    width_mix = _clamp(_RV_WIDTH_MIX * intensity_scale, 0.0, 0.20)
+    width_hp = _clamp(_RV_WIDTH_HP_HZ, 3500.0, 12000.0)
+    width_m = _clamp(_RV_WIDTH_M, 1.0, 1.5)
+    width_mix = _clamp(_RV_WIDTH_MIX * intensity_scale, 0.0, 0.12)
 
-    guard_f = _clamp(_RV_GUARD_F, 2200.0, 6000.0)
+    guard_f = _clamp(_RV_GUARD_F, 2400.0, 6000.0)
     guard_g = _clamp(_RV_GUARD_G, -4.0, 0.0)
     guard_w = _clamp(_RV_GUARD_W, 0.2, 4.0)
 
-    sib_f = _clamp(_RV_SIB_F, 5000.0, 12000.0)
+    sib_f = _clamp(_RV_SIB_F, 5500.0, 12000.0)
     sib_g = _clamp(_RV_SIB_G, -4.0, 0.0)
     sib_w = _clamp(_RV_SIB_W, 0.2, 4.0)
 
@@ -661,7 +671,11 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
             post_gain_db=0.0,
         )
         if _RV_GUARD_ON:
-            exc_chain = exc_chain + f",equalizer=f={guard_f}:t=q:w={guard_w}:g={guard_g},equalizer=f={sib_f}:t=q:w={sib_w}:g={sib_g}"
+            exc_chain = (
+                exc_chain
+                + f",equalizer=f={guard_f}:t=q:w={guard_w}:g={guard_g}"
+                + f",equalizer=f={sib_f}:t=q:w={sib_w}:g={sib_g}"
+            )
         exc_chain = exc_chain + f",volume={excite_mix}"
         parts.append(f"[exc]{exc_chain}[e1]")
     else:
@@ -670,7 +684,7 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     if _RV_AIR_ON and air_mix > 0.0:
         parts.append(
             f"[air]"
-            f"highpass=f={max(air_f * 0.6, 4500.0)}:width=0.707,"
+            f"highpass=f={max(air_f * 0.58, 5200.0)}:width=0.707,"
             f"highshelf=f={air_f}:g={air_g},"
             f"volume={air_mix}[a1]"
         )
