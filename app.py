@@ -169,6 +169,25 @@ def _db_to_lin(db: float) -> float:
     return 10.0 ** (float(db) / 20.0)
 
 
+def _safe_float(v):
+    try:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s or s.lower() in ("nan", "none", "null", "-inf", "inf"):
+            return None
+        return float(s)
+    except Exception:
+        return None
+
+
+def _extract_re_float(pattern: str, text: str):
+    m = re.search(pattern, text, re.IGNORECASE)
+    if not m:
+        return None
+    return _safe_float(m.group(1))
+
+
 def _os_softclip_chain(
     drive_db: float,
     hp: float | None = None,
@@ -343,6 +362,201 @@ def _out_args(fmt: str) -> tuple[str, str, str]:
         return "-ar 48000 -ac 2 -f aiff -c:a pcm_s16be", "mastered.aiff", "audio/aiff"
     return "-ar 48000 -ac 2 -c:a pcm_s16le", "mastered.wav", "audio/wav"
 
+
+def _probe_duration_sec(in_path: str):
+    cmd = (
+        f'ffprobe -v error -show_entries format=duration '
+        f'-of default=noprint_wrappers=1:nokey=1 {shlex.quote(in_path)}'
+    )
+    out, _ = _run(cmd)
+    lines = [x.strip() for x in out.splitlines() if x.strip()]
+    if not lines:
+        return None
+    return _safe_float(lines[-1])
+
+
+def _probe_volumedetect(in_path: str) -> dict:
+    cmd = f'ffmpeg -hide_banner -nostats -i {shlex.quote(in_path)} -af "volumedetect" -f null -'
+    _, err = _run(cmd)
+    mean_volume = _extract_re_float(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", err)
+    max_volume = _extract_re_float(r"max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", err)
+    return {
+        "rms_dbfs": mean_volume,
+        "sample_peak_dbfs": max_volume,
+    }
+
+
+def _probe_loudnorm_input_stats(in_path: str) -> dict:
+    ln = "loudnorm=I=-14:TP=-1.0:LRA=7:print_format=json"
+    cmd = f'ffmpeg -hide_banner -nostats -i {shlex.quote(in_path)} -af "{ln}" -f null -'
+    _, err = _run(cmd)
+    stats = _extract_last_json_block(err) or {}
+    return {
+        "integrated_lufs": _safe_float(stats.get("input_i")),
+        "true_peak_dbtp": _safe_float(stats.get("input_tp")),
+        "lra_ebu": _safe_float(stats.get("input_lra")),
+        "input_thresh": _safe_float(stats.get("input_thresh")),
+        "target_offset": _safe_float(stats.get("target_offset")),
+    }
+
+
+def _collect_stage_metrics(in_path: str) -> dict:
+    vd = _probe_volumedetect(in_path)
+    ln = _probe_loudnorm_input_stats(in_path)
+    duration_sec = _probe_duration_sec(in_path)
+
+    rms_dbfs = vd.get("rms_dbfs")
+    sample_peak_dbfs = vd.get("sample_peak_dbfs")
+    integrated_lufs = ln.get("integrated_lufs")
+    true_peak_dbtp = ln.get("true_peak_dbtp")
+
+    crest_db = None
+    if sample_peak_dbfs is not None and rms_dbfs is not None:
+        crest_db = sample_peak_dbfs - rms_dbfs
+
+    plr_proxy_db = None
+    if true_peak_dbtp is not None and integrated_lufs is not None:
+        plr_proxy_db = true_peak_dbtp - integrated_lufs
+
+    tp_margin_to_minus1_dbtp_db = None
+    if true_peak_dbtp is not None:
+        tp_margin_to_minus1_dbtp_db = -1.0 - true_peak_dbtp
+
+    return {
+        "duration_sec": duration_sec,
+        "integrated_lufs": integrated_lufs,
+        "true_peak_dbtp": true_peak_dbtp,
+        "tp_margin_to_minus1_dbtp_db": tp_margin_to_minus1_dbtp_db,
+        "rms_dbfs": rms_dbfs,
+        "sample_peak_dbfs": sample_peak_dbfs,
+        "crest_db": crest_db,
+        "plr_proxy_db": plr_proxy_db,
+        "lra_ebu": ln.get("lra_ebu"),
+        "input_thresh": ln.get("input_thresh"),
+        "target_offset": ln.get("target_offset"),
+    }
+
+
+def _metric_deltas(ref: dict, cur: dict) -> dict:
+    keys = [
+        "integrated_lufs",
+        "true_peak_dbtp",
+        "tp_margin_to_minus1_dbtp_db",
+        "rms_dbfs",
+        "sample_peak_dbfs",
+        "crest_db",
+        "plr_proxy_db",
+        "lra_ebu",
+        "input_thresh",
+        "target_offset",
+    ]
+    out = {}
+    for k in keys:
+        a = ref.get(k)
+        b = cur.get(k)
+        if a is None or b is None:
+            out[f"{k}_delta"] = None
+        else:
+            out[f"{k}_delta"] = b - a
+    return out
+
+
+def _render_bandlab_diagnostic_bundle(
+    in_path: str,
+    tone: str,
+    intensity: str,
+    fmt: str,
+    td: str,
+):
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    base_wav = os.path.join(td, "diag_bandlab_base.wav")
+    reveal_wav = os.path.join(td, "diag_bandlab_reveal.wav")
+    premix_wav = os.path.join(td, "diag_bandlab_premix.wav")
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-af "{_PRE_CLEAN_CHAIN}" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(base_wav)}'
+    )
+    _run(cmd)
+
+    reveal_wav, reveal_name = _render_reveal_branch(
+        in_path,
+        tone=tone,
+        intensity=intensity,
+        fmt="wav16",
+        td=td,
+    )
+
+    preview_gain_db = _clamp(_BANDLAB_PREVIEW_GAIN_DB, -24.0, 18.0)
+
+    parts = [
+        "[0:a]volume=1[base]",
+        f"[1:a]volume={preview_gain_db}dB[br]",
+        "[base][br]amix=inputs=2:normalize=0[m0]",
+    ]
+
+    if _PREPOST_CLIP_ON:
+        parts.append(
+            f"[m0]{_os_softclip_chain(drive_db=_PREPOST_CLIP_DRIVE_DB, hp=None, lp=None, post_gain_db=_PREPOST_CLIP_POST_GAIN_DB)}[out]"
+        )
+    else:
+        parts.append("[m0]anull[out]")
+
+    fc = ";".join(parts)
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(base_wav)} '
+        f'-i {shlex.quote(reveal_wav)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(premix_wav)}'
+    )
+    _run(cmd)
+
+    final_path, final_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
+
+    return {
+        "input": in_path,
+        "base_prepared": base_wav,
+        "reveal_branch": reveal_wav,
+        "premix_preview": premix_wav,
+        "final_post": final_path,
+        "reveal_branch_name": reveal_name,
+        "final_name": final_name,
+    }
+
+
+def _collect_bandlab_diagnostic_report(stage_paths: dict) -> dict:
+    order = ["input", "base_prepared", "reveal_branch", "premix_preview", "final_post"]
+
+    stages = {}
+    for key in order:
+        path = stage_paths[key]
+        stages[key] = {
+            "file": os.path.basename(path),
+            "metrics": _collect_stage_metrics(path),
+        }
+
+    input_metrics = stages["input"]["metrics"]
+
+    for idx, key in enumerate(order):
+        cur_metrics = stages[key]["metrics"]
+        stages[key]["delta_vs_input"] = _metric_deltas(input_metrics, cur_metrics)
+        if idx == 0:
+            stages[key]["delta_vs_prev"] = None
+        else:
+            prev_metrics = stages[order[idx - 1]]["metrics"]
+            stages[key]["delta_vs_prev"] = _metric_deltas(prev_metrics, cur_metrics)
+
+    return stages
+
+
+# ---------------------------
+# NORMALIZERS
+# ---------------------------
 
 def _normalize_tone(x: str) -> str:
     x = (x or "balanced").lower().strip()
@@ -1103,6 +1317,7 @@ def root():
             "/bandlab_branch",
             "/bakuage_branch",
             "/enhance_branch",
+            "/bandlab_diagnostics",
         ]
     })
 
@@ -1270,6 +1485,61 @@ def compare_sections_route():
                 "before": before_res,
                 "after": after_res,
                 "debug": debug
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/bandlab_diagnostics")
+def bandlab_diagnostics_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, dbg = _dl_to_named(td, "file", url)
+
+            stage_paths = _render_bandlab_diagnostic_bundle(
+                in_path=in_path,
+                tone=tone,
+                intensity=intensity,
+                fmt=fmt,
+                td=td,
+            )
+            stages = _collect_bandlab_diagnostic_report(stage_paths)
+
+            return jsonify({
+                "mode": "bandlab_diagnostics",
+                "reveal_params": {
+                    "RV_MID_G": _RV_MID_G,
+                    "RV_PRES_G": _RV_PRES_G,
+                    "RV_CORE_MIX": _RV_CORE_MIX,
+                    "RV_EXCITE_DRIVE_DB": _RV_EXCITE_DRIVE_DB,
+                    "RV_EXCITE_MIX": _RV_EXCITE_MIX,
+                    "RV_AIR_G": _RV_AIR_G,
+                    "RV_AIR_MIX": _RV_AIR_MIX,
+                    "RV_WIDTH_M": _RV_WIDTH_M,
+                    "RV_WIDTH_MIX": _RV_WIDTH_MIX,
+                    "RV_GUARD_G": _RV_GUARD_G,
+                    "RV_SIB_G": _RV_SIB_G,
+                    "BANDLAB_PREVIEW_GAIN_DB": _BANDLAB_PREVIEW_GAIN_DB,
+                    "PREPOST_CLIP_ON": _PREPOST_CLIP_ON,
+                    "PREPOST_CLIP_DRIVE_DB": _PREPOST_CLIP_DRIVE_DB,
+                    "PREPOST_CLIP_POST_GAIN_DB": _PREPOST_CLIP_POST_GAIN_DB,
+                    "BLEND_POST_I": _BLEND_POST_I,
+                    "BLEND_POST_TP": _BLEND_POST_TP,
+                    "BLEND_POST_LRA": _BLEND_POST_LRA,
+                },
+                "stages": stages,
+                "debug": dbg,
             })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
