@@ -461,99 +461,6 @@ def _metric_deltas(ref: dict, cur: dict) -> dict:
     return out
 
 
-def _render_bandlab_diagnostic_bundle(
-    in_path: str,
-    tone: str,
-    intensity: str,
-    fmt: str,
-    td: str,
-):
-    tone = _normalize_tone(tone)
-    intensity = _normalize_intensity(intensity)
-    fmt = _normalize_format(fmt)
-
-    base_wav = os.path.join(td, "diag_bandlab_base.wav")
-    reveal_wav = os.path.join(td, "diag_bandlab_reveal.wav")
-    premix_wav = os.path.join(td, "diag_bandlab_premix.wav")
-
-    cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-af "{_PRE_CLEAN_CHAIN}" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(base_wav)}'
-    )
-    _run(cmd)
-
-    reveal_wav, reveal_name = _render_reveal_branch(
-        in_path,
-        tone=tone,
-        intensity=intensity,
-        fmt="wav16",
-        td=td,
-    )
-
-    preview_gain_db = _clamp(_BANDLAB_PREVIEW_GAIN_DB, -24.0, 18.0)
-
-    parts = [
-        "[0:a]volume=1[base]",
-        f"[1:a]volume={preview_gain_db}dB[br]",
-        "[base][br]amix=inputs=2:normalize=0[m0]",
-    ]
-
-    if _PREPOST_CLIP_ON:
-        parts.append(
-            f"[m0]{_os_softclip_chain(drive_db=_PREPOST_CLIP_DRIVE_DB, hp=None, lp=None, post_gain_db=_PREPOST_CLIP_POST_GAIN_DB)}[out]"
-        )
-    else:
-        parts.append("[m0]anull[out]")
-
-    fc = ";".join(parts)
-
-    cmd = (
-        f'ffmpeg -y -hide_banner '
-        f'-i {shlex.quote(base_wav)} '
-        f'-i {shlex.quote(reveal_wav)} '
-        f'-filter_complex "{fc}" -map "[out]" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(premix_wav)}'
-    )
-    _run(cmd)
-
-    final_path, final_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
-
-    return {
-        "input": in_path,
-        "base_prepared": base_wav,
-        "reveal_branch": reveal_wav,
-        "premix_preview": premix_wav,
-        "final_post": final_path,
-        "reveal_branch_name": reveal_name,
-        "final_name": final_name,
-    }
-
-
-def _collect_bandlab_diagnostic_report(stage_paths: dict) -> dict:
-    order = ["input", "base_prepared", "reveal_branch", "premix_preview", "final_post"]
-
-    stages = {}
-    for key in order:
-        path = stage_paths[key]
-        stages[key] = {
-            "file": os.path.basename(path),
-            "metrics": _collect_stage_metrics(path),
-        }
-
-    input_metrics = stages["input"]["metrics"]
-
-    for idx, key in enumerate(order):
-        cur_metrics = stages[key]["metrics"]
-        stages[key]["delta_vs_input"] = _metric_deltas(input_metrics, cur_metrics)
-        if idx == 0:
-            stages[key]["delta_vs_prev"] = None
-        else:
-            prev_metrics = stages[order[idx - 1]]["metrics"]
-            stages[key]["delta_vs_prev"] = _metric_deltas(prev_metrics, cur_metrics)
-
-    return stages
-
-
 # ---------------------------
 # NORMALIZERS
 # ---------------------------
@@ -752,7 +659,6 @@ _RV_CORE_ON = (os.getenv("RV_CORE_ON", "1").strip() == "1")
 _RV_LO_HZ = float(os.getenv("RV_LO_HZ", "550"))
 _RV_HI_HZ = float(os.getenv("RV_HI_HZ", "7800"))
 
-# === changed ===
 _RV_MID_F = float(os.getenv("RV_MID_F", "1150"))
 _RV_MID_G = float(os.getenv("RV_MID_G", "0.98"))
 _RV_MID_W = float(os.getenv("RV_MID_W", "0.95"))
@@ -1108,6 +1014,21 @@ _BAKUAGE_PREVIEW_GAIN_DB = float(os.getenv("BAKUAGE_PREVIEW_GAIN_DB", "0.0"))
 _ENHANCE_PREVIEW_GAIN_DB = float(os.getenv("ENHANCE_PREVIEW_GAIN_DB", "0.0"))
 
 
+def _render_guard_stage(in_path: str, out_path: str):
+    if _PREPOST_CLIP_ON:
+        cmd = (
+            f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+            f'-af "{_os_softclip_chain(drive_db=_PREPOST_CLIP_DRIVE_DB, hp=None, lp=None, post_gain_db=_PREPOST_CLIP_POST_GAIN_DB)}" '
+            f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+        )
+    else:
+        cmd = (
+            f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+            f'-af "anull" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+        )
+    _run(cmd)
+
+
 def _render_final_blend(base_src: str, low_src: str, reveal_src: str, polish_src: str, out_path: str):
     base_gain = _clamp(_BLEND_BASE_GAIN, 0.5, 1.5)
     low_gain_db = _clamp(_BLEND_LOW_GAIN_DB, -36.0, 6.0)
@@ -1172,7 +1093,8 @@ def _render_single_branch_preview(
 
     base_wav = os.path.join(td, f"{branch_kind}_base.wav")
     branch_wav = os.path.join(td, f"{branch_kind}_branch.wav")
-    premix_wav = os.path.join(td, f"{branch_kind}_premix.wav")
+    bandlab_pre_wav = os.path.join(td, f"{branch_kind}_bandlab_pre.wav")
+    guarded_wav = os.path.join(td, f"{branch_kind}_guarded.wav")
 
     cmd = (
         f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
@@ -1195,31 +1117,24 @@ def _render_single_branch_preview(
     else:
         raise RuntimeError(f"Unknown branch_kind: {branch_kind}")
 
-    parts = [
-        "[0:a]volume=1[base]",
-        f"[1:a]volume={preview_gain_db}dB[br]",
-        "[base][br]amix=inputs=2:normalize=0[m0]",
-    ]
-
-    if _PREPOST_CLIP_ON:
-        parts.append(
-            f"[m0]{_os_softclip_chain(drive_db=_PREPOST_CLIP_DRIVE_DB, hp=None, lp=None, post_gain_db=_PREPOST_CLIP_POST_GAIN_DB)}[out]"
-        )
-    else:
-        parts.append("[m0]anull[out]")
-
-    fc = ";".join(parts)
+    fc = (
+        f"[0:a]volume=1[base];"
+        f"[1:a]volume={preview_gain_db}dB[br];"
+        f"[base][br]amix=inputs=2:normalize=0[out]"
+    )
 
     cmd = (
         f'ffmpeg -y -hide_banner '
         f'-i {shlex.quote(base_wav)} '
         f'-i {shlex.quote(branch_wav)} '
         f'-filter_complex "{fc}" -map "[out]" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(premix_wav)}'
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(bandlab_pre_wav)}'
     )
     _run(cmd)
 
-    out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
+    _render_guard_stage(bandlab_pre_wav, guarded_wav)
+
+    out_path, out_name = _render_post_stage(guarded_wav, fmt=fmt, td=td, loudnorm_params=None)
     final_name = f"{preview_name}_{out_name}"
     final_path = os.path.join(td, final_name)
     os.replace(out_path, final_path)
@@ -1295,6 +1210,97 @@ def _render_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) ->
     blend_path = os.path.join(td, blend_name)
     os.replace(out_path, blend_path)
     return blend_path, blend_name
+
+
+# ---------------------------
+# DIAGNOSTICS
+# ---------------------------
+
+def _render_bandlab_diagnostic_bundle(
+    in_path: str,
+    tone: str,
+    intensity: str,
+    fmt: str,
+    td: str,
+):
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    base_wav = os.path.join(td, "diag_bandlab_base.wav")
+    reveal_wav = os.path.join(td, "diag_bandlab_reveal.wav")
+    bandlab_pre_wav = os.path.join(td, "diag_bandlab_pre.wav")
+    guarded_wav = os.path.join(td, "diag_bandlab_guarded.wav")
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-af "{_PRE_CLEAN_CHAIN}" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(base_wav)}'
+    )
+    _run(cmd)
+
+    reveal_wav, reveal_name = _render_reveal_branch(
+        in_path,
+        tone=tone,
+        intensity=intensity,
+        fmt="wav16",
+        td=td,
+    )
+
+    preview_gain_db = _clamp(_BANDLAB_PREVIEW_GAIN_DB, -24.0, 18.0)
+    fc = (
+        f"[0:a]volume=1[base];"
+        f"[1:a]volume={preview_gain_db}dB[br];"
+        f"[base][br]amix=inputs=2:normalize=0[out]"
+    )
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(base_wav)} '
+        f'-i {shlex.quote(reveal_wav)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(bandlab_pre_wav)}'
+    )
+    _run(cmd)
+
+    _render_guard_stage(bandlab_pre_wav, guarded_wav)
+
+    final_path, final_name = _render_post_stage(guarded_wav, fmt=fmt, td=td, loudnorm_params=None)
+
+    return {
+        "before": in_path,
+        "base_prepared": base_wav,
+        "reveal_branch": reveal_wav,
+        "bandlab_pre": bandlab_pre_wav,
+        "bandlab_guarded": guarded_wav,
+        "final_post": final_path,
+        "reveal_branch_name": reveal_name,
+        "final_name": final_name,
+    }
+
+
+def _collect_bandlab_diagnostic_report(stage_paths: dict) -> dict:
+    order = ["before", "base_prepared", "reveal_branch", "bandlab_pre", "bandlab_guarded", "final_post"]
+
+    stages = {}
+    for key in order:
+        path = stage_paths[key]
+        stages[key] = {
+            "file": os.path.basename(path),
+            "metrics": _collect_stage_metrics(path),
+        }
+
+    input_metrics = stages["before"]["metrics"]
+
+    for idx, key in enumerate(order):
+        cur_metrics = stages[key]["metrics"]
+        stages[key]["delta_vs_input"] = _metric_deltas(input_metrics, cur_metrics)
+        if idx == 0:
+            stages[key]["delta_vs_prev"] = None
+        else:
+            prev_metrics = stages[order[idx - 1]]["metrics"]
+            stages[key]["delta_vs_prev"] = _metric_deltas(prev_metrics, cur_metrics)
+
+    return stages
 
 
 # --- routes ---
