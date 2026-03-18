@@ -850,29 +850,29 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 # ---------------------------
 
 _PL_GLUE_ON = (os.getenv("PL_GLUE_ON", "1").strip() == "1")
-_PL_GLUE_RATIO = float(os.getenv("PL_GLUE_RATIO", "1.22"))
-_PL_GLUE_THRESHOLD_DB = float(os.getenv("PL_GLUE_THRESHOLD_DB", "-19"))
-_PL_GLUE_ATTACK_MS = float(os.getenv("PL_GLUE_ATTACK_MS", "20"))
-_PL_GLUE_RELEASE_MS = float(os.getenv("PL_GLUE_RELEASE_MS", "180"))
-_PL_GLUE_MIX = float(os.getenv("PL_GLUE_MIX", "0.14"))
+_PL_GLUE_RATIO = float(os.getenv("PL_GLUE_RATIO", "1.18"))
+_PL_GLUE_THRESHOLD_DB = float(os.getenv("PL_GLUE_THRESHOLD_DB", "-20"))
+_PL_GLUE_ATTACK_MS = float(os.getenv("PL_GLUE_ATTACK_MS", "24"))
+_PL_GLUE_RELEASE_MS = float(os.getenv("PL_GLUE_RELEASE_MS", "190"))
+_PL_GLUE_MIX = float(os.getenv("PL_GLUE_MIX", "0.11"))
 
 _PL_AIR_ON = (os.getenv("PL_AIR_ON", "1").strip() == "1")
-_PL_AIR_F = float(os.getenv("PL_AIR_F", "10200"))
-_PL_AIR_G = float(os.getenv("PL_AIR_G", "1.4"))
+_PL_AIR_F = float(os.getenv("PL_AIR_F", "10400"))
+_PL_AIR_G = float(os.getenv("PL_AIR_G", "1.45"))
 _PL_AIR_MIX = float(os.getenv("PL_AIR_MIX", "0.085"))
 
 _PL_GLOSS_ON = (os.getenv("PL_GLOSS_ON", "1").strip() == "1")
-_PL_GLOSS_HP_HZ = float(os.getenv("PL_GLOSS_HP_HZ", "6500"))
-_PL_GLOSS_LP_HZ = float(os.getenv("PL_GLOSS_LP_HZ", "15500"))
-_PL_GLOSS_DRIVE_DB = float(os.getenv("PL_GLOSS_DRIVE_DB", "2.8"))
-_PL_GLOSS_MIX = float(os.getenv("PL_GLOSS_MIX", "0.055"))
+_PL_GLOSS_HP_HZ = float(os.getenv("PL_GLOSS_HP_HZ", "7200"))
+_PL_GLOSS_LP_HZ = float(os.getenv("PL_GLOSS_LP_HZ", "16000"))
+_PL_GLOSS_DRIVE_DB = float(os.getenv("PL_GLOSS_DRIVE_DB", "2.4"))
+_PL_GLOSS_MIX = float(os.getenv("PL_GLOSS_MIX", "0.075"))
 
 _PL_WIDTH_ON = (os.getenv("PL_WIDTH_ON", "1").strip() == "1")
-_PL_WIDTH_HP_HZ = float(os.getenv("PL_WIDTH_HP_HZ", "5200"))
+_PL_WIDTH_HP_HZ = float(os.getenv("PL_WIDTH_HP_HZ", "5600"))
 _PL_WIDTH_M = float(os.getenv("PL_WIDTH_M", "1.10"))
-_PL_WIDTH_MIX = float(os.getenv("PL_WIDTH_MIX", "0.07"))
+_PL_WIDTH_MIX = float(os.getenv("PL_WIDTH_MIX", "0.065"))
 
-_PL_OUT_TRIM_DB = float(os.getenv("PL_OUT_TRIM_DB", "-1.5"))
+_PL_OUT_TRIM_DB = float(os.getenv("PL_OUT_TRIM_DB", "-1.3"))
 
 
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -977,7 +977,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     _run(cmd)
     return out_path, out_name
-
 
 # wrappers to preserve internal naming
 def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
