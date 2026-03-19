@@ -850,29 +850,29 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 # ---------------------------
 
 _PL_GLUE_ON = (os.getenv("PL_GLUE_ON", "1").strip() == "1")
-_PL_GLUE_RATIO = float(os.getenv("PL_GLUE_RATIO", "1.18"))
-_PL_GLUE_THRESHOLD_DB = float(os.getenv("PL_GLUE_THRESHOLD_DB", "-20"))
-_PL_GLUE_ATTACK_MS = float(os.getenv("PL_GLUE_ATTACK_MS", "24"))
-_PL_GLUE_RELEASE_MS = float(os.getenv("PL_GLUE_RELEASE_MS", "190"))
-_PL_GLUE_MIX = float(os.getenv("PL_GLUE_MIX", "0.11"))
+_PL_GLUE_RATIO = float(os.getenv("PL_GLUE_RATIO", "1.12"))
+_PL_GLUE_THRESHOLD_DB = float(os.getenv("PL_GLUE_THRESHOLD_DB", "-21"))
+_PL_GLUE_ATTACK_MS = float(os.getenv("PL_GLUE_ATTACK_MS", "32"))
+_PL_GLUE_RELEASE_MS = float(os.getenv("PL_GLUE_RELEASE_MS", "220"))
+_PL_GLUE_MIX = float(os.getenv("PL_GLUE_MIX", "0.08"))
 
-_PL_AIR_ON = (os.getenv("PL_AIR_ON", "1").strip() == "1")
-_PL_AIR_F = float(os.getenv("PL_AIR_F", "10400"))
-_PL_AIR_G = float(os.getenv("PL_AIR_G", "1.45"))
-_PL_AIR_MIX = float(os.getenv("PL_AIR_MIX", "0.085"))
+_PL_SHEEN_ON = (os.getenv("PL_SHEEN_ON", "1").strip() == "1")
+_PL_SHEEN_HP_HZ = float(os.getenv("PL_SHEEN_HP_HZ", "5600"))
+_PL_SHEEN_LP_HZ = float(os.getenv("PL_SHEEN_LP_HZ", "15000"))
+_PL_SHEEN_DRIVE_DB = float(os.getenv("PL_SHEEN_DRIVE_DB", "1.6"))
+_PL_SHEEN_MIX = float(os.getenv("PL_SHEEN_MIX", "0.050"))
 
-_PL_GLOSS_ON = (os.getenv("PL_GLOSS_ON", "1").strip() == "1")
-_PL_GLOSS_HP_HZ = float(os.getenv("PL_GLOSS_HP_HZ", "7200"))
-_PL_GLOSS_LP_HZ = float(os.getenv("PL_GLOSS_LP_HZ", "16000"))
-_PL_GLOSS_DRIVE_DB = float(os.getenv("PL_GLOSS_DRIVE_DB", "2.4"))
-_PL_GLOSS_MIX = float(os.getenv("PL_GLOSS_MIX", "0.075"))
+_PL_FINISH_ON = (os.getenv("PL_FINISH_ON", "1").strip() == "1")
+_PL_FINISH_F = float(os.getenv("PL_FINISH_F", "11200"))
+_PL_FINISH_G = float(os.getenv("PL_FINISH_G", "1.15"))
+_PL_FINISH_MIX = float(os.getenv("PL_FINISH_MIX", "0.080"))
 
-_PL_WIDTH_ON = (os.getenv("PL_WIDTH_ON", "1").strip() == "1")
-_PL_WIDTH_HP_HZ = float(os.getenv("PL_WIDTH_HP_HZ", "5600"))
-_PL_WIDTH_M = float(os.getenv("PL_WIDTH_M", "1.10"))
-_PL_WIDTH_MIX = float(os.getenv("PL_WIDTH_MIX", "0.065"))
+_PL_SPACE_ON = (os.getenv("PL_SPACE_ON", "1").strip() == "1")
+_PL_SPACE_HP_HZ = float(os.getenv("PL_SPACE_HP_HZ", "6200"))
+_PL_SPACE_M = float(os.getenv("PL_SPACE_M", "1.07"))
+_PL_SPACE_MIX = float(os.getenv("PL_SPACE_MIX", "0.045"))
 
-_PL_OUT_TRIM_DB = float(os.getenv("PL_OUT_TRIM_DB", "-1.3"))
+_PL_OUT_TRIM_DB = float(os.getenv("PL_OUT_TRIM_DB", "-1.0"))
 
 
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -881,41 +881,41 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     fmt = _normalize_format(fmt)
 
     intensity_scale = {
-        "low": 0.85,
+        "low": 0.84,
         "balanced": 1.00,
         "high": 1.10,
     }[intensity]
 
-    tone_air_mul = {
-        "warm": 0.88,
+    tone_finish_mul = {
+        "warm": 0.90,
         "balanced": 1.00,
-        "bright": 1.12,
+        "bright": 1.10,
     }[tone]
 
     glue_ratio = _clamp(_PL_GLUE_RATIO, 1.0, 2.0)
     glue_thr = _clamp(_PL_GLUE_THRESHOLD_DB, -60.0, 0.0)
     glue_att = _clamp(_PL_GLUE_ATTACK_MS, 1.0, 200.0)
     glue_rel = _clamp(_PL_GLUE_RELEASE_MS, 20.0, 2000.0)
-    glue_mix = _clamp(_PL_GLUE_MIX * intensity_scale, 0.0, 0.30)
+    glue_mix = _clamp(_PL_GLUE_MIX * intensity_scale, 0.0, 0.20)
 
-    air_f = _clamp(_PL_AIR_F, 6000.0, 16000.0)
-    air_g = _clamp(_PL_AIR_G * tone_air_mul, 0.0, 4.0)
-    air_mix = _clamp(_PL_AIR_MIX * intensity_scale, 0.0, 0.20)
+    sheen_hp = _clamp(_PL_SHEEN_HP_HZ, 3500.0, 12000.0)
+    sheen_lp = _clamp(_PL_SHEEN_LP_HZ, 7000.0, 19000.0)
+    if sheen_lp <= sheen_hp + 1000:
+        sheen_lp = sheen_hp + 1000
+    sheen_drive = _clamp(_PL_SHEEN_DRIVE_DB, 0.0, 8.0)
+    sheen_mix = _clamp(_PL_SHEEN_MIX * intensity_scale, 0.0, 0.10)
 
-    gloss_hp = _clamp(_PL_GLOSS_HP_HZ, 3500.0, 12000.0)
-    gloss_lp = _clamp(_PL_GLOSS_LP_HZ, 7000.0, 19000.0)
-    if gloss_lp <= gloss_hp + 1000:
-        gloss_lp = gloss_hp + 1000
-    gloss_drive = _clamp(_PL_GLOSS_DRIVE_DB, 0.0, 10.0)
-    gloss_mix = _clamp(_PL_GLOSS_MIX * intensity_scale, 0.0, 0.10)
+    finish_f = _clamp(_PL_FINISH_F, 7000.0, 18000.0)
+    finish_g = _clamp(_PL_FINISH_G * tone_finish_mul, 0.0, 3.0)
+    finish_mix = _clamp(_PL_FINISH_MIX * intensity_scale, 0.0, 0.16)
 
-    width_hp = _clamp(_PL_WIDTH_HP_HZ, 2500.0, 12000.0)
-    width_m = _clamp(_PL_WIDTH_M, 1.0, 1.8)
-    width_mix = _clamp(_PL_WIDTH_MIX * intensity_scale, 0.0, 0.15)
+    space_hp = _clamp(_PL_SPACE_HP_HZ, 3500.0, 14000.0)
+    space_m = _clamp(_PL_SPACE_M, 1.0, 1.35)
+    space_mix = _clamp(_PL_SPACE_MIX * intensity_scale, 0.0, 0.10)
 
     out_trim_db = _clamp(_PL_OUT_TRIM_DB, -18.0, 6.0)
 
-    parts = ["[0:a]asplit=4[gl][air][gls][wid]"]
+    parts = ["[0:a]asplit=4[gl][sh][fn][sp]"]
 
     if _PL_GLUE_ON and glue_mix > 0.0:
         parts.append(
@@ -926,39 +926,39 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     else:
         parts.append("[gl]volume=0[g0]")
 
-    if _PL_AIR_ON and air_mix > 0.0:
-        parts.append(
-            f"[air]"
-            f"highpass=f={max(air_f * 0.55, 4500.0)}:width=0.707,"
-            f"highshelf=f={air_f}:g={air_g},"
-            f"volume={air_mix}[a0]"
-        )
-    else:
-        parts.append("[air]volume=0[a0]")
-
-    if _PL_GLOSS_ON and gloss_mix > 0.0:
-        gloss_chain = _os_softclip_chain(
-            drive_db=gloss_drive,
-            hp=gloss_hp,
-            lp=gloss_lp,
+    if _PL_SHEEN_ON and sheen_mix > 0.0:
+        sheen_chain = _os_softclip_chain(
+            drive_db=sheen_drive,
+            hp=sheen_hp,
+            lp=sheen_lp,
             post_gain_db=0.0,
         )
-        parts.append(f"[gls]{gloss_chain},volume={gloss_mix}[s0]")
+        parts.append(f"[sh]{sheen_chain},volume={sheen_mix}[s0]")
     else:
-        parts.append("[gls]volume=0[s0]")
+        parts.append("[sh]volume=0[s0]")
 
-    if _PL_WIDTH_ON and width_mix > 0.0:
+    if _PL_FINISH_ON and finish_mix > 0.0:
         parts.append(
-            f"[wid]"
-            f"highpass=f={width_hp}:width=0.707,"
-            f"extrastereo=m={width_m},"
-            f"highpass=f={width_hp}:width=0.707,"
-            f"volume={width_mix}[w0]"
+            f"[fn]"
+            f"highpass=f={max(finish_f * 0.55, 5000.0)}:width=0.707,"
+            f"highshelf=f={finish_f}:g={finish_g},"
+            f"volume={finish_mix}[f0]"
         )
     else:
-        parts.append("[wid]volume=0[w0]")
+        parts.append("[fn]volume=0[f0]")
 
-    parts.append("[g0][a0][s0][w0]amix=inputs=4:normalize=0[m0]")
+    if _PL_SPACE_ON and space_mix > 0.0:
+        parts.append(
+            f"[sp]"
+            f"highpass=f={space_hp}:width=0.707,"
+            f"extrastereo=m={space_m},"
+            f"highpass=f={space_hp}:width=0.707,"
+            f"volume={space_mix}[p0]"
+        )
+    else:
+        parts.append("[sp]volume=0[p0]")
+
+    parts.append("[g0][s0][f0][p0]amix=inputs=4:normalize=0[m0]")
     if abs(out_trim_db) > 1e-9:
         parts.append(f"[m0]volume={out_trim_db}dB[out]")
     else:
@@ -977,6 +977,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     _run(cmd)
     return out_path, out_name
+
 
 # wrappers to preserve internal naming
 def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -1011,6 +1012,10 @@ _BLEND_POST_LRA = float(os.getenv("BLEND_POST_LRA", "7.0"))
 _BANDLAB_PREVIEW_GAIN_DB = float(os.getenv("BANDLAB_PREVIEW_GAIN_DB", "0.0"))
 _BAKUAGE_PREVIEW_GAIN_DB = float(os.getenv("BAKUAGE_PREVIEW_GAIN_DB", "0.0"))
 _ENHANCE_PREVIEW_GAIN_DB = float(os.getenv("ENHANCE_PREVIEW_GAIN_DB", "0.0"))
+
+_ART_BASE_GAIN = float(os.getenv("ART_BASE_GAIN", "1.0"))
+_ART_REVEAL_GAIN_DB = float(os.getenv("ART_REVEAL_GAIN_DB", "-14.0"))
+_ART_POLISH_GAIN_DB = float(os.getenv("ART_POLISH_GAIN_DB", "-16.0"))
 
 
 def _render_guard_stage(in_path: str, out_path: str):
@@ -1054,6 +1059,29 @@ def _render_final_blend(base_src: str, low_src: str, reveal_src: str, polish_src
         f'ffmpeg -y -hide_banner '
         f'-i {shlex.quote(base_src)} '
         f'-i {shlex.quote(low_src)} '
+        f'-i {shlex.quote(reveal_src)} '
+        f'-i {shlex.quote(polish_src)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+
+def _render_artistic_sum(base_src: str, reveal_src: str, polish_src: str, out_path: str):
+    base_gain = _clamp(_ART_BASE_GAIN, 0.5, 1.5)
+    reveal_gain_db = _clamp(_ART_REVEAL_GAIN_DB, -36.0, 6.0)
+    polish_gain_db = _clamp(_ART_POLISH_GAIN_DB, -36.0, 6.0)
+
+    fc = (
+        f"[0:a]volume={base_gain}[base];"
+        f"[1:a]volume={reveal_gain_db}dB[reveal];"
+        f"[2:a]volume={polish_gain_db}dB[polish];"
+        f"[base][reveal][polish]amix=inputs=3:normalize=0[out]"
+    )
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(base_src)} '
         f'-i {shlex.quote(reveal_src)} '
         f'-i {shlex.quote(polish_src)} '
         f'-filter_complex "{fc}" -map "[out]" '
@@ -1138,6 +1166,37 @@ def _render_single_branch_preview(
     final_path = os.path.join(td, final_name)
     os.replace(out_path, final_path)
     return final_path, final_name
+
+
+def _render_artistic_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    base_wav = os.path.join(td, "art_base.wav")
+    reveal_wav = os.path.join(td, "art_reveal.wav")
+    polish_wav = os.path.join(td, "art_polish.wav")
+    artistic_pre_wav = os.path.join(td, "artistic_pre.wav")
+    artistic_guarded_wav = os.path.join(td, "artistic_guarded.wav")
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-af "{_PRE_CLEAN_CHAIN}" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(base_wav)}'
+    )
+    _run(cmd)
+
+    reveal_wav, _ = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+
+    _render_artistic_sum(base_wav, reveal_wav, polish_wav, artistic_pre_wav)
+    _render_guard_stage(artistic_pre_wav, artistic_guarded_wav)
+
+    out_path, out_name = _render_post_stage(artistic_guarded_wav, fmt=fmt, td=td, loudnorm_params=None)
+
+    artistic_name = f"artistic_blend_{out_name}"
+    artistic_path = os.path.join(td, artistic_name)
+    os.replace(out_path, artistic_path)
+    return artistic_path, artistic_name
 
 
 # ---------------------------
@@ -1319,6 +1378,7 @@ def root():
             "/bakuage",
             "/enhance",
             "/blend",
+            "/artistic_blend",
             "/bandlab_branch",
             "/bakuage_branch",
             "/enhance_branch",
@@ -1385,15 +1445,19 @@ def health():
         "PL_GLUE_RATIO": os.getenv("PL_GLUE_RATIO"),
         "PL_GLUE_THRESHOLD_DB": os.getenv("PL_GLUE_THRESHOLD_DB"),
         "PL_GLUE_MIX": os.getenv("PL_GLUE_MIX"),
-        "PL_AIR_ON": os.getenv("PL_AIR_ON"),
-        "PL_AIR_F": os.getenv("PL_AIR_F"),
-        "PL_AIR_G": os.getenv("PL_AIR_G"),
-        "PL_GLOSS_ON": os.getenv("PL_GLOSS_ON"),
-        "PL_GLOSS_HP_HZ": os.getenv("PL_GLOSS_HP_HZ"),
-        "PL_GLOSS_LP_HZ": os.getenv("PL_GLOSS_LP_HZ"),
-        "PL_GLOSS_DRIVE_DB": os.getenv("PL_GLOSS_DRIVE_DB"),
-        "PL_WIDTH_ON": os.getenv("PL_WIDTH_ON"),
-        "PL_WIDTH_HP_HZ": os.getenv("PL_WIDTH_HP_HZ"),
+        "PL_SHEEN_ON": os.getenv("PL_SHEEN_ON"),
+        "PL_SHEEN_HP_HZ": os.getenv("PL_SHEEN_HP_HZ"),
+        "PL_SHEEN_LP_HZ": os.getenv("PL_SHEEN_LP_HZ"),
+        "PL_SHEEN_DRIVE_DB": os.getenv("PL_SHEEN_DRIVE_DB"),
+        "PL_SHEEN_MIX": os.getenv("PL_SHEEN_MIX"),
+        "PL_FINISH_ON": os.getenv("PL_FINISH_ON"),
+        "PL_FINISH_F": os.getenv("PL_FINISH_F"),
+        "PL_FINISH_G": os.getenv("PL_FINISH_G"),
+        "PL_FINISH_MIX": os.getenv("PL_FINISH_MIX"),
+        "PL_SPACE_ON": os.getenv("PL_SPACE_ON"),
+        "PL_SPACE_HP_HZ": os.getenv("PL_SPACE_HP_HZ"),
+        "PL_SPACE_M": os.getenv("PL_SPACE_M"),
+        "PL_SPACE_MIX": os.getenv("PL_SPACE_MIX"),
 
         "BLEND_BASE_GAIN": os.getenv("BLEND_BASE_GAIN"),
         "BLEND_LOW_GAIN_DB": os.getenv("BLEND_LOW_GAIN_DB"),
@@ -1410,6 +1474,10 @@ def health():
         "BANDLAB_PREVIEW_GAIN_DB": os.getenv("BANDLAB_PREVIEW_GAIN_DB"),
         "BAKUAGE_PREVIEW_GAIN_DB": os.getenv("BAKUAGE_PREVIEW_GAIN_DB"),
         "ENHANCE_PREVIEW_GAIN_DB": os.getenv("ENHANCE_PREVIEW_GAIN_DB"),
+
+        "ART_BASE_GAIN": os.getenv("ART_BASE_GAIN"),
+        "ART_REVEAL_GAIN_DB": os.getenv("ART_REVEAL_GAIN_DB"),
+        "ART_POLISH_GAIN_DB": os.getenv("ART_POLISH_GAIN_DB"),
     })
 
 
@@ -1785,6 +1853,35 @@ def blend_route():
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/artistic_blend")
+def artistic_blend_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_artistic_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
             return send_file(
