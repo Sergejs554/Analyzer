@@ -847,33 +847,53 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 # ---------------------------
 # POLISH / ENHANCE BRANCH
 # donor only, pre-limiter
-# Polish V5 = Mixea-like orientation donor
+# Polish V6 = Mixea-like orientation donor
 # ---------------------------
 
 _PL_GLUE_ON = (os.getenv("PL_GLUE_ON", "1").strip() == "1")
-_PL_GLUE_RATIO = float(os.getenv("PL_GLUE_RATIO", "1.18"))
-_PL_GLUE_THRESHOLD_DB = float(os.getenv("PL_GLUE_THRESHOLD_DB", "-20"))
-_PL_GLUE_ATTACK_MS = float(os.getenv("PL_GLUE_ATTACK_MS", "26"))
-_PL_GLUE_RELEASE_MS = float(os.getenv("PL_GLUE_RELEASE_MS", "180"))
-_PL_GLUE_MIX = float(os.getenv("PL_GLUE_MIX", "0.10"))
+_PL_GLUE_RATIO = float(os.getenv("PL_GLUE_RATIO", "1.22"))
+_PL_GLUE_THRESHOLD_DB = float(os.getenv("PL_GLUE_THRESHOLD_DB", "-19"))
+_PL_GLUE_ATTACK_MS = float(os.getenv("PL_GLUE_ATTACK_MS", "18"))
+_PL_GLUE_RELEASE_MS = float(os.getenv("PL_GLUE_RELEASE_MS", "150"))
+_PL_GLUE_MIX = float(os.getenv("PL_GLUE_MIX", "0.12"))
+
+_PL_PRES_ON = (os.getenv("PL_PRES_ON", "1").strip() == "1")
+_PL_PRES_HP_HZ = float(os.getenv("PL_PRES_HP_HZ", "1800"))
+_PL_PRES_LP_HZ = float(os.getenv("PL_PRES_LP_HZ", "5200"))
+_PL_PRES_F = float(os.getenv("PL_PRES_F", "2900"))
+_PL_PRES_G = float(os.getenv("PL_PRES_G", "2.1"))
+_PL_PRES_W = float(os.getenv("PL_PRES_W", "1.00"))
+_PL_PRES_F2 = float(os.getenv("PL_PRES_F2", "4200"))
+_PL_PRES_G2 = float(os.getenv("PL_PRES_G2", "0.9"))
+_PL_PRES_W2 = float(os.getenv("PL_PRES_W2", "1.10"))
+_PL_PRES_MIX = float(os.getenv("PL_PRES_MIX", "0.125"))
 
 _PL_SHEEN_ON = (os.getenv("PL_SHEEN_ON", "1").strip() == "1")
-_PL_SHEEN_HP_HZ = float(os.getenv("PL_SHEEN_HP_HZ", "5200"))
-_PL_SHEEN_LP_HZ = float(os.getenv("PL_SHEEN_LP_HZ", "14800"))
-_PL_SHEEN_DRIVE_DB = float(os.getenv("PL_SHEEN_DRIVE_DB", "2.2"))
-_PL_SHEEN_MIX = float(os.getenv("PL_SHEEN_MIX", "0.070"))
+_PL_SHEEN_HP_HZ = float(os.getenv("PL_SHEEN_HP_HZ", "5400"))
+_PL_SHEEN_LP_HZ = float(os.getenv("PL_SHEEN_LP_HZ", "14500"))
+_PL_SHEEN_DRIVE_DB = float(os.getenv("PL_SHEEN_DRIVE_DB", "2.8"))
+_PL_SHEEN_MIX = float(os.getenv("PL_SHEEN_MIX", "0.090"))
 
 _PL_FINISH_ON = (os.getenv("PL_FINISH_ON", "1").strip() == "1")
-_PL_FINISH_F = float(os.getenv("PL_FINISH_F", "11800"))
-_PL_FINISH_G = float(os.getenv("PL_FINISH_G", "1.55"))
-_PL_FINISH_MIX = float(os.getenv("PL_FINISH_MIX", "0.110"))
+_PL_FINISH_F = float(os.getenv("PL_FINISH_F", "12200"))
+_PL_FINISH_G = float(os.getenv("PL_FINISH_G", "1.95"))
+_PL_FINISH_MIX = float(os.getenv("PL_FINISH_MIX", "0.135"))
 
 _PL_SPACE_ON = (os.getenv("PL_SPACE_ON", "1").strip() == "1")
-_PL_SPACE_HP_HZ = float(os.getenv("PL_SPACE_HP_HZ", "5600"))
-_PL_SPACE_M = float(os.getenv("PL_SPACE_M", "1.10"))
-_PL_SPACE_MIX = float(os.getenv("PL_SPACE_MIX", "0.060"))
+_PL_SPACE_HP_HZ = float(os.getenv("PL_SPACE_HP_HZ", "5900"))
+_PL_SPACE_M = float(os.getenv("PL_SPACE_M", "1.14"))
+_PL_SPACE_MIX = float(os.getenv("PL_SPACE_MIX", "0.085"))
 
-_PL_OUT_TRIM_DB = float(os.getenv("PL_OUT_TRIM_DB", "-1.2"))
+_PL_GUARD_ON = (os.getenv("PL_GUARD_ON", "1").strip() == "1")
+_PL_GUARD_F = float(os.getenv("PL_GUARD_F", "3800"))
+_PL_GUARD_G = float(os.getenv("PL_GUARD_G", "-0.55"))
+_PL_GUARD_W = float(os.getenv("PL_GUARD_W", "1.10"))
+
+_PL_SIB_F = float(os.getenv("PL_SIB_F", "7600"))
+_PL_SIB_G = float(os.getenv("PL_SIB_G", "-0.45"))
+_PL_SIB_W = float(os.getenv("PL_SIB_W", "1.25"))
+
+_PL_OUT_TRIM_DB = float(os.getenv("PL_OUT_TRIM_DB", "-1.4"))
 
 
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -882,9 +902,9 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     fmt = _normalize_format(fmt)
 
     intensity_scale = {
-        "low": 0.86,
+        "low": 0.88,
         "balanced": 1.00,
-        "high": 1.10,
+        "high": 1.12,
     }[intensity]
 
     tone_finish_mul = {
@@ -899,30 +919,56 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         "bright": 1.06,
     }[tone]
 
-    glue_ratio = _clamp(_PL_GLUE_RATIO, 1.0, 2.0)
+    tone_pres_mul = {
+        "warm": 0.94,
+        "balanced": 1.00,
+        "bright": 1.07,
+    }[tone]
+
+    glue_ratio = _clamp(_PL_GLUE_RATIO, 1.0, 2.2)
     glue_thr = _clamp(_PL_GLUE_THRESHOLD_DB, -60.0, 0.0)
     glue_att = _clamp(_PL_GLUE_ATTACK_MS, 1.0, 200.0)
     glue_rel = _clamp(_PL_GLUE_RELEASE_MS, 20.0, 2000.0)
-    glue_mix = _clamp(_PL_GLUE_MIX * intensity_scale, 0.0, 0.24)
+    glue_mix = _clamp(_PL_GLUE_MIX * intensity_scale, 0.0, 0.26)
+
+    pres_hp = _clamp(_PL_PRES_HP_HZ, 1000.0, 3000.0)
+    pres_lp = _clamp(_PL_PRES_LP_HZ, 3200.0, 9000.0)
+    if pres_lp <= pres_hp + 600:
+        pres_lp = pres_hp + 600
+    pres_f = _clamp(_PL_PRES_F, 1800.0, 4200.0)
+    pres_g = _clamp(_PL_PRES_G * tone_pres_mul, -1.0, 3.5)
+    pres_w = _clamp(_PL_PRES_W, 0.2, 3.0)
+    pres_f2 = _clamp(_PL_PRES_F2, 2500.0, 6000.0)
+    pres_g2 = _clamp(_PL_PRES_G2 * tone_pres_mul, -1.0, 2.5)
+    pres_w2 = _clamp(_PL_PRES_W2, 0.2, 3.0)
+    pres_mix = _clamp(_PL_PRES_MIX * intensity_scale, 0.0, 0.18)
 
     sheen_hp = _clamp(_PL_SHEEN_HP_HZ, 3500.0, 12000.0)
     sheen_lp = _clamp(_PL_SHEEN_LP_HZ, 7000.0, 19000.0)
     if sheen_lp <= sheen_hp + 1000:
         sheen_lp = sheen_hp + 1000
     sheen_drive = _clamp(_PL_SHEEN_DRIVE_DB, 0.0, 8.0)
-    sheen_mix = _clamp(_PL_SHEEN_MIX * intensity_scale, 0.0, 0.12)
+    sheen_mix = _clamp(_PL_SHEEN_MIX * intensity_scale, 0.0, 0.14)
 
     finish_f = _clamp(_PL_FINISH_F, 7000.0, 18000.0)
-    finish_g = _clamp(_PL_FINISH_G * tone_finish_mul, 0.0, 3.5)
-    finish_mix = _clamp(_PL_FINISH_MIX * intensity_scale, 0.0, 0.18)
+    finish_g = _clamp(_PL_FINISH_G * tone_finish_mul, 0.0, 4.0)
+    finish_mix = _clamp(_PL_FINISH_MIX * intensity_scale, 0.0, 0.22)
 
     space_hp = _clamp(_PL_SPACE_HP_HZ, 3500.0, 14000.0)
-    space_m = _clamp(_PL_SPACE_M * tone_space_mul, 1.0, 1.35)
-    space_mix = _clamp(_PL_SPACE_MIX * intensity_scale, 0.0, 0.12)
+    space_m = _clamp(_PL_SPACE_M * tone_space_mul, 1.0, 1.45)
+    space_mix = _clamp(_PL_SPACE_MIX * intensity_scale, 0.0, 0.14)
+
+    guard_f = _clamp(_PL_GUARD_F, 2500.0, 6000.0)
+    guard_g = _clamp(_PL_GUARD_G, -2.5, 0.0)
+    guard_w = _clamp(_PL_GUARD_W, 0.2, 4.0)
+
+    sib_f = _clamp(_PL_SIB_F, 5000.0, 12000.0)
+    sib_g = _clamp(_PL_SIB_G, -2.5, 0.0)
+    sib_w = _clamp(_PL_SIB_W, 0.2, 4.0)
 
     out_trim_db = _clamp(_PL_OUT_TRIM_DB, -18.0, 6.0)
 
-    parts = ["[0:a]asplit=4[gl][sh][fn][sp]"]
+    parts = ["[0:a]asplit=5[gl][pr][sh][fn][sp]"]
 
     if _PL_GLUE_ON and glue_mix > 0.0:
         parts.append(
@@ -933,6 +979,21 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     else:
         parts.append("[gl]volume=0[g0]")
 
+    if _PL_PRES_ON and pres_mix > 0.0:
+        pres_chain = [
+            f"highpass=f={pres_hp}:width=0.707",
+            f"lowpass=f={pres_lp}:width=0.707",
+            f"equalizer=f={pres_f}:t=q:w={pres_w}:g={pres_g}",
+            f"equalizer=f={pres_f2}:t=q:w={pres_w2}:g={pres_g2}",
+        ]
+        if _PL_GUARD_ON:
+            pres_chain.append(f"equalizer=f={guard_f}:t=q:w={guard_w}:g={guard_g}")
+            pres_chain.append(f"equalizer=f={sib_f}:t=q:w={sib_w}:g={sib_g}")
+        pres_chain.append(f"volume={pres_mix}")
+        parts.append(f"[pr]{','.join(pres_chain)}[p0]")
+    else:
+        parts.append("[pr]volume=0[p0]")
+
     if _PL_SHEEN_ON and sheen_mix > 0.0:
         sheen_chain = _os_softclip_chain(
             drive_db=sheen_drive,
@@ -940,23 +1001,26 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
             lp=sheen_lp,
             post_gain_db=0.0,
         )
-        sheen_chain = (
-            sheen_chain
-            + ",equalizer=f=3600:t=q:w=1.0:g=-0.45"
-            + ",equalizer=f=7600:t=q:w=1.25:g=-0.35"
-        )
-        parts.append(f"[sh]{sheen_chain},volume={sheen_mix}[s0]")
+        if _PL_GUARD_ON:
+            sheen_chain = (
+                sheen_chain
+                + f",equalizer=f={guard_f}:t=q:w={guard_w}:g={guard_g}"
+                + f",equalizer=f={sib_f}:t=q:w={sib_w}:g={sib_g}"
+            )
+        sheen_chain = sheen_chain + f",volume={sheen_mix}"
+        parts.append(f"[sh]{sheen_chain}[s0]")
     else:
         parts.append("[sh]volume=0[s0]")
 
     if _PL_FINISH_ON and finish_mix > 0.0:
-        parts.append(
-            f"[fn]"
-            f"highpass=f={max(finish_f * 0.52, 5200.0)}:width=0.707,"
-            f"highshelf=f={finish_f}:g={finish_g},"
-            f"equalizer=f=7600:t=q:w=1.2:g=-0.25,"
-            f"volume={finish_mix}[f0]"
-        )
+        finish_chain = [
+            f"highpass=f={max(finish_f * 0.50, 5400.0)}:width=0.707",
+            f"highshelf=f={finish_f}:g={finish_g}",
+        ]
+        if _PL_GUARD_ON:
+            finish_chain.append(f"equalizer=f={sib_f}:t=q:w={sib_w}:g={sib_g}")
+        finish_chain.append(f"volume={finish_mix}")
+        parts.append(f"[fn]{','.join(finish_chain)}[f0]")
     else:
         parts.append("[fn]volume=0[f0]")
 
@@ -966,12 +1030,12 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
             f"highpass=f={space_hp}:width=0.707,"
             f"extrastereo=m={space_m},"
             f"highpass=f={space_hp}:width=0.707,"
-            f"volume={space_mix}[p0]"
+            f"volume={space_mix}[x0]"
         )
     else:
-        parts.append("[sp]volume=0[p0]")
+        parts.append("[sp]volume=0[x0]")
 
-    parts.append("[g0][s0][f0][p0]amix=inputs=4:normalize=0[m0]")
+    parts.append("[g0][p0][s0][f0][x0]amix=inputs=5:normalize=0[m0]")
     if abs(out_trim_db) > 1e-9:
         parts.append(f"[m0]volume={out_trim_db}dB[out]")
     else:
@@ -1458,19 +1522,37 @@ def health():
         "PL_GLUE_RATIO": os.getenv("PL_GLUE_RATIO"),
         "PL_GLUE_THRESHOLD_DB": os.getenv("PL_GLUE_THRESHOLD_DB"),
         "PL_GLUE_MIX": os.getenv("PL_GLUE_MIX"),
+
+        "PL_PRES_ON": os.getenv("PL_PRES_ON"),
+        "PL_PRES_HP_HZ": os.getenv("PL_PRES_HP_HZ"),
+        "PL_PRES_LP_HZ": os.getenv("PL_PRES_LP_HZ"),
+        "PL_PRES_F": os.getenv("PL_PRES_F"),
+        "PL_PRES_G": os.getenv("PL_PRES_G"),
+        "PL_PRES_F2": os.getenv("PL_PRES_F2"),
+        "PL_PRES_G2": os.getenv("PL_PRES_G2"),
+        "PL_PRES_MIX": os.getenv("PL_PRES_MIX"),
+
         "PL_SHEEN_ON": os.getenv("PL_SHEEN_ON"),
         "PL_SHEEN_HP_HZ": os.getenv("PL_SHEEN_HP_HZ"),
         "PL_SHEEN_LP_HZ": os.getenv("PL_SHEEN_LP_HZ"),
         "PL_SHEEN_DRIVE_DB": os.getenv("PL_SHEEN_DRIVE_DB"),
         "PL_SHEEN_MIX": os.getenv("PL_SHEEN_MIX"),
+
         "PL_FINISH_ON": os.getenv("PL_FINISH_ON"),
         "PL_FINISH_F": os.getenv("PL_FINISH_F"),
         "PL_FINISH_G": os.getenv("PL_FINISH_G"),
         "PL_FINISH_MIX": os.getenv("PL_FINISH_MIX"),
+
         "PL_SPACE_ON": os.getenv("PL_SPACE_ON"),
         "PL_SPACE_HP_HZ": os.getenv("PL_SPACE_HP_HZ"),
         "PL_SPACE_M": os.getenv("PL_SPACE_M"),
         "PL_SPACE_MIX": os.getenv("PL_SPACE_MIX"),
+
+        "PL_GUARD_ON": os.getenv("PL_GUARD_ON"),
+        "PL_GUARD_F": os.getenv("PL_GUARD_F"),
+        "PL_GUARD_G": os.getenv("PL_GUARD_G"),
+        "PL_SIB_F": os.getenv("PL_SIB_F"),
+        "PL_SIB_G": os.getenv("PL_SIB_G"),
 
         "BLEND_BASE_GAIN": os.getenv("BLEND_BASE_GAIN"),
         "BLEND_LOW_GAIN_DB": os.getenv("BLEND_LOW_GAIN_DB"),
