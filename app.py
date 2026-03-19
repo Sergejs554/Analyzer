@@ -847,52 +847,58 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 # ---------------------------
 # POLISH / ENHANCE BRANCH
 # donor only, pre-limiter
-# Polish V8 = reorientation donor
-# anti-pushback -> front projection -> edge excite -> air finish -> width
+# Polish V9 = serial front-facing architecture
 # ---------------------------
 
-_PL_AP_ON = (os.getenv("PL_AP_ON", "1").strip() == "1")
-_PL_AP_HP_HZ = float(os.getenv("PL_AP_HP_HZ", "170"))
-_PL_AP_LP_HZ = float(os.getenv("PL_AP_LP_HZ", "520"))
-_PL_AP_F1 = float(os.getenv("PL_AP_F1", "300"))
-_PL_AP_G1 = float(os.getenv("PL_AP_G1", "-1.55"))
-_PL_AP_W1 = float(os.getenv("PL_AP_W1", "1.05"))
-_PL_AP_F2 = float(os.getenv("PL_AP_F2", "560"))
-_PL_AP_G2 = float(os.getenv("PL_AP_G2", "-0.55"))
-_PL_AP_W2 = float(os.getenv("PL_AP_W2", "1.05"))
-_PL_AP_MIX = float(os.getenv("PL_AP_MIX", "0.135"))
+_PL_CLEAN_ON = (os.getenv("PL_CLEAN_ON", "1").strip() == "1")
+_PL_CLEAN_F1 = float(os.getenv("PL_CLEAN_F1", "280"))
+_PL_CLEAN_G1 = float(os.getenv("PL_CLEAN_G1", "-1.85"))
+_PL_CLEAN_W1 = float(os.getenv("PL_CLEAN_W1", "1.05"))
+_PL_CLEAN_F2 = float(os.getenv("PL_CLEAN_F2", "430"))
+_PL_CLEAN_G2 = float(os.getenv("PL_CLEAN_G2", "-1.10"))
+_PL_CLEAN_W2 = float(os.getenv("PL_CLEAN_W2", "1.00"))
+_PL_CLEAN_F3 = float(os.getenv("PL_CLEAN_F3", "620"))
+_PL_CLEAN_G3 = float(os.getenv("PL_CLEAN_G3", "-0.45"))
+_PL_CLEAN_W3 = float(os.getenv("PL_CLEAN_W3", "1.00"))
 
 _PL_PROJ_ON = (os.getenv("PL_PROJ_ON", "1").strip() == "1")
-_PL_PROJ_HP_HZ = float(os.getenv("PL_PROJ_HP_HZ", "1850"))
-_PL_PROJ_LP_HZ = float(os.getenv("PL_PROJ_LP_HZ", "4700"))
-_PL_PROJ_F1 = float(os.getenv("PL_PROJ_F1", "2550"))
-_PL_PROJ_G1 = float(os.getenv("PL_PROJ_G1", "2.35"))
-_PL_PROJ_W1 = float(os.getenv("PL_PROJ_W1", "0.95"))
-_PL_PROJ_F2 = float(os.getenv("PL_PROJ_F2", "3950"))
+_PL_PROJ_F1 = float(os.getenv("PL_PROJ_F1", "2350"))
+_PL_PROJ_G1 = float(os.getenv("PL_PROJ_G1", "1.65"))
+_PL_PROJ_W1 = float(os.getenv("PL_PROJ_W1", "0.90"))
+_PL_PROJ_F2 = float(os.getenv("PL_PROJ_F2", "3400"))
 _PL_PROJ_G2 = float(os.getenv("PL_PROJ_G2", "0.95"))
-_PL_PROJ_W2 = float(os.getenv("PL_PROJ_W2", "1.05"))
-_PL_PROJ_MIX = float(os.getenv("PL_PROJ_MIX", "0.145"))
+_PL_PROJ_W2 = float(os.getenv("PL_PROJ_W2", "0.95"))
+_PL_PROJ_F3 = float(os.getenv("PL_PROJ_F3", "4700"))
+_PL_PROJ_G3 = float(os.getenv("PL_PROJ_G3", "-0.35"))
+_PL_PROJ_W3 = float(os.getenv("PL_PROJ_W3", "1.10"))
+
+_PL_PUNCH_ON = (os.getenv("PL_PUNCH_ON", "1").strip() == "1")
+_PL_PUNCH_MODE = os.getenv("PL_PUNCH_MODE", "expander").strip().lower()
+_PL_PUNCH_THRESHOLD_DB = float(os.getenv("PL_PUNCH_THRESHOLD_DB", "-29"))
+_PL_PUNCH_RATIO = float(os.getenv("PL_PUNCH_RATIO", "1.22"))
+_PL_PUNCH_ATTACK_MS = float(os.getenv("PL_PUNCH_ATTACK_MS", "4"))
+_PL_PUNCH_RELEASE_MS = float(os.getenv("PL_PUNCH_RELEASE_MS", "55"))
+_PL_PUNCH_KNEE_DB = float(os.getenv("PL_PUNCH_KNEE_DB", "1.5"))
+_PL_PUNCH_MAKEUP_DB = float(os.getenv("PL_PUNCH_MAKEUP_DB", "0.0"))
 
 _PL_EDGE_ON = (os.getenv("PL_EDGE_ON", "1").strip() == "1")
-_PL_EDGE_HP_HZ = float(os.getenv("PL_EDGE_HP_HZ", "3400"))
-_PL_EDGE_LP_HZ = float(os.getenv("PL_EDGE_LP_HZ", "8600"))
-_PL_EDGE_DRIVE_DB = float(os.getenv("PL_EDGE_DRIVE_DB", "1.85"))
-_PL_EDGE_POST_F = float(os.getenv("PL_EDGE_POST_F", "5400"))
-_PL_EDGE_POST_G = float(os.getenv("PL_EDGE_POST_G", "-0.45"))
+_PL_EDGE_HP_HZ = float(os.getenv("PL_EDGE_HP_HZ", "3100"))
+_PL_EDGE_LP_HZ = float(os.getenv("PL_EDGE_LP_HZ", "7600"))
+_PL_EDGE_DRIVE_DB = float(os.getenv("PL_EDGE_DRIVE_DB", "1.05"))
+_PL_EDGE_POST_F = float(os.getenv("PL_EDGE_POST_F", "5200"))
+_PL_EDGE_POST_G = float(os.getenv("PL_EDGE_POST_G", "-0.30"))
 _PL_EDGE_POST_W = float(os.getenv("PL_EDGE_POST_W", "1.15"))
-_PL_EDGE_MIX = float(os.getenv("PL_EDGE_MIX", "0.070"))
+_PL_EDGE_MIX = float(os.getenv("PL_EDGE_MIX", "0.16"))
 
 _PL_AIR_ON = (os.getenv("PL_AIR_ON", "1").strip() == "1")
-_PL_AIR_F = float(os.getenv("PL_AIR_F", "11800"))
-_PL_AIR_G = float(os.getenv("PL_AIR_G", "1.70"))
-_PL_AIR_MIX = float(os.getenv("PL_AIR_MIX", "0.120"))
+_PL_AIR_F = float(os.getenv("PL_AIR_F", "11200"))
+_PL_AIR_G = float(os.getenv("PL_AIR_G", "1.25"))
 
-_PL_SPACE_ON = (os.getenv("PL_SPACE_ON", "1").strip() == "1")
-_PL_SPACE_HP_HZ = float(os.getenv("PL_SPACE_HP_HZ", "6100"))
-_PL_SPACE_M = float(os.getenv("PL_SPACE_M", "1.10"))
-_PL_SPACE_MIX = float(os.getenv("PL_SPACE_MIX", "0.060"))
+_PL_WIDTH_ON = (os.getenv("PL_WIDTH_ON", "1").strip() == "1")
+_PL_WIDTH_HP_HZ = float(os.getenv("PL_WIDTH_HP_HZ", "6500"))
+_PL_WIDTH_M = float(os.getenv("PL_WIDTH_M", "1.08"))
 
-_PL_OUT_TRIM_DB = float(os.getenv("PL_OUT_TRIM_DB", "-1.25"))
+_PL_TRIM_DB = float(os.getenv("PL_TRIM_DB", "-0.90"))
 
 
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -907,151 +913,151 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     }[intensity]
 
     tone_air_mul = {
-        "warm": 0.92,
+        "warm": 0.90,
+        "balanced": 1.00,
+        "bright": 1.10,
+    }[tone]
+
+    tone_proj_mul = {
+        "warm": 0.95,
         "balanced": 1.00,
         "bright": 1.08,
     }[tone]
 
-    tone_proj_mul = {
-        "warm": 0.96,
-        "balanced": 1.00,
-        "bright": 1.06,
-    }[tone]
-
-    tone_space_mul = {
+    tone_width_mul = {
         "warm": 0.97,
         "balanced": 1.00,
         "bright": 1.05,
     }[tone]
 
-    ap_hp = _clamp(_PL_AP_HP_HZ, 80.0, 260.0)
-    ap_lp = _clamp(_PL_AP_LP_HZ, 300.0, 900.0)
-    if ap_lp <= ap_hp + 80.0:
-        ap_lp = ap_hp + 80.0
-    ap_f1 = _clamp(_PL_AP_F1, 180.0, 420.0)
-    ap_g1 = _clamp(_PL_AP_G1, -4.0, 0.0)
-    ap_w1 = _clamp(_PL_AP_W1, 0.2, 3.0)
-    ap_f2 = _clamp(_PL_AP_F2, 350.0, 900.0)
-    ap_g2 = _clamp(_PL_AP_G2, -2.0, 1.0)
-    ap_w2 = _clamp(_PL_AP_W2, 0.2, 3.0)
-    ap_mix = _clamp(_PL_AP_MIX * intensity_scale, 0.0, 0.20)
+    c1f = _clamp(_PL_CLEAN_F1, 140.0, 420.0)
+    c1g = _clamp(_PL_CLEAN_G1, -4.0, 0.0)
+    c1w = _clamp(_PL_CLEAN_W1, 0.2, 3.0)
 
-    proj_hp = _clamp(_PL_PROJ_HP_HZ, 1200.0, 2800.0)
-    proj_lp = _clamp(_PL_PROJ_LP_HZ, 3000.0, 7000.0)
-    if proj_lp <= proj_hp + 800.0:
-        proj_lp = proj_hp + 800.0
-    proj_f1 = _clamp(_PL_PROJ_F1, 1800.0, 3400.0)
-    proj_g1 = _clamp(_PL_PROJ_G1 * tone_proj_mul, -1.0, 3.5)
-    proj_w1 = _clamp(_PL_PROJ_W1, 0.2, 3.0)
-    proj_f2 = _clamp(_PL_PROJ_F2, 2800.0, 5200.0)
-    proj_g2 = _clamp(_PL_PROJ_G2 * tone_proj_mul, -1.0, 2.5)
-    proj_w2 = _clamp(_PL_PROJ_W2, 0.2, 3.0)
-    proj_mix = _clamp(_PL_PROJ_MIX * intensity_scale, 0.0, 0.20)
+    c2f = _clamp(_PL_CLEAN_F2, 220.0, 700.0)
+    c2g = _clamp(_PL_CLEAN_G2, -3.0, 1.0)
+    c2w = _clamp(_PL_CLEAN_W2, 0.2, 3.0)
 
-    edge_hp = _clamp(_PL_EDGE_HP_HZ, 2200.0, 6000.0)
-    edge_lp = _clamp(_PL_EDGE_LP_HZ, 5000.0, 12000.0)
-    if edge_lp <= edge_hp + 1200.0:
-        edge_lp = edge_hp + 1200.0
-    edge_drive = _clamp(_PL_EDGE_DRIVE_DB, 0.0, 6.0)
-    edge_post_f = _clamp(_PL_EDGE_POST_F, 3500.0, 9000.0)
-    edge_post_g = _clamp(_PL_EDGE_POST_G, -2.0, 0.5)
-    edge_post_w = _clamp(_PL_EDGE_POST_W, 0.2, 3.0)
-    edge_mix = _clamp(_PL_EDGE_MIX * intensity_scale, 0.0, 0.12)
+    c3f = _clamp(_PL_CLEAN_F3, 350.0, 1200.0)
+    c3g = _clamp(_PL_CLEAN_G3, -2.0, 1.0)
+    c3w = _clamp(_PL_CLEAN_W3, 0.2, 3.0)
 
-    air_f = _clamp(_PL_AIR_F, 8000.0, 18000.0)
-    air_g = _clamp(_PL_AIR_G * tone_air_mul, 0.0, 3.5)
-    air_mix = _clamp(_PL_AIR_MIX * intensity_scale, 0.0, 0.20)
+    p1f = _clamp(_PL_PROJ_F1, 1600.0, 3200.0)
+    p1g = _clamp(_PL_PROJ_G1 * tone_proj_mul * intensity_scale, -1.0, 3.0)
+    p1w = _clamp(_PL_PROJ_W1, 0.2, 3.0)
 
-    space_hp = _clamp(_PL_SPACE_HP_HZ, 3500.0, 14000.0)
-    space_m = _clamp(_PL_SPACE_M * tone_space_mul, 1.0, 1.40)
-    space_mix = _clamp(_PL_SPACE_MIX * intensity_scale, 0.0, 0.12)
+    p2f = _clamp(_PL_PROJ_F2, 2200.0, 4500.0)
+    p2g = _clamp(_PL_PROJ_G2 * tone_proj_mul * intensity_scale, -1.0, 2.5)
+    p2w = _clamp(_PL_PROJ_W2, 0.2, 3.0)
 
-    out_trim_db = _clamp(_PL_OUT_TRIM_DB, -18.0, 6.0)
+    p3f = _clamp(_PL_PROJ_F3, 3000.0, 6500.0)
+    p3g = _clamp(_PL_PROJ_G3, -2.0, 1.0)
+    p3w = _clamp(_PL_PROJ_W3, 0.2, 3.0)
 
-    parts = ["[0:a]asplit=5[ap][pr][ed][air][sp]"]
+    punch_thr = _clamp(_PL_PUNCH_THRESHOLD_DB, -60.0, -1.0)
+    punch_ratio = _clamp(_PL_PUNCH_RATIO, 1.0, 4.0)
+    punch_att = _clamp(_PL_PUNCH_ATTACK_MS, 0.1, 50.0)
+    punch_rel = _clamp(_PL_PUNCH_RELEASE_MS, 5.0, 300.0)
+    punch_knee = _clamp(_PL_PUNCH_KNEE_DB, 0.0, 8.0)
+    punch_makeup = _clamp(_PL_PUNCH_MAKEUP_DB, -3.0, 6.0)
 
-    if _PL_AP_ON and ap_mix > 0.0:
-        ap_chain = [
-            f"highpass=f={ap_hp}:width=0.707",
-            f"lowpass=f={ap_lp}:width=0.707",
-            f"equalizer=f={ap_f1}:t=q:w={ap_w1}:g={ap_g1}",
-            f"equalizer=f={ap_f2}:t=q:w={ap_w2}:g={ap_g2}",
-            f"volume={ap_mix}",
-        ]
-        parts.append(f"[ap]{','.join(ap_chain)}[ap0]")
-    else:
-        parts.append("[ap]volume=0[ap0]")
+    edge_hp = _clamp(_PL_EDGE_HP_HZ, 1800.0, 6000.0)
+    edge_lp = _clamp(_PL_EDGE_LP_HZ, 4500.0, 12000.0)
+    if edge_lp <= edge_hp + 800.0:
+        edge_lp = edge_hp + 800.0
+    edge_drive = _clamp(_PL_EDGE_DRIVE_DB * intensity_scale, 0.0, 4.0)
+    edge_pf = _clamp(_PL_EDGE_POST_F, 3000.0, 9000.0)
+    edge_pg = _clamp(_PL_EDGE_POST_G, -2.0, 1.0)
+    edge_pw = _clamp(_PL_EDGE_POST_W, 0.2, 3.0)
+    edge_mix = _clamp(_PL_EDGE_MIX * intensity_scale, 0.0, 0.30)
 
-    if _PL_PROJ_ON and proj_mix > 0.0:
-        proj_chain = [
-            f"highpass=f={proj_hp}:width=0.707",
-            f"lowpass=f={proj_lp}:width=0.707",
-            f"equalizer=f={proj_f1}:t=q:w={proj_w1}:g={proj_g1}",
-            f"equalizer=f={proj_f2}:t=q:w={proj_w2}:g={proj_g2}",
-            "highpass=f=1700:width=0.707",
-            f"volume={proj_mix}",
-        ]
-        parts.append(f"[pr]{','.join(proj_chain)}[pr0]")
-    else:
-        parts.append("[pr]volume=0[pr0]")
+    air_f = _clamp(_PL_AIR_F, 7000.0, 18000.0)
+    air_g = _clamp(_PL_AIR_G * tone_air_mul * intensity_scale, 0.0, 3.0)
+
+    width_hp = _clamp(_PL_WIDTH_HP_HZ, 3500.0, 15000.0)
+    width_m = _clamp(_PL_WIDTH_M * tone_width_mul, 1.0, 1.35)
+
+    trim_db = _clamp(_PL_TRIM_DB, -12.0, 6.0)
+
+    serial_parts = []
+
+    if _PL_CLEAN_ON:
+        serial_parts.extend([
+            f"equalizer=f={c1f}:t=q:w={c1w}:g={c1g}",
+            f"equalizer=f={c2f}:t=q:w={c2w}:g={c2g}",
+            f"equalizer=f={c3f}:t=q:w={c3w}:g={c3g}",
+        ])
+
+    if _PL_PROJ_ON:
+        serial_parts.extend([
+            f"equalizer=f={p1f}:t=q:w={p1w}:g={p1g}",
+            f"equalizer=f={p2f}:t=q:w={p2w}:g={p2g}",
+            f"equalizer=f={p3f}:t=q:w={p3w}:g={p3g}",
+        ])
+
+    if _PL_PUNCH_ON:
+        if _PL_PUNCH_MODE == "compressor":
+            serial_parts.append(
+                f"acompressor=threshold={punch_thr}dB:ratio={punch_ratio}:attack={punch_att}:release={punch_rel}:knee={punch_knee}dB:makeup={punch_makeup}dB:mix=1"
+            )
+        else:
+            serial_parts.append(
+                f"aexpander=threshold={punch_thr}dB:ratio={punch_ratio}:attack={punch_att}:release={punch_rel}:knee={punch_knee}dB:makeup={punch_makeup}dB"
+            )
 
     if _PL_EDGE_ON and edge_mix > 0.0:
-        edge_chain = _os_softclip_chain(
-            drive_db=edge_drive,
-            hp=edge_hp,
-            lp=edge_lp,
-            post_gain_db=0.0,
+        parallel_edge = (
+            "[0:a]asplit=2[dry][edge];"
+            f"[edge]{_os_softclip_chain(drive_db=edge_drive, hp=edge_hp, lp=edge_lp, post_gain_db=0.0)},"
+            f"equalizer=f={edge_pf}:t=q:w={edge_pw}:g={edge_pg},"
+            f"volume={edge_mix}[edgep];"
+            "[dry][edgep]amix=inputs=2:normalize=0[eout]"
         )
-        edge_chain = (
-            edge_chain
-            + f",equalizer=f={edge_post_f}:t=q:w={edge_post_w}:g={edge_post_g}"
-            + f",volume={edge_mix}"
+
+        tmp_edge = os.path.join(td, "polish_serial_edge.wav")
+        cmd_edge = (
+            f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+            f'-filter_complex "{parallel_edge}" -map "[eout]" '
+            f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(tmp_edge)}'
         )
-        parts.append(f"[ed]{edge_chain}[ed0]")
+        _run(cmd_edge)
+        working_in = tmp_edge
     else:
-        parts.append("[ed]volume=0[ed0]")
+        working_in = in_path
 
-    if _PL_AIR_ON and air_mix > 0.0:
-        air_chain = [
-            f"highpass=f={max(air_f * 0.52, 5200.0)}:width=0.707",
-            f"highshelf=f={air_f}:g={air_g}",
-            f"volume={air_mix}",
-        ]
-        parts.append(f"[air]{','.join(air_chain)}[ar0]")
-    else:
-        parts.append("[air]volume=0[ar0]")
+    serial_chain = []
+    if serial_parts:
+        serial_chain.extend(serial_parts)
 
-    if _PL_SPACE_ON and space_mix > 0.0:
-        parts.append(
-            f"[sp]"
-            f"highpass=f={space_hp}:width=0.707,"
-            f"extrastereo=m={space_m},"
-            f"highpass=f={space_hp}:width=0.707,"
-            f"volume={space_mix}[sp0]"
-        )
-    else:
-        parts.append("[sp]volume=0[sp0]")
+    if _PL_AIR_ON:
+        serial_chain.append(f"highshelf=f={air_f}:g={air_g}")
 
-    parts.append("[ap0][pr0][ed0][ar0][sp0]amix=inputs=5:normalize=0[m0]")
-    if abs(out_trim_db) > 1e-9:
-        parts.append(f"[m0]volume={out_trim_db}dB[out]")
-    else:
-        parts.append("[m0]anull[out]")
+    if _PL_WIDTH_ON:
+        serial_chain.extend([
+            f"asplit=2[m0][s0]",
+            f"[s0]highpass=f={width_hp}:width=0.707,extrastereo=m={width_m}[sidew]",
+            "[m0][sidew]amix=inputs=2:normalize=0",
+        ])
 
-    fc = ";".join(parts)
+    if abs(trim_db) > 1e-9:
+        serial_chain.append(f"volume={trim_db}dB")
+
+    if not serial_chain:
+        serial_chain = ["anull"]
+
+    af = ",".join(serial_chain)
 
     out_args, out_name, _mime = _out_args(fmt)
     out_name = f"polish_{out_name}"
     out_path = os.path.join(td, out_name)
 
     cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-filter_complex "{fc}" -map "[out]" '
+        f'ffmpeg -y -hide_banner -i {shlex.quote(working_in)} '
+        f'-af "{af}" '
         f'{out_args} {shlex.quote(out_path)}'
     )
     _run(cmd)
     return out_path, out_name
-
 # wrappers to preserve internal naming
 def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     return _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
