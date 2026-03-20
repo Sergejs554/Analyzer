@@ -889,11 +889,11 @@ _MX_BODY_GUARD_W = float(os.getenv("MX_BODY_GUARD_W", "1.15"))
 
 # --- mid-anchor projection ---
 _MX_PROJ_F1 = float(os.getenv("MX_PROJ_F1", "1280"))
-_MX_PROJ_G1 = float(os.getenv("MX_PROJ_G1", "1.32"))
+_MX_PROJ_G1 = float(os.getenv("MX_PROJ_G1", "1.42"))
 _MX_PROJ_W1 = float(os.getenv("MX_PROJ_W1", "0.95"))
 
 _MX_PROJ_F2 = float(os.getenv("MX_PROJ_F2", "2050"))
-_MX_PROJ_G2 = float(os.getenv("MX_PROJ_G2", "0.58"))
+_MX_PROJ_G2 = float(os.getenv("MX_PROJ_G2", "0.66"))
 _MX_PROJ_W2 = float(os.getenv("MX_PROJ_W2", "1.00"))
 
 _MX_PROJ_F3 = float(os.getenv("MX_PROJ_F3", "3500"))
@@ -902,16 +902,16 @@ _MX_PROJ_W3 = float(os.getenv("MX_PROJ_W3", "1.15"))
 
 # --- harsh control ---
 _MX_HARSH_F1 = float(os.getenv("MX_HARSH_F1", "3200"))
-_MX_HARSH_G1 = float(os.getenv("MX_HARSH_G1", "-0.62"))
+_MX_HARSH_G1 = float(os.getenv("MX_HARSH_G1", "-0.48"))
 _MX_HARSH_W1 = float(os.getenv("MX_HARSH_W1", "1.20"))
 
 _MX_HARSH_F2 = float(os.getenv("MX_HARSH_F2", "5200"))
-_MX_HARSH_G2 = float(os.getenv("MX_HARSH_G2", "-0.34"))
+_MX_HARSH_G2 = float(os.getenv("MX_HARSH_G2", "-0.24"))
 _MX_HARSH_W2 = float(os.getenv("MX_HARSH_W2", "1.25"))
 
 # --- sibilance control ---
 _MX_SIB_F1 = float(os.getenv("MX_SIB_F1", "7300"))
-_MX_SIB_G1 = float(os.getenv("MX_SIB_G1", "-0.50"))
+_MX_SIB_G1 = float(os.getenv("MX_SIB_G1", "-0.36"))
 _MX_SIB_W1 = float(os.getenv("MX_SIB_W1", "1.55"))
 
 # --- micro-finish ---
@@ -919,15 +919,15 @@ _MX_EDGE_ON = (os.getenv("MX_EDGE_ON", "1").strip() == "1")
 _MX_EDGE_HP = float(os.getenv("MX_EDGE_HP", "3300"))
 _MX_EDGE_LP = float(os.getenv("MX_EDGE_LP", "8200"))
 _MX_EDGE_DRIVE = float(os.getenv("MX_EDGE_DRIVE", "1.00"))
-_MX_EDGE_MIX = float(os.getenv("MX_EDGE_MIX", "0.090"))
+_MX_EDGE_MIX = float(os.getenv("MX_EDGE_MIX", "0.105"))
 
 _MX_EDGE_POST_F = float(os.getenv("MX_EDGE_POST_F", "5200"))
-_MX_EDGE_POST_G = float(os.getenv("MX_EDGE_POST_G", "-0.12"))
+_MX_EDGE_POST_G = float(os.getenv("MX_EDGE_POST_G", "-0.08"))
 _MX_EDGE_POST_W = float(os.getenv("MX_EDGE_POST_W", "1.20"))
 
 _MX_AIR_ON = (os.getenv("MX_AIR_ON", "1").strip() == "1")
 _MX_AIR_F = float(os.getenv("MX_AIR_F", "11800"))
-_MX_AIR_G = float(os.getenv("MX_AIR_G", "0.55"))
+_MX_AIR_G = float(os.getenv("MX_AIR_G", "0.68"))
 
 # --- punch keeper / output ---
 _MX_PUNCH_ON = (os.getenv("MX_PUNCH_ON", "1").strip() == "1")
@@ -938,8 +938,7 @@ _MX_PUNCH_RELEASE_MS = float(os.getenv("MX_PUNCH_RELEASE_MS", "115"))
 _MX_PUNCH_KNEE_DB = float(os.getenv("MX_PUNCH_KNEE_DB", "1.5"))
 _MX_PUNCH_MAKEUP_DB = float(os.getenv("MX_PUNCH_MAKEUP_DB", "0.0"))
 
-_MX_TRIM_DB = float(os.getenv("MX_TRIM_DB", "0.40"))
-
+_MX_TRIM_DB = float(os.getenv("MX_TRIM_DB", "0.85"))
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
     intensity = _normalize_intensity(intensity)
