@@ -845,10 +845,9 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
 
 # ---------------------------
-# ---------------------------
 # POLISH / ENHANCE BRANCH
 # donor only, pre-limiter
-# Polish V10.1 = proper parallel filter_complex architecture
+# Polish V10.2 = safer parallel filter_complex architecture
 # ---------------------------
 
 _PL_CLEAN_ON = (os.getenv("PL_CLEAN_ON", "1").strip() == "1")
@@ -874,7 +873,7 @@ _PL_PROJ_G3 = float(os.getenv("PL_PROJ_G3", "-0.35"))
 _PL_PROJ_W3 = float(os.getenv("PL_PROJ_W3", "1.10"))
 
 _PL_PUNCH_ON = (os.getenv("PL_PUNCH_ON", "1").strip() == "1")
-_PL_PUNCH_MODE = os.getenv("PL_PUNCH_MODE", "expander").strip().lower()
+_PL_PUNCH_MODE = os.getenv("PL_PUNCH_MODE", "compressor").strip().lower()
 _PL_PUNCH_THRESHOLD_DB = float(os.getenv("PL_PUNCH_THRESHOLD_DB", "-29"))
 _PL_PUNCH_RATIO = float(os.getenv("PL_PUNCH_RATIO", "1.22"))
 _PL_PUNCH_ATTACK_MS = float(os.getenv("PL_PUNCH_ATTACK_MS", "4"))
@@ -1012,18 +1011,17 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         pol_label = "pol_proj"
 
     if _PL_PUNCH_ON:
-        if _PL_PUNCH_MODE == "compressor":
-            parts.append(
-                f"[{pol_label}]"
-                f"acompressor=threshold={punch_thr}dB:ratio={punch_ratio}:attack={punch_att}:release={punch_rel}:knee={punch_knee}dB:makeup={punch_makeup}dB:mix=1"
-                f"[pol_punch]"
-            )
-        else:
-            parts.append(
-                f"[{pol_label}]"
-                f"aexpander=threshold={punch_thr}dB:ratio={punch_ratio}:attack={punch_att}:release={punch_rel}:knee={punch_knee}dB:makeup={punch_makeup}dB"
-                f"[pol_punch]"
-            )
+        parts.append(
+            f"[{pol_label}]"
+            f"acompressor=threshold={punch_thr}dB:"
+            f"ratio={punch_ratio}:"
+            f"attack={punch_att}:"
+            f"release={punch_rel}:"
+            f"knee={punch_knee}dB:"
+            f"makeup={punch_makeup}dB:"
+            f"mix=1"
+            f"[pol_punch]"
+        )
         pol_label = "pol_punch"
 
     if _PL_EDGE_ON and edge_mix > 0.0:
@@ -1039,9 +1037,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         pol_label = "pol_edge"
 
     if _PL_AIR_ON:
-        parts.append(
-            f"[{pol_label}]highshelf=f={air_f}:g={air_g}[pol_air]"
-        )
+        parts.append(f"[{pol_label}]highshelf=f={air_f}:g={air_g}[pol_air]")
         pol_label = "pol_air"
 
     if _PL_WIDTH_ON and width_mix > 0.0:
@@ -1057,7 +1053,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         pol_label = "pol_width"
 
     parts.append(f"[{pol_label}]anull[pol0]")
-
     parts.append("[dry0][pol0]amix=inputs=2:normalize=0[m0]")
 
     if abs(trim_db) > 1e-9:
