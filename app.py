@@ -847,7 +847,7 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 # ---------------------------
 # POLISH / ENHANCE BRANCH
 # donor only, pre-limiter
-# Polish V9 = serial front-facing architecture
+# Polish V10 = proper parallel filter_complex architecture
 # ---------------------------
 
 _PL_CLEAN_ON = (os.getenv("PL_CLEAN_ON", "1").strip() == "1")
@@ -897,8 +897,10 @@ _PL_AIR_G = float(os.getenv("PL_AIR_G", "1.25"))
 _PL_WIDTH_ON = (os.getenv("PL_WIDTH_ON", "1").strip() == "1")
 _PL_WIDTH_HP_HZ = float(os.getenv("PL_WIDTH_HP_HZ", "6500"))
 _PL_WIDTH_M = float(os.getenv("PL_WIDTH_M", "1.08"))
+_PL_WIDTH_MIX = float(os.getenv("PL_WIDTH_MIX", "0.10"))
 
 _PL_TRIM_DB = float(os.getenv("PL_TRIM_DB", "-0.90"))
+_PL_DRY_GAIN = float(os.getenv("PL_DRY_GAIN", "1.0"))
 
 
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -976,20 +978,22 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
     width_hp = _clamp(_PL_WIDTH_HP_HZ, 3500.0, 15000.0)
     width_m = _clamp(_PL_WIDTH_M * tone_width_mul, 1.0, 1.35)
+    width_mix = _clamp(_PL_WIDTH_MIX * intensity_scale, 0.0, 0.25)
 
     trim_db = _clamp(_PL_TRIM_DB, -12.0, 6.0)
+    dry_gain = _clamp(_PL_DRY_GAIN, 0.25, 2.0)
 
-    serial_parts = []
+    polish_serial = []
 
     if _PL_CLEAN_ON:
-        serial_parts.extend([
+        polish_serial.extend([
             f"equalizer=f={c1f}:t=q:w={c1w}:g={c1g}",
             f"equalizer=f={c2f}:t=q:w={c2w}:g={c2g}",
             f"equalizer=f={c3f}:t=q:w={c3w}:g={c3g}",
         ])
 
     if _PL_PROJ_ON:
-        serial_parts.extend([
+        polish_serial.extend([
             f"equalizer=f={p1f}:t=q:w={p1w}:g={p1g}",
             f"equalizer=f={p2f}:t=q:w={p2w}:g={p2g}",
             f"equalizer=f={p3f}:t=q:w={p3w}:g={p3g}",
@@ -997,63 +1001,59 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
     if _PL_PUNCH_ON:
         if _PL_PUNCH_MODE == "compressor":
-            serial_parts.append(
+            polish_serial.append(
                 f"acompressor=threshold={punch_thr}dB:ratio={punch_ratio}:attack={punch_att}:release={punch_rel}:knee={punch_knee}dB:makeup={punch_makeup}dB:mix=1"
             )
         else:
-            serial_parts.append(
+            polish_serial.append(
                 f"aexpander=threshold={punch_thr}dB:ratio={punch_ratio}:attack={punch_att}:release={punch_rel}:knee={punch_knee}dB:makeup={punch_makeup}dB"
             )
 
     if _PL_EDGE_ON and edge_mix > 0.0:
-        parallel_edge = (
-            "[0:a]asplit=2[dry][edge];"
-            f"[edge]{_os_softclip_chain(drive_db=edge_drive, hp=edge_hp, lp=edge_lp, post_gain_db=0.0)},"
-            f"equalizer=f={edge_pf}:t=q:w={edge_pw}:g={edge_pg},"
-            f"volume={edge_mix}[edgep];"
-            "[dry][edgep]amix=inputs=2:normalize=0[eout]"
-        )
-
-        tmp_edge = os.path.join(td, "polish_serial_edge.wav")
-        cmd_edge = (
-            f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-            f'-filter_complex "{parallel_edge}" -map "[eout]" '
-            f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(tmp_edge)}'
-        )
-        _run(cmd_edge)
-        working_in = tmp_edge
-    else:
-        working_in = in_path
-
-    serial_chain = []
-    if serial_parts:
-        serial_chain.extend(serial_parts)
-
-    if _PL_AIR_ON:
-        serial_chain.append(f"highshelf=f={air_f}:g={air_g}")
-
-    if _PL_WIDTH_ON:
-        serial_chain.extend([
-            f"asplit=2[m0][s0]",
-            f"[s0]highpass=f={width_hp}:width=0.707,extrastereo=m={width_m}[sidew]",
-            "[m0][sidew]amix=inputs=2:normalize=0",
+        polish_serial.extend([
+            f"asplit=2[pdry][pedge]",
+            f"[pedge]{_os_softclip_chain(drive_db=edge_drive, hp=edge_hp, lp=edge_lp, post_gain_db=0.0)},equalizer=f={edge_pf}:t=q:w={edge_pw}:g={edge_pg},volume={edge_mix}[pedge2]",
+            "[pdry][pedge2]amix=inputs=2:normalize=0",
         ])
 
+    if _PL_AIR_ON:
+        polish_serial.append(f"highshelf=f={air_f}:g={air_g}")
+
+    polish_chain = ",".join(polish_serial) if polish_serial else "anull"
+
+    parts = [
+        "[0:a]asplit=2[dry][pol]",
+        f"[dry]volume={dry_gain}[dry0]",
+        f"[pol]{polish_chain}[pol0]",
+    ]
+
+    if _PL_WIDTH_ON and width_mix > 0.0:
+        parts.extend([
+            "[pol0]asplit=2[pm][ps]",
+            f"[ps]highpass=f={width_hp}:width=0.707,extrastereo=m={width_m},volume={width_mix}[psw]",
+            "[pm][psw]amix=inputs=2:normalize=0[pol1]",
+        ])
+    else:
+        parts.append("[pol0]anull[pol1]")
+
+    parts.extend([
+        "[dry0][pol1]amix=inputs=2:normalize=0[m0]",
+    ])
+
     if abs(trim_db) > 1e-9:
-        serial_chain.append(f"volume={trim_db}dB")
+        parts.append(f"[m0]volume={trim_db}dB[out]")
+    else:
+        parts.append("[m0]anull[out]")
 
-    if not serial_chain:
-        serial_chain = ["anull"]
-
-    af = ",".join(serial_chain)
+    fc = ";".join(parts)
 
     out_args, out_name, _mime = _out_args(fmt)
     out_name = f"polish_{out_name}"
     out_path = os.path.join(td, out_name)
 
     cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(working_in)} '
-        f'-af "{af}" '
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-filter_complex "{fc}" -map "[out]" '
         f'{out_args} {shlex.quote(out_path)}'
     )
     _run(cmd)
