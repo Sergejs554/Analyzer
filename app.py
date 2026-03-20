@@ -845,9 +845,10 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
 
 # ---------------------------
+# ---------------------------
 # POLISH / ENHANCE BRANCH
 # donor only, pre-limiter
-# Polish V10 = proper parallel filter_complex architecture
+# Polish V10.1 = proper parallel filter_complex architecture
 # ---------------------------
 
 _PL_CLEAN_ON = (os.getenv("PL_CLEAN_ON", "1").strip() == "1")
@@ -983,62 +984,81 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     trim_db = _clamp(_PL_TRIM_DB, -12.0, 6.0)
     dry_gain = _clamp(_PL_DRY_GAIN, 0.25, 2.0)
 
-    polish_serial = []
+    parts = [
+        "[0:a]asplit=2[dry][polin]",
+        f"[dry]volume={dry_gain}[dry0]",
+    ]
+
+    pol_label = "polin"
 
     if _PL_CLEAN_ON:
-        polish_serial.extend([
-            f"equalizer=f={c1f}:t=q:w={c1w}:g={c1g}",
-            f"equalizer=f={c2f}:t=q:w={c2w}:g={c2g}",
-            f"equalizer=f={c3f}:t=q:w={c3w}:g={c3g}",
-        ])
+        parts.append(
+            f"[{pol_label}]"
+            f"equalizer=f={c1f}:t=q:w={c1w}:g={c1g},"
+            f"equalizer=f={c2f}:t=q:w={c2w}:g={c2g},"
+            f"equalizer=f={c3f}:t=q:w={c3w}:g={c3g}"
+            f"[pol_clean]"
+        )
+        pol_label = "pol_clean"
 
     if _PL_PROJ_ON:
-        polish_serial.extend([
-            f"equalizer=f={p1f}:t=q:w={p1w}:g={p1g}",
-            f"equalizer=f={p2f}:t=q:w={p2w}:g={p2g}",
-            f"equalizer=f={p3f}:t=q:w={p3w}:g={p3g}",
-        ])
+        parts.append(
+            f"[{pol_label}]"
+            f"equalizer=f={p1f}:t=q:w={p1w}:g={p1g},"
+            f"equalizer=f={p2f}:t=q:w={p2w}:g={p2g},"
+            f"equalizer=f={p3f}:t=q:w={p3w}:g={p3g}"
+            f"[pol_proj]"
+        )
+        pol_label = "pol_proj"
 
     if _PL_PUNCH_ON:
         if _PL_PUNCH_MODE == "compressor":
-            polish_serial.append(
+            parts.append(
+                f"[{pol_label}]"
                 f"acompressor=threshold={punch_thr}dB:ratio={punch_ratio}:attack={punch_att}:release={punch_rel}:knee={punch_knee}dB:makeup={punch_makeup}dB:mix=1"
+                f"[pol_punch]"
             )
         else:
-            polish_serial.append(
+            parts.append(
+                f"[{pol_label}]"
                 f"aexpander=threshold={punch_thr}dB:ratio={punch_ratio}:attack={punch_att}:release={punch_rel}:knee={punch_knee}dB:makeup={punch_makeup}dB"
+                f"[pol_punch]"
             )
+        pol_label = "pol_punch"
 
     if _PL_EDGE_ON and edge_mix > 0.0:
-        polish_serial.extend([
-            f"asplit=2[pdry][pedge]",
-            f"[pedge]{_os_softclip_chain(drive_db=edge_drive, hp=edge_hp, lp=edge_lp, post_gain_db=0.0)},equalizer=f={edge_pf}:t=q:w={edge_pw}:g={edge_pg},volume={edge_mix}[pedge2]",
-            "[pdry][pedge2]amix=inputs=2:normalize=0",
-        ])
+        parts.append(f"[{pol_label}]asplit=2[edge_dry][edge_wet]")
+        parts.append(
+            f"[edge_wet]"
+            f"{_os_softclip_chain(drive_db=edge_drive, hp=edge_hp, lp=edge_lp, post_gain_db=0.0)},"
+            f"equalizer=f={edge_pf}:t=q:w={edge_pw}:g={edge_pg},"
+            f"volume={edge_mix}"
+            f"[edge_proc]"
+        )
+        parts.append("[edge_dry][edge_proc]amix=inputs=2:normalize=0[pol_edge]")
+        pol_label = "pol_edge"
 
     if _PL_AIR_ON:
-        polish_serial.append(f"highshelf=f={air_f}:g={air_g}")
-
-    polish_chain = ",".join(polish_serial) if polish_serial else "anull"
-
-    parts = [
-        "[0:a]asplit=2[dry][pol]",
-        f"[dry]volume={dry_gain}[dry0]",
-        f"[pol]{polish_chain}[pol0]",
-    ]
+        parts.append(
+            f"[{pol_label}]highshelf=f={air_f}:g={air_g}[pol_air]"
+        )
+        pol_label = "pol_air"
 
     if _PL_WIDTH_ON and width_mix > 0.0:
-        parts.extend([
-            "[pol0]asplit=2[pm][ps]",
-            f"[ps]highpass=f={width_hp}:width=0.707,extrastereo=m={width_m},volume={width_mix}[psw]",
-            "[pm][psw]amix=inputs=2:normalize=0[pol1]",
-        ])
-    else:
-        parts.append("[pol0]anull[pol1]")
+        parts.append(f"[{pol_label}]asplit=2[wid_mid][wid_side]")
+        parts.append(
+            f"[wid_side]"
+            f"highpass=f={width_hp}:width=0.707,"
+            f"extrastereo=m={width_m},"
+            f"volume={width_mix}"
+            f"[wid_proc]"
+        )
+        parts.append("[wid_mid][wid_proc]amix=inputs=2:normalize=0[pol_width]")
+        pol_label = "pol_width"
 
-    parts.extend([
-        "[dry0][pol1]amix=inputs=2:normalize=0[m0]",
-    ])
+    parts.append(f"[{pol_label}]anull[pol0]")
+
+    parts.append("[dry0][pol0]amix=inputs=2:normalize=0[m0]")
 
     if abs(trim_db) > 1e-9:
         parts.append(f"[m0]volume={trim_db}dB[out]")
