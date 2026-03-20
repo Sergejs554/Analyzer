@@ -847,7 +847,7 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 # ---------------------------
 # POLISH / ENHANCE BRANCH
 # donor only, pre-limiter
-# Polish V10.2 = safer parallel filter_complex architecture
+# branch-only, no internal dry/base blend
 # ---------------------------
 
 _PL_CLEAN_ON = (os.getenv("PL_CLEAN_ON", "1").strip() == "1")
@@ -900,7 +900,6 @@ _PL_WIDTH_M = float(os.getenv("PL_WIDTH_M", "1.08"))
 _PL_WIDTH_MIX = float(os.getenv("PL_WIDTH_MIX", "0.10"))
 
 _PL_TRIM_DB = float(os.getenv("PL_TRIM_DB", "-0.90"))
-_PL_DRY_GAIN = float(os.getenv("PL_DRY_GAIN", "1.0"))
 
 
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -981,12 +980,8 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     width_mix = _clamp(_PL_WIDTH_MIX * intensity_scale, 0.0, 0.25)
 
     trim_db = _clamp(_PL_TRIM_DB, -12.0, 6.0)
-    dry_gain = _clamp(_PL_DRY_GAIN, 0.25, 2.0)
 
-    parts = [
-        "[0:a]asplit=2[dry][polin]",
-        f"[dry]volume={dry_gain}[dry0]",
-    ]
+    parts = ["[0:a]anull[polin]"]
 
     pol_label = "polin"
 
@@ -1052,8 +1047,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         parts.append("[wid_mid][wid_proc]amix=inputs=2:normalize=0[pol_width]")
         pol_label = "pol_width"
 
-    parts.append(f"[{pol_label}]anull[pol0]")
-    parts.append("[dry0][pol0]amix=inputs=2:normalize=0[m0]")
+    parts.append(f"[{pol_label}]anull[m0]")
 
     if abs(trim_db) > 1e-9:
         parts.append(f"[m0]volume={trim_db}dB[out]")
@@ -1073,17 +1067,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     _run(cmd)
     return out_path, out_name
-# wrappers to preserve internal naming
-def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
-    return _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
 
-
-def _render_bakuage_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
-    return _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
-
-
-def _render_enhance(in_path: str, fmt: str, td: str, tone: str = "balanced", intensity: str = "balanced") -> tuple[str, str]:
-    return _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
 
 # wrappers to preserve internal naming
 def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -1547,48 +1531,44 @@ def health():
         "RV_WIDTH_M": os.getenv("RV_WIDTH_M"),
         "RV_GUARD_ON": os.getenv("RV_GUARD_ON"),
 
-        "PL_GLUE_ON": os.getenv("PL_GLUE_ON"),
-        "PL_GLUE_RATIO": os.getenv("PL_GLUE_RATIO"),
-        "PL_GLUE_THRESHOLD_DB": os.getenv("PL_GLUE_THRESHOLD_DB"),
-        "PL_GLUE_MIX": os.getenv("PL_GLUE_MIX"),
+        "PL_CLEAN_ON": os.getenv("PL_CLEAN_ON"),
+        "PL_CLEAN_F1": os.getenv("PL_CLEAN_F1"),
+        "PL_CLEAN_G1": os.getenv("PL_CLEAN_G1"),
+        "PL_CLEAN_F2": os.getenv("PL_CLEAN_F2"),
+        "PL_CLEAN_G2": os.getenv("PL_CLEAN_G2"),
+        "PL_CLEAN_F3": os.getenv("PL_CLEAN_F3"),
+        "PL_CLEAN_G3": os.getenv("PL_CLEAN_G3"),
 
-        "PL_FRONT_ON": os.getenv("PL_FRONT_ON"),
-        "PL_FRONT_HP_HZ": os.getenv("PL_FRONT_HP_HZ"),
-        "PL_FRONT_LP_HZ": os.getenv("PL_FRONT_LP_HZ"),
-        "PL_FRONT_F1": os.getenv("PL_FRONT_F1"),
-        "PL_FRONT_G1": os.getenv("PL_FRONT_G1"),
-        "PL_FRONT_F2": os.getenv("PL_FRONT_F2"),
-        "PL_FRONT_G2": os.getenv("PL_FRONT_G2"),
-        "PL_FRONT_MIX": os.getenv("PL_FRONT_MIX"),
+        "PL_PROJ_ON": os.getenv("PL_PROJ_ON"),
+        "PL_PROJ_F1": os.getenv("PL_PROJ_F1"),
+        "PL_PROJ_G1": os.getenv("PL_PROJ_G1"),
+        "PL_PROJ_F2": os.getenv("PL_PROJ_F2"),
+        "PL_PROJ_G2": os.getenv("PL_PROJ_G2"),
+        "PL_PROJ_F3": os.getenv("PL_PROJ_F3"),
+        "PL_PROJ_G3": os.getenv("PL_PROJ_G3"),
 
-        "PL_CONTOUR_ON": os.getenv("PL_CONTOUR_ON"),
-        "PL_CONTOUR_F": os.getenv("PL_CONTOUR_F"),
-        "PL_CONTOUR_G": os.getenv("PL_CONTOUR_G"),
-        "PL_CONTOUR_F2": os.getenv("PL_CONTOUR_F2"),
-        "PL_CONTOUR_G2": os.getenv("PL_CONTOUR_G2"),
-        "PL_CONTOUR_MIX": os.getenv("PL_CONTOUR_MIX"),
+        "PL_PUNCH_ON": os.getenv("PL_PUNCH_ON"),
+        "PL_PUNCH_MODE": os.getenv("PL_PUNCH_MODE"),
+        "PL_PUNCH_THRESHOLD_DB": os.getenv("PL_PUNCH_THRESHOLD_DB"),
+        "PL_PUNCH_RATIO": os.getenv("PL_PUNCH_RATIO"),
 
-        "PL_SHEEN_ON": os.getenv("PL_SHEEN_ON"),
-        "PL_SHEEN_HP_HZ": os.getenv("PL_SHEEN_HP_HZ"),
-        "PL_SHEEN_LP_HZ": os.getenv("PL_SHEEN_LP_HZ"),
-        "PL_SHEEN_DRIVE_DB": os.getenv("PL_SHEEN_DRIVE_DB"),
-        "PL_SHEEN_MIX": os.getenv("PL_SHEEN_MIX"),
+        "PL_EDGE_ON": os.getenv("PL_EDGE_ON"),
+        "PL_EDGE_HP_HZ": os.getenv("PL_EDGE_HP_HZ"),
+        "PL_EDGE_LP_HZ": os.getenv("PL_EDGE_LP_HZ"),
+        "PL_EDGE_DRIVE_DB": os.getenv("PL_EDGE_DRIVE_DB"),
+        "PL_EDGE_MIX": os.getenv("PL_EDGE_MIX"),
 
         "PL_AIR_ON": os.getenv("PL_AIR_ON"),
         "PL_AIR_F": os.getenv("PL_AIR_F"),
         "PL_AIR_G": os.getenv("PL_AIR_G"),
-        "PL_AIR_MIX": os.getenv("PL_AIR_MIX"),
 
-        "PL_SPACE_ON": os.getenv("PL_SPACE_ON"),
-        "PL_SPACE_HP_HZ": os.getenv("PL_SPACE_HP_HZ"),
-        "PL_SPACE_M": os.getenv("PL_SPACE_M"),
-        "PL_SPACE_MIX": os.getenv("PL_SPACE_MIX"),
+        "PL_WIDTH_ON": os.getenv("PL_WIDTH_ON"),
+        "PL_WIDTH_HP_HZ": os.getenv("PL_WIDTH_HP_HZ"),
+        "PL_WIDTH_M": os.getenv("PL_WIDTH_M"),
+        "PL_WIDTH_MIX": os.getenv("PL_WIDTH_MIX"),
 
-        "PL_SIB_SOFT_ON": os.getenv("PL_SIB_SOFT_ON"),
-        "PL_SIB_F": os.getenv("PL_SIB_F"),
-        "PL_SIB_G": os.getenv("PL_SIB_G"),
-        "PL_EDGE_SOFT_F": os.getenv("PL_EDGE_SOFT_F"),
-        "PL_EDGE_SOFT_G": os.getenv("PL_EDGE_SOFT_G"),
+        "PL_TRIM_DB": os.getenv("PL_TRIM_DB"),
+
         "BLEND_BASE_GAIN": os.getenv("BLEND_BASE_GAIN"),
         "BLEND_LOW_GAIN_DB": os.getenv("BLEND_LOW_GAIN_DB"),
         "BLEND_REVEAL_GAIN_DB": os.getenv("BLEND_REVEAL_GAIN_DB"),
@@ -1793,13 +1773,8 @@ def bandlab_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_single_branch_preview(
-                in_path=in_path,
-                tone=tone,
-                intensity=intensity,
-                fmt=fmt,
-                td=td,
-                branch_kind="bandlab",
+            out_path, out_name = _render_reveal_branch(
+                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
             )
             _out_args_str, _out_name2, mime = _out_args(fmt)
             return send_file(
@@ -1828,13 +1803,8 @@ def bakuage_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_single_branch_preview(
-                in_path=in_path,
-                tone=tone,
-                intensity=intensity,
-                fmt=fmt,
-                td=td,
-                branch_kind="bakuage",
+            out_path, out_name = _render_low_support_branch(
+                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
             )
             _out_args_str, _out_name2, mime = _out_args(fmt)
             return send_file(
@@ -1863,13 +1833,8 @@ def enhance_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_single_branch_preview(
-                in_path=in_path,
-                tone=tone,
-                intensity=intensity,
-                fmt=fmt,
-                td=td,
-                branch_kind="enhance",
+            out_path, out_name = _render_polish_branch(
+                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
             )
             _out_args_str, _out_name2, mime = _out_args(fmt)
             return send_file(
