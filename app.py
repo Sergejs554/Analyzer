@@ -915,15 +915,15 @@ _TOP_GLOBAL_BUILD_MUL = float(os.getenv("TOP_GLOBAL_BUILD_MUL", "1.00"))
 _TOP_GLOBAL_SAFE_MUL = float(os.getenv("TOP_GLOBAL_SAFE_MUL", "1.00"))
 
 # --- Presence Contour Shaper ---
-_TOP_PRES_DIP_F = float(os.getenv("TOP_PRES_DIP_F", "3650"))
-_TOP_PRES_DIP_G = float(os.getenv("TOP_PRES_DIP_G", "-0.75"))
-_TOP_PRES_DIP_W = float(os.getenv("TOP_PRES_DIP_W", "1.05"))
+_TOP_PRES_DIP_F = float(os.getenv("TOP_PRES_DIP_F", "3920"))
+_TOP_PRES_DIP_G = float(os.getenv("TOP_PRES_DIP_G", "-0.42"))
+_TOP_PRES_DIP_W = float(os.getenv("TOP_PRES_DIP_W", "0.88"))
 
-_TOP_PRES_LIFT_F = float(os.getenv("TOP_PRES_LIFT_F", "4850"))
-_TOP_PRES_LIFT_G = float(os.getenv("TOP_PRES_LIFT_G", "1.10"))
-_TOP_PRES_LIFT_W = float(os.getenv("TOP_PRES_LIFT_W", "1.20"))
+_TOP_PRES_LIFT_F = float(os.getenv("TOP_PRES_LIFT_F", "4380"))
+_TOP_PRES_LIFT_G = float(os.getenv("TOP_PRES_LIFT_G", "1.55"))
+_TOP_PRES_LIFT_W = float(os.getenv("TOP_PRES_LIFT_W", "1.05"))
 
-_TOP_PRES_BALANCE = float(os.getenv("TOP_PRES_BALANCE", "0.00"))
+_TOP_PRES_BALANCE = float(os.getenv("TOP_PRES_BALANCE", "-0.28"))
 _TOP_PRES_POST_TRIM = float(os.getenv("TOP_PRES_POST_TRIM", "0.00"))
 
 # --- Sheen Builder ---
