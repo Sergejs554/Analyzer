@@ -902,16 +902,16 @@ _MX_PROJ_W3 = float(os.getenv("MX_PROJ_W3", "1.15"))
 
 # --- harsh control ---
 _MX_HARSH_F1 = float(os.getenv("MX_HARSH_F1", "3200"))
-_MX_HARSH_G1 = float(os.getenv("MX_HARSH_G1", "-0.30"))
+_MX_HARSH_G1 = float(os.getenv("MX_HARSH_G1", "-0.26"))
 _MX_HARSH_W1 = float(os.getenv("MX_HARSH_W1", "1.20"))
 
 _MX_HARSH_F2 = float(os.getenv("MX_HARSH_F2", "5200"))
-_MX_HARSH_G2 = float(os.getenv("MX_HARSH_G2", "-0.10"))
+_MX_HARSH_G2 = float(os.getenv("MX_HARSH_G2", "-0.08"))
 _MX_HARSH_W2 = float(os.getenv("MX_HARSH_W2", "1.25"))
 
 # --- sibilance control ---
 _MX_SIB_F1 = float(os.getenv("MX_SIB_F1", "7300"))
-_MX_SIB_G1 = float(os.getenv("MX_SIB_G1", "-0.18"))
+_MX_SIB_G1 = float(os.getenv("MX_SIB_G1", "-0.15"))
 _MX_SIB_W1 = float(os.getenv("MX_SIB_W1", "1.55"))
 
 # --- micro-finish ---
@@ -919,7 +919,7 @@ _MX_EDGE_ON = (os.getenv("MX_EDGE_ON", "1").strip() == "1")
 _MX_EDGE_HP = float(os.getenv("MX_EDGE_HP", "3300"))
 _MX_EDGE_LP = float(os.getenv("MX_EDGE_LP", "8200"))
 _MX_EDGE_DRIVE = float(os.getenv("MX_EDGE_DRIVE", "1.00"))
-_MX_EDGE_MIX = float(os.getenv("MX_EDGE_MIX", "0.132"))
+_MX_EDGE_MIX = float(os.getenv("MX_EDGE_MIX", "0.138"))
 
 _MX_EDGE_POST_F = float(os.getenv("MX_EDGE_POST_F", "5200"))
 _MX_EDGE_POST_G = float(os.getenv("MX_EDGE_POST_G", "-0.08"))
@@ -927,7 +927,7 @@ _MX_EDGE_POST_W = float(os.getenv("MX_EDGE_POST_W", "1.20"))
 
 _MX_AIR_ON = (os.getenv("MX_AIR_ON", "1").strip() == "1")
 _MX_AIR_F = float(os.getenv("MX_AIR_F", "11800"))
-_MX_AIR_G = float(os.getenv("MX_AIR_G", "0.92"))
+_MX_AIR_G = float(os.getenv("MX_AIR_G", "0.98"))
 
 # --- punch keeper / output ---
 _MX_PUNCH_ON = (os.getenv("MX_PUNCH_ON", "1").strip() == "1")
@@ -938,7 +938,7 @@ _MX_PUNCH_RELEASE_MS = float(os.getenv("MX_PUNCH_RELEASE_MS", "115"))
 _MX_PUNCH_KNEE_DB = float(os.getenv("MX_PUNCH_KNEE_DB", "1.5"))
 _MX_PUNCH_MAKEUP_DB = float(os.getenv("MX_PUNCH_MAKEUP_DB", "0.0"))
 
-_MX_TRIM_DB = float(os.getenv("MX_TRIM_DB", "1.00"))
+_MX_TRIM_DB = float(os.getenv("MX_TRIM_DB", "1.02"))
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
     intensity = _normalize_intensity(intensity)
