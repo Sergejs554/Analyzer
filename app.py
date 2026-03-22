@@ -847,7 +847,7 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 # ---------------------------
 # POLISH / ENHANCE BRANCH
 # branch-only donor
-# Mixea V2 = cleanup -> body -> center -> new top-module -> punch keeper
+# Mixea V2.5 = cleanup -> body -> center -> presence rebuild -> sheen -> air -> guard -> punch
 # ---------------------------
 
 # --- shared scaling ---
@@ -899,15 +899,13 @@ _MX_PROJ_G3 = float(os.getenv("MX_PROJ_G3", "-0.22"))
 _MX_PROJ_W3 = float(os.getenv("MX_PROJ_W3", "1.15"))
 
 # ---------------------------
-# NEW TOP MODULE V1
+# NEW TOP MODULE V2.5
 # ---------------------------
 
 # --- shared top scaling ---
-_TOP_TONE_PRES_MUL = float(os.getenv("TOP_TONE_PRES_MUL", "1.00"))
 _TOP_TONE_SHEEN_MUL = float(os.getenv("TOP_TONE_SHEEN_MUL", "1.00"))
 _TOP_TONE_AIR_MUL = float(os.getenv("TOP_TONE_AIR_MUL", "1.00"))
 
-_TOP_INTENSITY_CONTOUR_MUL = float(os.getenv("TOP_INTENSITY_CONTOUR_MUL", "1.00"))
 _TOP_INTENSITY_SHEEN_MUL = float(os.getenv("TOP_INTENSITY_SHEEN_MUL", "1.00"))
 _TOP_INTENSITY_GUARD_MUL = float(os.getenv("TOP_INTENSITY_GUARD_MUL", "1.00"))
 
@@ -943,6 +941,158 @@ _PRES_GLUE_G = float(os.getenv("PRES_GLUE_G", "0.24"))
 _PRES_GLUE_W = float(os.getenv("PRES_GLUE_W", "1.70"))
 _PRES_GLUE_MIX = float(os.getenv("PRES_GLUE_MIX", "0.050"))
 _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
+
+# --- Shared Presence Scalars ---
+_PRES_TONE_MUL = float(os.getenv("PRES_TONE_MUL", "1.00"))
+_PRES_INTENSITY_MUL = float(os.getenv("PRES_INTENSITY_MUL", "1.00"))
+_PRES_BUILD_MUL = float(os.getenv("PRES_BUILD_MUL", "1.00"))
+_PRES_SAFE_MUL = float(os.getenv("PRES_SAFE_MUL", "1.00"))
+
+# --- Parallel Sum / Balance ---
+_PRES_PARALLEL_MUL = float(os.getenv("PRES_PARALLEL_MUL", "1.00"))
+_PRES_SUM_TRIM = float(os.getenv("PRES_SUM_TRIM", "0.00"))
+_PRES_BRIDGE_TO_GLUE_BAL = float(os.getenv("PRES_BRIDGE_TO_GLUE_BAL", "1.00"))
+
+# --- Sheen Builder ---
+_TOP_SHEEN_HP = float(os.getenv("TOP_SHEEN_HP", "6100"))
+_TOP_SHEEN_LP = float(os.getenv("TOP_SHEEN_LP", "9400"))
+_TOP_SHEEN_DRIVE = float(os.getenv("TOP_SHEEN_DRIVE", "1.15"))
+_TOP_SHEEN_MIX = float(os.getenv("TOP_SHEEN_MIX", "0.145"))
+
+_TOP_SHEEN_POST_F = float(os.getenv("TOP_SHEEN_POST_F", "7600"))
+_TOP_SHEEN_POST_G = float(os.getenv("TOP_SHEEN_POST_G", "-0.18"))
+_TOP_SHEEN_POST_W = float(os.getenv("TOP_SHEEN_POST_W", "1.15"))
+_TOP_SHEEN_POLISH_GAIN = float(os.getenv("TOP_SHEEN_POLISH_GAIN", "0.70"))
+
+# --- Air Completion ---
+_TOP_AIR_F = float(os.getenv("TOP_AIR_F", "10800"))
+_TOP_AIR_G = float(os.getenv("TOP_AIR_G", "0.95"))
+_TOP_AIR_TILT = float(os.getenv("TOP_AIR_TILT", "0.00"))
+_TOP_AIR_BLEND = float(os.getenv("TOP_AIR_BLEND", "1.00"))
+
+# --- Safety Guard ---
+_TOP_GUARD_LO_F = float(os.getenv("TOP_GUARD_LO_F", "4100"))
+_TOP_GUARD_LO_G = float(os.getenv("TOP_GUARD_LO_G", "-0.32"))
+_TOP_GUARD_LO_W = float(os.getenv("TOP_GUARD_LO_W", "1.20"))
+
+_TOP_GUARD_HI_F = float(os.getenv("TOP_GUARD_HI_F", "7800"))
+_TOP_GUARD_HI_G = float(os.getenv("TOP_GUARD_HI_G", "-0.22"))
+_TOP_GUARD_HI_W = float(os.getenv("TOP_GUARD_HI_W", "1.35"))
+
+_TOP_GUARD_GLOBAL_TRIM = float(os.getenv("TOP_GUARD_GLOBAL_TRIM", "1.00"))
+_TOP_GUARD_SOFTNESS = float(os.getenv("TOP_GUARD_SOFTNESS", "1.00"))
+
+# --- punch keeper / output ---
+_MX_PUNCH_ON = (os.getenv("MX_PUNCH_ON", "1").strip() == "1")
+_MX_PUNCH_THRESHOLD_DB = float(os.getenv("MX_PUNCH_THRESHOLD_DB", "-24"))
+_MX_PUNCH_RATIO = float(os.getenv("MX_PUNCH_RATIO", "1.16"))
+_MX_PUNCH_ATTACK_MS = float(os.getenv("MX_PUNCH_ATTACK_MS", "16"))
+_MX_PUNCH_RELEASE_MS = float(os.getenv("MX_PUNCH_RELEASE_MS", "115"))
+_MX_PUNCH_KNEE_DB = float(os.getenv("MX_PUNCH_KNEE_DB", "1.5"))
+_MX_PUNCH_MAKEUP_DB = float(os.getenv("MX_PUNCH_MAKEUP_DB", "0.0"))
+
+_MX_TRIM_DB = float(os.getenv("MX_TRIM_DB", "1.02"))
+
+
+def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    # --- shared tone scalers ---
+    tone_body_mul = {
+        "warm": 1.10,
+        "balanced": 1.00,
+        "bright": 0.93,
+    }[tone] * _MX_TONE_BODY_MUL
+
+    tone_mid_mul = {
+        "warm": 0.96,
+        "balanced": 1.00,
+        "bright": 1.06,
+    }[tone] * _MX_TONE_MID_MUL
+
+    tone_finish_mul = {
+        "warm": 0.90,
+        "balanced": 1.00,
+        "bright": 1.08,
+    }[tone] * _MX_TONE_FINISH_MUL
+
+    # --- shared intensity scalers ---
+    intensity_core = {
+        "low": 0.88,
+        "balanced": 1.00,
+        "high": 1.12,
+    }[intensity] * _MX_INTENSITY_CORE
+
+    intensity_finish = {
+        "low": 0.82,
+        "balanced": 1.00,
+        "high": 1.12,
+    }[intensity] * _MX_INTENSITY_FINISH
+
+    intensity_dynamic = {
+        "low": 0.92,
+        "balanced": 1.00,
+        "high": 1.08,
+    }[intensity] * _MX_INTENSITY_DYNAMIC
+
+    # ---------------------------
+    # Section 1-3: serial tonal core
+    # cleanup -> body -> center
+    # ---------------------------
+
+    clean_f1 = _clamp(_MX_CLEAN_F1, 220.0, 340.0)
+    clean_g1 = _clamp(_MX_CLEAN_G1 * intensity_core, -2.5, -0.2)
+    clean_w1 = _clamp(_MX_CLEAN_W1, 0.4, 2.5)
+
+    clean_f2 = _clamp(_MX_CLEAN_F2, 360.0, 520.0)
+    clean_g2 = _clamp(_MX_CLEAN_G2 * intensity_core, -1.5, 0.0)
+    clean_w2 = _clamp(_MX_CLEAN_W2, 0.4, 2.5)
+
+    clean_f3 = _clamp(_MX_CLEAN_F3, 560.0, 820.0)
+    clean_g3 = _clamp(_MX_CLEAN_G3 * intensity_core, -1.2, 0.0)
+    clean_w3 = _clamp(_MX_CLEAN_W3, 0.4, 2.5)
+
+    body_f1 = _clamp(_MX_BODY_F1, 160.0, 250.0)
+    body_g1 = _clamp(_MX_BODY_G1 * tone_body_mul * intensity_core, 0.0, 3.0)
+    body_w1 = _clamp(_MX_BODY_W1, 0.4, 2.5)
+
+    body_f2 = _clamp(_MX_BODY_F2, 240.0, 340.0)
+    body_g2 = _clamp(_MX_BODY_G2 * tone_body_mul * intensity_core, 0.0, 2.0)
+    body_w2 = _clamp(_MX_BODY_W2, 0.4, 2.5)
+
+    body_guard_f = _clamp(_MX_BODY_GUARD_F, 280.0, 420.0)
+    body_guard_g = _clamp(_MX_BODY_GUARD_G, -1.2, 0.0)
+    body_guard_w = _clamp(_MX_BODY_GUARD_W, 0.4, 2.5)
+
+    proj_f1 = _clamp(_MX_PROJ_F1, 1050.0, 1550.0)
+    proj_g1 = _clamp(_MX_PROJ_G1 * tone_mid_mul * intensity_core, 0.0, 2.0)
+    proj_w1 = _clamp(_MX_PROJ_W1, 0.4, 2.5)
+
+    proj_f2 = _clamp(_MX_PROJ_F2, 1650.0, 2350.0)
+    proj_g2 = _clamp(_MX_PROJ_G2 * tone_mid_mul * intensity_core, -0.2, 1.2)
+    proj_w2 = _clamp(_MX_PROJ_W2, 0.4, 2.5)
+
+    proj_f3 = _clamp(_MX_PROJ_F3, 3000.0, 4500.0)
+    proj_g3 = _clamp(_MX_PROJ_G3 * tone_finish_mul, -1.5, 0.5)
+    proj_w3 = _clamp(_MX_PROJ_W3, 0.4, 2.5)
+
+    serial_parts = [
+        f"equalizer=f={clean_f1}:t=q:w={clean_w1}:g={clean_g1}",
+        f"equalizer=f={clean_f2}:t=q:w={clean_w2}:g={clean_g2}",
+        f"equalizer=f={clean_f3}:t=q:w={clean_w3}:g={clean_g3}",
+        f"equalizer=f={body_f1}:t=q:w={body_w1}:g={body_g1}",
+        f"equalizer=f={body_f2}:t=q:w={body_w2}:g={body_g2}",
+        f"equalizer=f={body_guard_f}:t=q:w={body_guard_w}:g={body_guard_g}",
+        f"equalizer=f={proj_f1}:t=q:w={proj_w1}:g={proj_g1}",
+        f"equalizer=f={proj_f2}:t=q:w={proj_w2}:g={proj_g2}",
+        f"equalizer=f={proj_f3}:t=q:w={proj_w3}:g={proj_g3}",
+    ]
+
+    # ---------------------------
+    # Section 4: top-module V2.5
+    # ---------------------------
 
     # --- shared top scalers ---
     tone_sheen_mul = _clamp(_TOP_TONE_SHEEN_MUL, 0.85, 1.20)
@@ -1050,7 +1200,7 @@ _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
         0.12,
     )
 
-    # Sheen Builder
+    # --- Sheen Builder ---
     top_sheen_hp = _clamp(_TOP_SHEEN_HP, 5500.0, 7500.0)
     top_sheen_lp = _clamp(_TOP_SHEEN_LP, 8500.0, 11000.0)
     if top_sheen_lp <= top_sheen_hp + 1200.0:
@@ -1075,7 +1225,7 @@ _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
         2.0,
     )
 
-    # Air Completion
+    # --- Air Completion ---
     top_air_f = _clamp(_TOP_AIR_F, 9500.0, 13500.0)
     top_air_g = _clamp(
         _TOP_AIR_G * tone_air_mode * tone_air_mul * _clamp(_TOP_AIR_BLEND, 0.50, 1.20),
@@ -1084,7 +1234,7 @@ _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
     )
     top_air_tilt = _clamp(_TOP_AIR_TILT, 0.0, 1.0)
 
-    # Safety Guard
+    # --- Safety Guard ---
     top_guard_lo_f = _clamp(_TOP_GUARD_LO_F, 3200.0, 5200.0)
     top_guard_lo_g = _clamp(
         _TOP_GUARD_LO_G
@@ -1183,7 +1333,7 @@ _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
     # F. Split for sheen from new presence output
     parts.append("[mx_presence_out]asplit=2[mx_top_main][mx_top_sheen_in]")
 
-    # C. Sheen Builder (parallel)
+    # G. Sheen Builder (parallel)
     parts.append(
         f"[mx_top_sheen_in]"
         f"highpass=f={top_sheen_hp}:width=0.707,"
@@ -1195,10 +1345,10 @@ _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
         f"[mx_top_sheen]"
     )
 
-    # D. Sum
+    # H. Sum
     parts.append("[mx_top_main][mx_top_sheen]amix=inputs=2:normalize=0[mx_top_built]")
 
-    # E. Air Completion
+    # I. Air Completion
     if top_air_tilt > 1e-9:
         parts.append(
             f"[mx_top_built]"
@@ -1213,7 +1363,7 @@ _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
             f"[mx_top_air]"
         )
 
-    # F. Safety Guard
+    # J. Safety Guard
     parts.append(
         f"[mx_top_air]"
         f"equalizer=f={top_guard_lo_f}:t=q:w={top_guard_lo_w}:g={top_guard_lo_g},"
@@ -1221,7 +1371,7 @@ _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
         f"[mx_after_top]"
     )
 
-    # Punch keeper
+    # K. Punch keeper
     if punch_on:
         parts.append(
             f"[mx_after_top]"
@@ -1237,7 +1387,7 @@ _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
     else:
         parts.append("[mx_after_top]anull[mx_after_punch]")
 
-    # Output trim
+    # L. Output trim
     if abs(trim_db) > 1e-9:
         parts.append(f"[mx_after_punch]volume={trim_db}dB[out]")
     else:
@@ -1256,7 +1406,6 @@ _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
     )
     _run(cmd)
     return out_path, out_name
-
 # wrappers to preserve internal naming
 def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     return _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
