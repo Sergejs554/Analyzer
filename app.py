@@ -874,11 +874,11 @@ _MX_CLEAN_W3 = float(os.getenv("MX_CLEAN_W3", "1.00"))
 
 # --- body anchor ---
 _MX_BODY_F1 = float(os.getenv("MX_BODY_F1", "205"))
-_MX_BODY_G1 = float(os.getenv("MX_BODY_G1", "1.95"))
+_MX_BODY_G1 = float(os.getenv("MX_BODY_G1", "1.78"))
 _MX_BODY_W1 = float(os.getenv("MX_BODY_W1", "1.00"))
 
 _MX_BODY_F2 = float(os.getenv("MX_BODY_F2", "305"))
-_MX_BODY_G2 = float(os.getenv("MX_BODY_G2", "0.95"))
+_MX_BODY_G2 = float(os.getenv("MX_BODY_G2", "0.62"))
 _MX_BODY_W2 = float(os.getenv("MX_BODY_W2", "1.00"))
 
 _MX_BODY_GUARD_F = float(os.getenv("MX_BODY_GUARD_F", "390"))
@@ -887,11 +887,11 @@ _MX_BODY_GUARD_W = float(os.getenv("MX_BODY_GUARD_W", "1.15"))
 
 # --- mid-anchor projection ---
 _MX_PROJ_F1 = float(os.getenv("MX_PROJ_F1", "1280"))
-_MX_PROJ_G1 = float(os.getenv("MX_PROJ_G1", "1.42"))
+_MX_PROJ_G1 = float(os.getenv("MX_PROJ_G1", "1.36"))
 _MX_PROJ_W1 = float(os.getenv("MX_PROJ_W1", "0.95"))
 
 _MX_PROJ_F2 = float(os.getenv("MX_PROJ_F2", "2050"))
-_MX_PROJ_G2 = float(os.getenv("MX_PROJ_G2", "0.66"))
+_MX_PROJ_G2 = float(os.getenv("MX_PROJ_G2", "0.64"))
 _MX_PROJ_W2 = float(os.getenv("MX_PROJ_W2", "1.00"))
 
 _MX_PROJ_F3 = float(os.getenv("MX_PROJ_F3", "3500"))
