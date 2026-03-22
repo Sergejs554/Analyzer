@@ -914,18 +914,46 @@ _TOP_INTENSITY_GUARD_MUL = float(os.getenv("TOP_INTENSITY_GUARD_MUL", "1.00"))
 _TOP_GLOBAL_BUILD_MUL = float(os.getenv("TOP_GLOBAL_BUILD_MUL", "1.00"))
 _TOP_GLOBAL_SAFE_MUL = float(os.getenv("TOP_GLOBAL_SAFE_MUL", "1.00"))
 
-# --- Presence Contour Shaper ---
-_TOP_PRES_DIP_F = float(os.getenv("TOP_PRES_DIP_F", "3920"))
-_TOP_PRES_DIP_G = float(os.getenv("TOP_PRES_DIP_G", "-0.34"))
-_TOP_PRES_DIP_W = float(os.getenv("TOP_PRES_DIP_W", "0.88"))
+# --- Presence Cleanup Notch ---
+_PRES_NOTCH_F = float(os.getenv("PRES_NOTCH_F", "3880"))
+_PRES_NOTCH_G = float(os.getenv("PRES_NOTCH_G", "-0.34"))
+_PRES_NOTCH_W = float(os.getenv("PRES_NOTCH_W", "0.92"))
+_PRES_NOTCH_AMOUNT = float(os.getenv("PRES_NOTCH_AMOUNT", "1.00"))
 
-_TOP_PRES_LIFT_F = float(os.getenv("TOP_PRES_LIFT_F", "4280"))
-_TOP_PRES_LIFT_G = float(os.getenv("TOP_PRES_LIFT_G", "1.68"))
-_TOP_PRES_LIFT_W = float(os.getenv("TOP_PRES_LIFT_W", "1.10"))
+# --- Lower-Presence Anchor ---
+_PRES_ANCHOR_F = float(os.getenv("PRES_ANCHOR_F", "3340"))
+_PRES_ANCHOR_G = float(os.getenv("PRES_ANCHOR_G", "1.78"))
+_PRES_ANCHOR_W = float(os.getenv("PRES_ANCHOR_W", "1.08"))
+_PRES_ANCHOR_TILT = float(os.getenv("PRES_ANCHOR_TILT", "-0.10"))
+_PRES_ANCHOR_AMOUNT = float(os.getenv("PRES_ANCHOR_AMOUNT", "1.00"))
 
-_TOP_PRES_BALANCE = float(os.getenv("TOP_PRES_BALANCE", "-0.34"))
-_TOP_PRES_POST_TRIM = float(os.getenv("TOP_PRES_POST_TRIM", "0.00"))
+# --- Upper-Presence Bridge ---
+_PRES_BRIDGE_F = float(os.getenv("PRES_BRIDGE_F", "4960"))
+_PRES_BRIDGE_G = float(os.getenv("PRES_BRIDGE_G", "1.05"))
+_PRES_BRIDGE_W = float(os.getenv("PRES_BRIDGE_W", "1.10"))
+_PRES_BRIDGE_HP = float(os.getenv("PRES_BRIDGE_HP", "4300"))
+_PRES_BRIDGE_LP = float(os.getenv("PRES_BRIDGE_LP", "6100"))
+_PRES_BRIDGE_MIX = float(os.getenv("PRES_BRIDGE_MIX", "0.118"))
+_PRES_BRIDGE_SOFTNESS = float(os.getenv("PRES_BRIDGE_SOFTNESS", "1.00"))
+_PRES_BRIDGE_POST_TRIM = float(os.getenv("PRES_BRIDGE_POST_TRIM", "-0.08"))
 
+# --- Presence Glue / Micro-Finish ---
+_PRES_GLUE_F = float(os.getenv("PRES_GLUE_F", "4820"))
+_PRES_GLUE_G = float(os.getenv("PRES_GLUE_G", "0.24"))
+_PRES_GLUE_W = float(os.getenv("PRES_GLUE_W", "1.70"))
+_PRES_GLUE_MIX = float(os.getenv("PRES_GLUE_MIX", "0.050"))
+_PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
+
+# --- Shared Presence Scalars ---
+_PRES_TONE_MUL = float(os.getenv("PRES_TONE_MUL", "1.00"))
+_PRES_INTENSITY_MUL = float(os.getenv("PRES_INTENSITY_MUL", "1.00"))
+_PRES_BUILD_MUL = float(os.getenv("PRES_BUILD_MUL", "1.00"))
+_PRES_SAFE_MUL = float(os.getenv("PRES_SAFE_MUL", "1.00"))
+
+# --- Parallel Sum / Balance ---
+_PRES_PARALLEL_MUL = float(os.getenv("PRES_PARALLEL_MUL", "1.00"))
+_PRES_SUM_TRIM = float(os.getenv("PRES_SUM_TRIM", "0.00"))
+_PRES_BRIDGE_TO_GLUE_BAL = float(os.getenv("PRES_BRIDGE_TO_GLUE_BAL", "1.00"))
 # --- Sheen Builder ---
 _TOP_SHEEN_HP = float(os.getenv("TOP_SHEEN_HP", "6100"))
 _TOP_SHEEN_LP = float(os.getenv("TOP_SHEEN_LP", "9400"))
