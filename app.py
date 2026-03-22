@@ -944,179 +944,15 @@ _PRES_GLUE_W = float(os.getenv("PRES_GLUE_W", "1.70"))
 _PRES_GLUE_MIX = float(os.getenv("PRES_GLUE_MIX", "0.050"))
 _PRES_GLUE_SOFTNESS = float(os.getenv("PRES_GLUE_SOFTNESS", "1.00"))
 
-# --- Shared Presence Scalars ---
-_PRES_TONE_MUL = float(os.getenv("PRES_TONE_MUL", "1.00"))
-_PRES_INTENSITY_MUL = float(os.getenv("PRES_INTENSITY_MUL", "1.00"))
-_PRES_BUILD_MUL = float(os.getenv("PRES_BUILD_MUL", "1.00"))
-_PRES_SAFE_MUL = float(os.getenv("PRES_SAFE_MUL", "1.00"))
-
-# --- Parallel Sum / Balance ---
-_PRES_PARALLEL_MUL = float(os.getenv("PRES_PARALLEL_MUL", "1.00"))
-_PRES_SUM_TRIM = float(os.getenv("PRES_SUM_TRIM", "0.00"))
-_PRES_BRIDGE_TO_GLUE_BAL = float(os.getenv("PRES_BRIDGE_TO_GLUE_BAL", "1.00"))
-# --- Sheen Builder ---
-_TOP_SHEEN_HP = float(os.getenv("TOP_SHEEN_HP", "6100"))
-_TOP_SHEEN_LP = float(os.getenv("TOP_SHEEN_LP", "9400"))
-_TOP_SHEEN_DRIVE = float(os.getenv("TOP_SHEEN_DRIVE", "1.15"))
-_TOP_SHEEN_MIX = float(os.getenv("TOP_SHEEN_MIX", "0.145"))
-
-_TOP_SHEEN_POST_F = float(os.getenv("TOP_SHEEN_POST_F", "7600"))
-_TOP_SHEEN_POST_G = float(os.getenv("TOP_SHEEN_POST_G", "-0.18"))
-_TOP_SHEEN_POST_W = float(os.getenv("TOP_SHEEN_POST_W", "1.15"))
-_TOP_SHEEN_POLISH_GAIN = float(os.getenv("TOP_SHEEN_POLISH_GAIN", "0.70"))
-
-# --- Air Completion ---
-_TOP_AIR_F = float(os.getenv("TOP_AIR_F", "10800"))
-_TOP_AIR_G = float(os.getenv("TOP_AIR_G", "0.95"))
-_TOP_AIR_TILT = float(os.getenv("TOP_AIR_TILT", "0.00"))
-_TOP_AIR_BLEND = float(os.getenv("TOP_AIR_BLEND", "1.00"))
-
-# --- Safety Guard ---
-_TOP_GUARD_LO_F = float(os.getenv("TOP_GUARD_LO_F", "4100"))
-_TOP_GUARD_LO_G = float(os.getenv("TOP_GUARD_LO_G", "-0.32"))
-_TOP_GUARD_LO_W = float(os.getenv("TOP_GUARD_LO_W", "1.20"))
-
-_TOP_GUARD_HI_F = float(os.getenv("TOP_GUARD_HI_F", "7800"))
-_TOP_GUARD_HI_G = float(os.getenv("TOP_GUARD_HI_G", "-0.22"))
-_TOP_GUARD_HI_W = float(os.getenv("TOP_GUARD_HI_W", "1.35"))
-
-_TOP_GUARD_GLOBAL_TRIM = float(os.getenv("TOP_GUARD_GLOBAL_TRIM", "1.00"))
-_TOP_GUARD_SOFTNESS = float(os.getenv("TOP_GUARD_SOFTNESS", "1.00"))
-
-# --- punch keeper / output ---
-_MX_PUNCH_ON = (os.getenv("MX_PUNCH_ON", "1").strip() == "1")
-_MX_PUNCH_THRESHOLD_DB = float(os.getenv("MX_PUNCH_THRESHOLD_DB", "-24"))
-_MX_PUNCH_RATIO = float(os.getenv("MX_PUNCH_RATIO", "1.16"))
-_MX_PUNCH_ATTACK_MS = float(os.getenv("MX_PUNCH_ATTACK_MS", "16"))
-_MX_PUNCH_RELEASE_MS = float(os.getenv("MX_PUNCH_RELEASE_MS", "115"))
-_MX_PUNCH_KNEE_DB = float(os.getenv("MX_PUNCH_KNEE_DB", "1.5"))
-_MX_PUNCH_MAKEUP_DB = float(os.getenv("MX_PUNCH_MAKEUP_DB", "0.0"))
-
-_MX_TRIM_DB = float(os.getenv("MX_TRIM_DB", "1.02"))
-
-
-def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
-    tone = _normalize_tone(tone)
-    intensity = _normalize_intensity(intensity)
-    fmt = _normalize_format(fmt)
-
-    # --- shared tone scalers ---
-    tone_body_mul = {
-        "warm": 1.10,
-        "balanced": 1.00,
-        "bright": 0.93,
-    }[tone] * _MX_TONE_BODY_MUL
-
-    tone_mid_mul = {
-        "warm": 0.96,
-        "balanced": 1.00,
-        "bright": 1.06,
-    }[tone] * _MX_TONE_MID_MUL
-
-    tone_finish_mul = {
-        "warm": 0.90,
-        "balanced": 1.00,
-        "bright": 1.08,
-    }[tone] * _MX_TONE_FINISH_MUL
-
-    # --- shared intensity scalers ---
-    intensity_core = {
-        "low": 0.88,
-        "balanced": 1.00,
-        "high": 1.12,
-    }[intensity] * _MX_INTENSITY_CORE
-
-    intensity_finish = {
-        "low": 0.82,
-        "balanced": 1.00,
-        "high": 1.12,
-    }[intensity] * _MX_INTENSITY_FINISH
-
-    intensity_dynamic = {
-        "low": 0.92,
-        "balanced": 1.00,
-        "high": 1.08,
-    }[intensity] * _MX_INTENSITY_DYNAMIC
-
-    # ---------------------------
-    # Section 1-3: serial tonal core
-    # cleanup -> body -> center
-    # ---------------------------
-
-    clean_f1 = _clamp(_MX_CLEAN_F1, 220.0, 340.0)
-    clean_g1 = _clamp(_MX_CLEAN_G1 * intensity_core, -2.5, -0.2)
-    clean_w1 = _clamp(_MX_CLEAN_W1, 0.4, 2.5)
-
-    clean_f2 = _clamp(_MX_CLEAN_F2, 360.0, 520.0)
-    clean_g2 = _clamp(_MX_CLEAN_G2 * intensity_core, -1.5, 0.0)
-    clean_w2 = _clamp(_MX_CLEAN_W2, 0.4, 2.5)
-
-    clean_f3 = _clamp(_MX_CLEAN_F3, 560.0, 820.0)
-    clean_g3 = _clamp(_MX_CLEAN_G3 * intensity_core, -1.2, 0.0)
-    clean_w3 = _clamp(_MX_CLEAN_W3, 0.4, 2.5)
-
-    body_f1 = _clamp(_MX_BODY_F1, 160.0, 250.0)
-    body_g1 = _clamp(_MX_BODY_G1 * tone_body_mul * intensity_core, 0.0, 3.0)
-    body_w1 = _clamp(_MX_BODY_W1, 0.4, 2.5)
-
-    body_f2 = _clamp(_MX_BODY_F2, 240.0, 340.0)
-    body_g2 = _clamp(_MX_BODY_G2 * tone_body_mul * intensity_core, 0.0, 2.0)
-    body_w2 = _clamp(_MX_BODY_W2, 0.4, 2.5)
-
-    body_guard_f = _clamp(_MX_BODY_GUARD_F, 280.0, 420.0)
-    body_guard_g = _clamp(_MX_BODY_GUARD_G, -1.2, 0.0)
-    body_guard_w = _clamp(_MX_BODY_GUARD_W, 0.4, 2.5)
-
-    proj_f1 = _clamp(_MX_PROJ_F1, 1050.0, 1550.0)
-    proj_g1 = _clamp(_MX_PROJ_G1 * tone_mid_mul * intensity_core, 0.0, 2.0)
-    proj_w1 = _clamp(_MX_PROJ_W1, 0.4, 2.5)
-
-    proj_f2 = _clamp(_MX_PROJ_F2, 1650.0, 2350.0)
-    proj_g2 = _clamp(_MX_PROJ_G2 * tone_mid_mul * intensity_core, -0.2, 1.2)
-    proj_w2 = _clamp(_MX_PROJ_W2, 0.4, 2.5)
-
-    proj_f3 = _clamp(_MX_PROJ_F3, 3000.0, 4500.0)
-    proj_g3 = _clamp(_MX_PROJ_G3 * tone_finish_mul, -1.5, 0.5)
-    proj_w3 = _clamp(_MX_PROJ_W3, 0.4, 2.5)
-
-    serial_parts = [
-        # Structural cleanup
-        f"equalizer=f={clean_f1}:t=q:w={clean_w1}:g={clean_g1}",
-        f"equalizer=f={clean_f2}:t=q:w={clean_w2}:g={clean_g2}",
-        f"equalizer=f={clean_f3}:t=q:w={clean_w3}:g={clean_g3}",
-
-        # Body anchor
-        f"equalizer=f={body_f1}:t=q:w={body_w1}:g={body_g1}",
-        f"equalizer=f={body_f2}:t=q:w={body_w2}:g={body_g2}",
-        f"equalizer=f={body_guard_f}:t=q:w={body_guard_w}:g={body_guard_g}",
-
-        # Mid-anchor projection
-        f"equalizer=f={proj_f1}:t=q:w={proj_w1}:g={proj_g1}",
-        f"equalizer=f={proj_f2}:t=q:w={proj_w2}:g={proj_g2}",
-        f"equalizer=f={proj_f3}:t=q:w={proj_w3}:g={proj_g3}",
-    ]
-
-    # ---------------------------
-    # Section 4: new top-module
-    # ---------------------------
-
     # --- shared top scalers ---
-    tone_pres_mul = _clamp(_TOP_TONE_PRES_MUL, 0.85, 1.15)
     tone_sheen_mul = _clamp(_TOP_TONE_SHEEN_MUL, 0.85, 1.20)
     tone_air_mul = _clamp(_TOP_TONE_AIR_MUL, 0.80, 1.25)
 
-    intensity_contour_mul = _clamp(_TOP_INTENSITY_CONTOUR_MUL, 0.85, 1.20)
     intensity_sheen_mul = _clamp(_TOP_INTENSITY_SHEEN_MUL, 0.85, 1.25)
     intensity_guard_mul = _clamp(_TOP_INTENSITY_GUARD_MUL, 0.85, 1.20)
 
     top_global_build_mul = _clamp(_TOP_GLOBAL_BUILD_MUL, 0.85, 1.15)
     top_global_safe_mul = _clamp(_TOP_GLOBAL_SAFE_MUL, 0.80, 1.20)
-
-    tone_pres_mode = {
-        "warm": 0.94,
-        "balanced": 1.00,
-        "bright": 1.08,
-    }[tone]
 
     tone_sheen_mode = {
         "warm": 0.92,
@@ -1136,33 +972,83 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         "high": 1.12,
     }[intensity]
 
-    # Presence Contour Shaper
-    top_pres_dip_f = _clamp(_TOP_PRES_DIP_F, 3000.0, 4300.0)
-    top_pres_dip_g = _clamp(
-        _TOP_PRES_DIP_G * top_intensity_mode * intensity_contour_mul,
-        -1.8,
-        0.0,
-    )
-    top_pres_dip_w = _clamp(_TOP_PRES_DIP_W, 0.6, 2.0)
+    # --- shared presence scalers ---
+    pres_tone_mul = _clamp(_PRES_TONE_MUL, 0.85, 1.15)
+    pres_intensity_mul = _clamp(_PRES_INTENSITY_MUL, 0.85, 1.20)
+    pres_build_mul = _clamp(_PRES_BUILD_MUL, 0.80, 1.25)
+    pres_safe_mul = _clamp(_PRES_SAFE_MUL, 0.75, 1.15)
+    pres_parallel_mul = _clamp(_PRES_PARALLEL_MUL, 0.70, 1.25)
+    pres_bridge_to_glue_bal = _clamp(_PRES_BRIDGE_TO_GLUE_BAL, 0.60, 1.60)
+    pres_sum_trim = _clamp(_PRES_SUM_TRIM, -1.50, 0.50)
 
-    top_pres_lift_f = _clamp(_TOP_PRES_LIFT_F, 2400.0, 5200.0)
-    pres_lift_base = (
-        _TOP_PRES_LIFT_G
-        * tone_pres_mode
-        * tone_pres_mul
-        * top_intensity_mode
-        * intensity_contour_mul
-    )
-    pres_balance = _clamp(_TOP_PRES_BALANCE, -1.0, 1.0)
-    pres_balance_mul = 1.0 + (pres_balance * 0.12)
+    pres_tone_mode = {
+        "warm": 0.94,
+        "balanced": 1.00,
+        "bright": 1.08,
+    }[tone]
 
-    top_pres_lift_g = _clamp(
-        pres_lift_base * pres_balance_mul,
-        0.0,
-        2.2,
+    pres_intensity_mode = {
+        "low": 0.90,
+        "balanced": 1.00,
+        "high": 1.12,
+    }[intensity]
+
+    pres_shared_build = pres_tone_mode * pres_tone_mul * pres_intensity_mode * pres_intensity_mul * pres_build_mul
+    pres_shared_safe = pres_safe_mul
+
+    # --- Presence Cleanup Notch ---
+    pres_notch_f = _clamp(_PRES_NOTCH_F, 3300.0, 4400.0)
+    pres_notch_g = _clamp(
+        _PRES_NOTCH_G * _clamp(_PRES_NOTCH_AMOUNT, 0.70, 1.20) * pres_intensity_mode * pres_shared_safe,
+        -1.20,
+        -0.05,
     )
-    top_pres_lift_w = _clamp(_TOP_PRES_LIFT_W, 0.6, 2.4)
-    top_pres_post_trim = _clamp(_TOP_PRES_POST_TRIM, -1.0, 1.0)
+    pres_notch_w = _clamp(_PRES_NOTCH_W, 0.60, 1.60)
+
+    # --- Lower-Presence Anchor ---
+    pres_anchor_f = _clamp(_PRES_ANCHOR_F + (_clamp(_PRES_ANCHOR_TILT, -0.50, 0.50) * 180.0), 2900.0, 3600.0)
+    pres_anchor_g = _clamp(
+        _PRES_ANCHOR_G * _clamp(_PRES_ANCHOR_AMOUNT, 0.75, 1.30) * pres_shared_build,
+        0.20,
+        2.40,
+    )
+    pres_anchor_w = _clamp(_PRES_ANCHOR_W, 0.70, 1.80)
+
+    # --- Upper-Presence Bridge ---
+    pres_bridge_f = _clamp(_PRES_BRIDGE_F, 4400.0, 5400.0)
+    pres_bridge_g = _clamp(
+        _PRES_BRIDGE_G * pres_shared_build * pres_shared_safe,
+        0.10,
+        1.80,
+    )
+    pres_bridge_w = _clamp(_PRES_BRIDGE_W, 0.80, 2.00)
+    pres_bridge_hp = _clamp(_PRES_BRIDGE_HP, 4000.0, 5000.0)
+    pres_bridge_lp = _clamp(_PRES_BRIDGE_LP, 5200.0, 6800.0)
+    if pres_bridge_lp <= pres_bridge_hp + 600.0:
+        pres_bridge_lp = pres_bridge_hp + 600.0
+
+    pres_bridge_softness = _clamp(_PRES_BRIDGE_SOFTNESS, 0.70, 1.30)
+    pres_bridge_mix = _clamp(
+        _PRES_BRIDGE_MIX * pres_parallel_mul * _clamp(pres_bridge_to_glue_bal, 0.60, 1.60),
+        0.02,
+        0.24,
+    )
+    pres_bridge_post_trim = _clamp(_PRES_BRIDGE_POST_TRIM, -1.00, 0.50)
+
+    # --- Presence Glue / Micro-Finish ---
+    pres_glue_f = _clamp(_PRES_GLUE_F, 4200.0, 5600.0)
+    pres_glue_g = _clamp(
+        _PRES_GLUE_G * (0.75 + 0.25 * pres_shared_build) * pres_shared_safe,
+        0.02,
+        0.70,
+    )
+    pres_glue_w = _clamp(_PRES_GLUE_W, 1.00, 2.60)
+    pres_glue_softness = _clamp(_PRES_GLUE_SOFTNESS, 0.70, 1.40)
+    pres_glue_mix = _clamp(
+        _PRES_GLUE_MIX * pres_parallel_mul * (1.0 / _clamp(pres_bridge_to_glue_bal, 0.60, 1.60)),
+        0.01,
+        0.12,
+    )
 
     # Sheen Builder
     top_sheen_hp = _clamp(_TOP_SHEEN_HP, 5500.0, 7500.0)
@@ -1249,17 +1135,53 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     parts = []
     parts.append(f"[0:a]{','.join(serial_parts)}[mx_core]")
 
-    # A. Presence Contour Shaper
+    # A. Presence Cleanup Notch -> Lower-Presence Anchor (serial)
     parts.append(
         f"[mx_core]"
-        f"equalizer=f={top_pres_dip_f}:t=q:w={top_pres_dip_w}:g={top_pres_dip_g},"
-        f"equalizer=f={top_pres_lift_f}:t=q:w={top_pres_lift_w}:g={top_pres_lift_g},"
-        f"volume={top_pres_post_trim}dB"
-        f"[mx_contour]"
+        f"equalizer=f={pres_notch_f}:t=q:w={pres_notch_w}:g={pres_notch_g},"
+        f"equalizer=f={pres_anchor_f}:t=q:w={pres_anchor_w}:g={pres_anchor_g}"
+        f"[mx_pres_anchor]"
     )
 
-    # B. Split
-    parts.append("[mx_contour]asplit=2[mx_top_main][mx_top_sheen_in]")
+    # B. Split after anchor: main + bridge + glue
+    parts.append("[mx_pres_anchor]asplit=3[mx_pres_main][mx_pres_bridge_in][mx_pres_glue_in]")
+
+    # C. Upper-Presence Bridge (parallel)
+    parts.append(
+        f"[mx_pres_bridge_in]"
+        f"highpass=f={pres_bridge_hp}:width=0.707,"
+        f"lowpass=f={pres_bridge_lp}:width=0.707,"
+        f"equalizer=f={pres_bridge_f}:t=q:w={pres_bridge_w}:g={pres_bridge_g},"
+        f"equalizer=f={pres_bridge_f}:t=q:w={_clamp(pres_bridge_w * pres_bridge_softness, 0.70, 2.40)}:g={_clamp(0.18 * pres_bridge_g, 0.02, 0.40)},"
+        f"volume={pres_bridge_post_trim}dB,"
+        f"volume={pres_bridge_mix}"
+        f"[mx_pres_bridge]"
+    )
+
+    # D. Presence Glue / Micro-Finish (parallel)
+    parts.append(
+        f"[mx_pres_glue_in]"
+        f"equalizer=f={pres_glue_f}:t=q:w={pres_glue_w}:g={pres_glue_g},"
+        f"equalizer=f={pres_glue_f}:t=q:w={_clamp(pres_glue_w * pres_glue_softness, 0.90, 3.00)}:g={_clamp(0.12 * pres_glue_g, 0.01, 0.20)},"
+        f"volume={pres_glue_mix}"
+        f"[mx_pres_glue]"
+    )
+
+    # E. Presence Sum -> output to sheen stage
+    if abs(pres_sum_trim) > 1e-9:
+        parts.append(
+            f"[mx_pres_main][mx_pres_bridge][mx_pres_glue]amix=inputs=3:normalize=0,"
+            f"volume={pres_sum_trim}dB"
+            f"[mx_presence_out]"
+        )
+    else:
+        parts.append(
+            "[mx_pres_main][mx_pres_bridge][mx_pres_glue]amix=inputs=3:normalize=0"
+            "[mx_presence_out]"
+        )
+
+    # F. Split for sheen from new presence output
+    parts.append("[mx_presence_out]asplit=2[mx_top_main][mx_top_sheen_in]")
 
     # C. Sheen Builder (parallel)
     parts.append(
