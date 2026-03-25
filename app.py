@@ -912,32 +912,32 @@ _PRES_SAFE_MUL = float(os.getenv("PRES_SAFE_MUL", "1.00"))
 
 # --- Presence Peak Stabilizer ---
 _PRES_PEAK_F = float(os.getenv("PRES_PEAK_F", "3820"))
-_PRES_PEAK_G = float(os.getenv("PRES_PEAK_G", "-0.20"))
+_PRES_PEAK_G = float(os.getenv("PRES_PEAK_G", "-0.16"))
 _PRES_PEAK_W = float(os.getenv("PRES_PEAK_W", "0.92"))
-_PRES_PEAK_AMOUNT = float(os.getenv("PRES_PEAK_AMOUNT", "0.82"))
+_PRES_PEAK_AMOUNT = float(os.getenv("PRES_PEAK_AMOUNT", "0.76"))
 
 # --- Harsh Stabilizer ---
 _PRES_HARSH_F = float(os.getenv("PRES_HARSH_F", "4260"))
-_PRES_HARSH_G = float(os.getenv("PRES_HARSH_G", "-0.16"))
-_PRES_HARSH_W = float(os.getenv("PRES_HARSH_W", "1.05"))
-_PRES_HARSH_AMOUNT = float(os.getenv("PRES_HARSH_AMOUNT", "0.80"))
+_PRES_HARSH_G = float(os.getenv("PRES_HARSH_G", "-0.12"))
+_PRES_HARSH_W = float(os.getenv("PRES_HARSH_W", "0.98"))
+_PRES_HARSH_AMOUNT = float(os.getenv("PRES_HARSH_AMOUNT", "0.74"))
 
 # --- Sibilant / Edge Restraint ---
 _PRES_SIB_F = float(os.getenv("PRES_SIB_F", "6400"))
-_PRES_SIB_G = float(os.getenv("PRES_SIB_G", "-0.10"))
+_PRES_SIB_G = float(os.getenv("PRES_SIB_G", "-0.08"))
 _PRES_SIB_W = float(os.getenv("PRES_SIB_W", "1.45"))
-_PRES_SIB_AMOUNT = float(os.getenv("PRES_SIB_AMOUNT", "0.88"))
+_PRES_SIB_AMOUNT = float(os.getenv("PRES_SIB_AMOUNT", "0.84"))
 
 # --- Focused Presence Anchor ---
-_PRES_FOCUS_F = float(os.getenv("PRES_FOCUS_F", "3220"))
-_PRES_FOCUS_G = float(os.getenv("PRES_FOCUS_G", "1.62"))
-_PRES_FOCUS_W = float(os.getenv("PRES_FOCUS_W", "0.88"))
+_PRES_FOCUS_F = float(os.getenv("PRES_FOCUS_F", "3180"))
+_PRES_FOCUS_G = float(os.getenv("PRES_FOCUS_G", "1.74"))
+_PRES_FOCUS_W = float(os.getenv("PRES_FOCUS_W", "0.82"))
 _PRES_FOCUS_TILT = float(os.getenv("PRES_FOCUS_TILT", "0.00"))
-_PRES_FOCUS_AMOUNT = float(os.getenv("PRES_FOCUS_AMOUNT", "1.10"))
+_PRES_FOCUS_AMOUNT = float(os.getenv("PRES_FOCUS_AMOUNT", "1.14"))
 
 # --- Presence Centering ---
 _PRES_CENTER_F = float(os.getenv("PRES_CENTER_F", "4180"))
-_PRES_CENTER_G = float(os.getenv("PRES_CENTER_G", "-0.02"))
+_PRES_CENTER_G = float(os.getenv("PRES_CENTER_G", "-0.00"))
 _PRES_CENTER_W = float(os.getenv("PRES_CENTER_W", "1.10"))
 
 # ---------------------------
