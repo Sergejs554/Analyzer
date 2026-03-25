@@ -959,14 +959,14 @@ _FP_TONE_MUL = float(os.getenv("FP_TONE_MUL", "1.00"))
 _FP_SAFE_MUL = float(os.getenv("FP_SAFE_MUL", "1.00"))
 
 # --- Sheen ---
-_SH_HP = float(os.getenv("SH_HP", "6100"))
-_SH_LP = float(os.getenv("SH_LP", "9400"))
-_SH_DRIVE = float(os.getenv("SH_DRIVE", "1.08"))
-_SH_MIX = float(os.getenv("SH_MIX", "0.115"))
-_SH_POST_F = float(os.getenv("SH_POST_F", "7600"))
-_SH_POST_G = float(os.getenv("SH_POST_G", "-0.12"))
+_SH_HP = float(os.getenv("SH_HP", "5950"))
+_SH_LP = float(os.getenv("SH_LP", "9150"))
+_SH_DRIVE = float(os.getenv("SH_DRIVE", "1.22"))
+_SH_MIX = float(os.getenv("SH_MIX", "0.158"))
+_SH_POST_F = float(os.getenv("SH_POST_F", "7480"))
+_SH_POST_G = float(os.getenv("SH_POST_G", "-0.06"))
 _SH_POST_W = float(os.getenv("SH_POST_W", "1.10"))
-_SH_TEXTURE_GAIN = float(os.getenv("SH_TEXTURE_GAIN", "0.52"))
+_SH_TEXTURE_GAIN = float(os.getenv("SH_TEXTURE_GAIN", "0.60"))
 
 _SH_MUL = float(os.getenv("SH_MUL", "1.00"))
 _SH_INTENSITY_MUL = float(os.getenv("SH_INTENSITY_MUL", "1.00"))
@@ -975,7 +975,7 @@ _SH_SAFE_MUL = float(os.getenv("SH_SAFE_MUL", "1.00"))
 
 # --- Air ---
 _AIR_F = float(os.getenv("AIR_F", "10800"))
-_AIR_G = float(os.getenv("AIR_G", "0.78"))
+_AIR_G = float(os.getenv("AIR_G", "0.82"))
 _AIR_TILT = float(os.getenv("AIR_TILT", "0.00"))
 _AIR_BLEND = float(os.getenv("AIR_BLEND", "1.00"))
 
