@@ -843,11 +843,12 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     _run(cmd)
     return out_path, out_name
 
-
 # ---------------------------
 # POLISH / ENHANCE BRANCH
 # branch-only donor
-# Mixea V4 Stage-1 = cleanup -> body -> center -> corrective serial presence -> sheen -> air -> guard -> punch
+# Mixea V4.2 + presentation layer
+# cleanup -> body -> center -> corrective serial presence
+# -> front push -> sheen -> air -> width -> top guard -> punch
 # ---------------------------
 
 # --- shared scaling ---
@@ -941,47 +942,73 @@ _PRES_CENTER_G = float(os.getenv("PRES_CENTER_G", "-0.00"))
 _PRES_CENTER_W = float(os.getenv("PRES_CENTER_W", "1.10"))
 
 # ---------------------------
-# LATE TOP / POLISH TAIL
+# PRESENTATION LAYER
+# front push -> sheen -> air -> width -> top guard
 # ---------------------------
 
-# --- shared top scaling ---
-_TOP_TONE_SHEEN_MUL = float(os.getenv("TOP_TONE_SHEEN_MUL", "1.00"))
-_TOP_TONE_AIR_MUL = float(os.getenv("TOP_TONE_AIR_MUL", "1.00"))
+# --- Front Push ---
+_FP_F = float(os.getenv("FP_F", "3560"))
+_FP_G = float(os.getenv("FP_G", "0.22"))
+_FP_W = float(os.getenv("FP_W", "0.95"))
+_FP_AMOUNT = float(os.getenv("FP_AMOUNT", "1.00"))
+_FP_TILT = float(os.getenv("FP_TILT", "0.00"))
 
-_TOP_INTENSITY_SHEEN_MUL = float(os.getenv("TOP_INTENSITY_SHEEN_MUL", "1.00"))
-_TOP_INTENSITY_GUARD_MUL = float(os.getenv("TOP_INTENSITY_GUARD_MUL", "1.00"))
+_FP_MUL = float(os.getenv("FP_MUL", "1.00"))
+_FP_INTENSITY_MUL = float(os.getenv("FP_INTENSITY_MUL", "1.00"))
+_FP_TONE_MUL = float(os.getenv("FP_TONE_MUL", "1.00"))
+_FP_SAFE_MUL = float(os.getenv("FP_SAFE_MUL", "1.00"))
 
-_TOP_GLOBAL_BUILD_MUL = float(os.getenv("TOP_GLOBAL_BUILD_MUL", "1.00"))
-_TOP_GLOBAL_SAFE_MUL = float(os.getenv("TOP_GLOBAL_SAFE_MUL", "1.00"))
+# --- Sheen ---
+_SH_HP = float(os.getenv("SH_HP", "6100"))
+_SH_LP = float(os.getenv("SH_LP", "9400"))
+_SH_DRIVE = float(os.getenv("SH_DRIVE", "1.08"))
+_SH_MIX = float(os.getenv("SH_MIX", "0.115"))
+_SH_POST_F = float(os.getenv("SH_POST_F", "7600"))
+_SH_POST_G = float(os.getenv("SH_POST_G", "-0.12"))
+_SH_POST_W = float(os.getenv("SH_POST_W", "1.10"))
+_SH_TEXTURE_GAIN = float(os.getenv("SH_TEXTURE_GAIN", "0.52"))
 
-# --- Sheen Builder ---
-_TOP_SHEEN_HP = float(os.getenv("TOP_SHEEN_HP", "6100"))
-_TOP_SHEEN_LP = float(os.getenv("TOP_SHEEN_LP", "9400"))
-_TOP_SHEEN_DRIVE = float(os.getenv("TOP_SHEEN_DRIVE", "1.15"))
-_TOP_SHEEN_MIX = float(os.getenv("TOP_SHEEN_MIX", "0.145"))
+_SH_MUL = float(os.getenv("SH_MUL", "1.00"))
+_SH_INTENSITY_MUL = float(os.getenv("SH_INTENSITY_MUL", "1.00"))
+_SH_TONE_MUL = float(os.getenv("SH_TONE_MUL", "1.00"))
+_SH_SAFE_MUL = float(os.getenv("SH_SAFE_MUL", "1.00"))
 
-_TOP_SHEEN_POST_F = float(os.getenv("TOP_SHEEN_POST_F", "7600"))
-_TOP_SHEEN_POST_G = float(os.getenv("TOP_SHEEN_POST_G", "-0.18"))
-_TOP_SHEEN_POST_W = float(os.getenv("TOP_SHEEN_POST_W", "1.15"))
-_TOP_SHEEN_POLISH_GAIN = float(os.getenv("TOP_SHEEN_POLISH_GAIN", "0.70"))
+# --- Air ---
+_AIR_F = float(os.getenv("AIR_F", "10800"))
+_AIR_G = float(os.getenv("AIR_G", "0.78"))
+_AIR_TILT = float(os.getenv("AIR_TILT", "0.00"))
+_AIR_BLEND = float(os.getenv("AIR_BLEND", "1.00"))
 
-# --- Air Completion ---
-_TOP_AIR_F = float(os.getenv("TOP_AIR_F", "10800"))
-_TOP_AIR_G = float(os.getenv("TOP_AIR_G", "0.95"))
-_TOP_AIR_TILT = float(os.getenv("TOP_AIR_TILT", "0.00"))
-_TOP_AIR_BLEND = float(os.getenv("TOP_AIR_BLEND", "1.00"))
+_AIR_MUL = float(os.getenv("AIR_MUL", "1.00"))
+_AIR_TONE_MUL = float(os.getenv("AIR_TONE_MUL", "1.00"))
+_AIR_INTENSITY_MUL = float(os.getenv("AIR_INTENSITY_MUL", "1.00"))
+_AIR_SAFE_MUL = float(os.getenv("AIR_SAFE_MUL", "1.00"))
 
-# --- Final Top Guard ---
-_TOP_GUARD_LO_F = float(os.getenv("TOP_GUARD_LO_F", "4100"))
-_TOP_GUARD_LO_G = float(os.getenv("TOP_GUARD_LO_G", "-0.32"))
-_TOP_GUARD_LO_W = float(os.getenv("TOP_GUARD_LO_W", "1.20"))
+# --- Width ---
+_WID_HP = float(os.getenv("WID_HP", "5600"))
+_WID_M = float(os.getenv("WID_M", "1.10"))
+_WID_MIX = float(os.getenv("WID_MIX", "0.060"))
+_WID_POST_F = float(os.getenv("WID_POST_F", "7600"))
+_WID_POST_G = float(os.getenv("WID_POST_G", "-0.08"))
+_WID_POST_W = float(os.getenv("WID_POST_W", "1.20"))
 
-_TOP_GUARD_HI_F = float(os.getenv("TOP_GUARD_HI_F", "7800"))
-_TOP_GUARD_HI_G = float(os.getenv("TOP_GUARD_HI_G", "-0.22"))
-_TOP_GUARD_HI_W = float(os.getenv("TOP_GUARD_HI_W", "1.35"))
+_WID_MUL = float(os.getenv("WID_MUL", "1.00"))
+_WID_INTENSITY_MUL = float(os.getenv("WID_INTENSITY_MUL", "1.00"))
+_WID_SAFE_MUL = float(os.getenv("WID_SAFE_MUL", "1.00"))
 
-_TOP_GUARD_GLOBAL_TRIM = float(os.getenv("TOP_GUARD_GLOBAL_TRIM", "1.00"))
-_TOP_GUARD_SOFTNESS = float(os.getenv("TOP_GUARD_SOFTNESS", "1.00"))
+# --- Top Guard ---
+_TG_LO_F = float(os.getenv("TG_LO_F", "4100"))
+_TG_LO_G = float(os.getenv("TG_LO_G", "-0.26"))
+_TG_LO_W = float(os.getenv("TG_LO_W", "1.10"))
+_TG_HI_F = float(os.getenv("TG_HI_F", "8000"))
+_TG_HI_G = float(os.getenv("TG_HI_G", "-0.16"))
+_TG_HI_W = float(os.getenv("TG_HI_W", "1.25"))
+_TG_GLOBAL_TRIM = float(os.getenv("TG_GLOBAL_TRIM", "1.00"))
+_TG_SOFTNESS = float(os.getenv("TG_SOFTNESS", "1.00"))
+
+_TG_MUL = float(os.getenv("TG_MUL", "1.00"))
+_TG_INTENSITY_MUL = float(os.getenv("TG_INTENSITY_MUL", "1.00"))
+_TG_SAFE_MUL = float(os.getenv("TG_SAFE_MUL", "1.00"))
 
 # --- punch keeper / output ---
 _MX_PUNCH_ON = (os.getenv("MX_PUNCH_ON", "1").strip() == "1")
@@ -1172,102 +1199,145 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     pres_center_w = _clamp(_PRES_CENTER_W, 0.80, 1.80)
 
     # ---------------------------
-    # Section 5: late top tail
+    # Section 5: presentation-layer
+    # front push -> sheen -> air -> width -> top guard
     # ---------------------------
 
-    tone_sheen_mul = _clamp(_TOP_TONE_SHEEN_MUL, 0.90, 1.12)
-    tone_air_mul = _clamp(_TOP_TONE_AIR_MUL, 0.90, 1.12)
-
-    intensity_sheen_mul = _clamp(_TOP_INTENSITY_SHEEN_MUL, 0.90, 1.15)
-    intensity_guard_mul = _clamp(_TOP_INTENSITY_GUARD_MUL, 0.90, 1.15)
-
-    top_global_build_mul = _clamp(_TOP_GLOBAL_BUILD_MUL, 0.90, 1.12)
-    top_global_safe_mul = _clamp(_TOP_GLOBAL_SAFE_MUL, 0.90, 1.15)
-
-    tone_sheen_mode = {
-        "warm": 0.92,
+    pres_presentation_intensity = {
+        "low": 0.92,
         "balanced": 1.00,
-        "bright": 1.10,
-    }[tone]
-
-    tone_air_mode = {
-        "warm": 0.90,
-        "balanced": 1.00,
-        "bright": 1.12,
-    }[tone]
-
-    top_intensity_mode = {
-        "low": 0.90,
-        "balanced": 1.00,
-        "high": 1.12,
+        "high": 1.10,
     }[intensity]
 
-    # --- Sheen Builder ---
-    top_sheen_hp = _clamp(_TOP_SHEEN_HP, 5600.0, 7200.0)
-    top_sheen_lp = _clamp(_TOP_SHEEN_LP, 8400.0, 10800.0)
-    if top_sheen_lp <= top_sheen_hp + 1200.0:
-        top_sheen_lp = top_sheen_hp + 1200.0
+    pres_presentation_tone = {
+        "warm": 0.96,
+        "balanced": 1.00,
+        "bright": 1.06,
+    }[tone]
 
-    top_sheen_drive = _clamp(
-        _TOP_SHEEN_DRIVE * tone_sheen_mode * tone_sheen_mul * top_intensity_mode * intensity_sheen_mul,
-        0.30,
-        2.20,
+    # --- Front Push ---
+    fp_shared = (
+        _clamp(_FP_MUL, 0.85, 1.15)
+        * _clamp(_FP_INTENSITY_MUL, 0.90, 1.15)
+        * pres_presentation_intensity
+        * _clamp(_FP_TONE_MUL, 0.90, 1.10)
+        * pres_presentation_tone
+        * _clamp(_FP_SAFE_MUL, 0.85, 1.10)
     )
-    top_sheen_mix = _clamp(
-        _TOP_SHEEN_MIX * top_intensity_mode * intensity_sheen_mul * top_global_build_mul,
-        0.04,
-        0.18,
+
+    fp_f = _clamp(
+        _FP_F + (_clamp(_FP_TILT, -0.20, 0.20) * 180.0),
+        2800.0,
+        4200.0,
     )
-    top_sheen_polish_gain = _clamp(
-        _TOP_SHEEN_POLISH_GAIN * tone_sheen_mode * tone_sheen_mul,
+    fp_g = _clamp(
+        _FP_G * _clamp(_FP_AMOUNT, 0.70, 1.25) * fp_shared,
+        0.05,
+        0.80,
+    )
+    fp_w = _clamp(_FP_W, 0.70, 1.60)
+
+    # --- Sheen ---
+    sh_tone_mode = {
+        "warm": 0.94,
+        "balanced": 1.00,
+        "bright": 1.08,
+    }[tone]
+
+    sh_shared = (
+        _clamp(_SH_MUL, 0.85, 1.15)
+        * _clamp(_SH_INTENSITY_MUL, 0.90, 1.15)
+        * pres_presentation_intensity
+        * _clamp(_SH_TONE_MUL, 0.90, 1.12)
+        * sh_tone_mode
+        * _clamp(_SH_SAFE_MUL, 0.85, 1.15)
+    )
+
+    sh_hp = _clamp(_SH_HP, 5200.0, 7600.0)
+    sh_lp = _clamp(_SH_LP, 8200.0, 11500.0)
+    if sh_lp <= sh_hp + 1200.0:
+        sh_lp = sh_hp + 1200.0
+
+    sh_drive = _clamp(_SH_DRIVE * sh_shared, 0.20, 2.20)
+    sh_mix = _clamp(_SH_MIX * sh_shared, 0.03, 0.20)
+    sh_post_f = _clamp(_SH_POST_F, 6500.0, 9500.0)
+    sh_post_g = _clamp(_SH_POST_G, -0.50, 0.50)
+    sh_post_w = _clamp(_SH_POST_W, 0.80, 2.00)
+    sh_texture_gain = _clamp(_SH_TEXTURE_GAIN * sh_tone_mode, 0.05, 1.20)
+
+    # --- Air ---
+    air_tone_mode = {
+        "warm": 0.94,
+        "balanced": 1.00,
+        "bright": 1.08,
+    }[tone]
+
+    air_shared = (
+        _clamp(_AIR_MUL, 0.85, 1.15)
+        * _clamp(_AIR_INTENSITY_MUL, 0.90, 1.12)
+        * pres_presentation_intensity
+        * _clamp(_AIR_TONE_MUL, 0.90, 1.12)
+        * air_tone_mode
+        * _clamp(_AIR_SAFE_MUL, 0.85, 1.15)
+    )
+
+    air_f = _clamp(_AIR_F, 9500.0, 14000.0)
+    air_g = _clamp(
+        _AIR_G * _clamp(_AIR_BLEND, 0.70, 1.20) * air_shared,
         0.10,
-        1.20,
-    )
-
-    top_sheen_post_f = _clamp(_TOP_SHEEN_POST_F, 6500.0, 9000.0)
-    top_sheen_post_g = _clamp(_TOP_SHEEN_POST_G, -0.60, 0.40)
-    top_sheen_post_w = _clamp(_TOP_SHEEN_POST_W, 0.80, 1.80)
-
-    # --- Air Completion ---
-    top_air_f = _clamp(_TOP_AIR_F, 9800.0, 13500.0)
-    top_air_g = _clamp(
-        _TOP_AIR_G * tone_air_mode * tone_air_mul * _clamp(_TOP_AIR_BLEND, 0.70, 1.15),
-        0.20,
         1.40,
     )
-    top_air_tilt = _clamp(_TOP_AIR_TILT, 0.00, 0.60)
+    air_tilt = _clamp(_AIR_TILT, 0.00, 0.60)
 
-    # --- Final Top Guard ---
-    top_guard_lo_f = _clamp(_TOP_GUARD_LO_F, 3600.0, 5000.0)
-    top_guard_lo_g = _clamp(
-        _TOP_GUARD_LO_G
-        * top_intensity_mode
-        * intensity_guard_mul
-        * top_global_safe_mul
-        * _clamp(_TOP_GUARD_GLOBAL_TRIM, 0.70, 1.15),
+    # --- Width ---
+    wid_shared = (
+        _clamp(_WID_MUL, 0.85, 1.15)
+        * _clamp(_WID_INTENSITY_MUL, 0.90, 1.12)
+        * pres_presentation_intensity
+        * _clamp(_WID_SAFE_MUL, 0.85, 1.15)
+    )
+
+    wid_hp = _clamp(_WID_HP, 4500.0, 8000.0)
+    wid_m = _clamp(_WID_M * wid_shared, 1.02, 1.35)
+    wid_mix = _clamp(_WID_MIX * wid_shared, 0.02, 0.18)
+    wid_post_f = _clamp(_WID_POST_F, 6000.0, 10000.0)
+    wid_post_g = _clamp(_WID_POST_G, -0.50, 0.30)
+    wid_post_w = _clamp(_WID_POST_W, 0.80, 2.20)
+
+    # --- Top Guard ---
+    tg_shared = (
+        _clamp(_TG_MUL, 0.85, 1.15)
+        * _clamp(_TG_INTENSITY_MUL, 0.90, 1.15)
+        * pres_presentation_intensity
+        * _clamp(_TG_SAFE_MUL, 0.90, 1.20)
+    )
+
+    tg_lo_f = _clamp(_TG_LO_F, 3200.0, 5200.0)
+    tg_lo_g = _clamp(
+        _TG_LO_G
+        * _clamp(_TG_GLOBAL_TRIM, 0.70, 1.15)
+        * tg_shared,
         -1.20,
         0.0,
     )
-    top_guard_lo_w = _clamp(
-        _TOP_GUARD_LO_W * _clamp(_TOP_GUARD_SOFTNESS, 0.70, 1.30),
-        0.90,
-        2.00,
+    tg_lo_w = _clamp(
+        _TG_LO_W * _clamp(_TG_SOFTNESS, 0.70, 1.30),
+        0.80,
+        2.20,
     )
 
-    top_guard_hi_f = _clamp(_TOP_GUARD_HI_F, 6800.0, 9200.0)
-    top_guard_hi_g = _clamp(
-        _TOP_GUARD_HI_G
-        * top_intensity_mode
-        * intensity_guard_mul
-        * top_global_safe_mul
-        * _clamp(_TOP_GUARD_GLOBAL_TRIM, 0.70, 1.15),
-        -0.80,
+    tg_hi_f = _clamp(_TG_HI_F, 6500.0, 10000.0)
+    tg_hi_g = _clamp(
+        _TG_HI_G
+        * _clamp(_TG_GLOBAL_TRIM, 0.70, 1.15)
+        * tg_shared,
+        -0.90,
         0.0,
     )
-    top_guard_hi_w = _clamp(
-        _TOP_GUARD_HI_W * _clamp(_TOP_GUARD_SOFTNESS, 0.70, 1.30),
-        0.90,
-        2.20,
+    tg_hi_w = _clamp(
+        _TG_HI_W * _clamp(_TG_SOFTNESS, 0.70, 1.30),
+        0.80,
+        2.40,
     )
 
     # ---------------------------
@@ -1299,42 +1369,67 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f"[mx_presence_focus]"
     )
 
-    # B. Feed Stage-1 output directly into current sheen stage
-    parts.append("[mx_presence_focus]asplit=2[mx_sheen_dry][mx_sheen_wet_in]")
-
+    # B1. Front Push
     parts.append(
-        f"[mx_sheen_wet_in]"
-        f"highpass=f={top_sheen_hp}:width=0.707,"
-        f"lowpass=f={top_sheen_lp}:width=0.707,"
-        f"equalizer=f={(top_sheen_hp + top_sheen_lp) / 2.0}:t=q:w=1.10:g={top_sheen_polish_gain},"
-        f"{_os_softclip_chain(drive_db=top_sheen_drive, hp=None, lp=None, post_gain_db=0.0)},"
-        f"equalizer=f={top_sheen_post_f}:t=q:w={top_sheen_post_w}:g={top_sheen_post_g},"
-        f"volume={top_sheen_mix}"
+        f"[mx_presence_focus]"
+        f"equalizer=f={fp_f}:t=q:w={fp_w}:g={fp_g}"
+        f"[mx_front_push]"
+    )
+
+    # B2. Split A for sheen
+    parts.append("[mx_front_push]asplit=2[mx_main_a][mx_sheen_in]")
+
+    # B3. Sheen branch
+    parts.append(
+        f"[mx_sheen_in]"
+        f"highpass=f={sh_hp}:width=0.707,"
+        f"lowpass=f={sh_lp}:width=0.707,"
+        f"equalizer=f={(sh_hp + sh_lp) / 2.0}:t=q:w=1.10:g={sh_texture_gain},"
+        f"{_os_softclip_chain(drive_db=sh_drive, hp=None, lp=None, post_gain_db=0.0)},"
+        f"equalizer=f={sh_post_f}:t=q:w={sh_post_w}:g={sh_post_g},"
+        f"volume={sh_mix}"
         f"[mx_sheen_wet]"
     )
 
-    parts.append("[mx_sheen_dry][mx_sheen_wet]amix=inputs=2:normalize=0[mx_sheen_out]")
+    # B4. Sheen sum
+    parts.append("[mx_main_a][mx_sheen_wet]amix=inputs=2:normalize=0[mx_after_sheen]")
 
-    # C. Air stage
-    if top_air_tilt > 1e-9:
+    # B5. Air lift
+    if air_tilt > 1e-9:
         parts.append(
-            f"[mx_sheen_out]"
-            f"highshelf=f={top_air_f}:g={top_air_g},"
-            f"highshelf=f={max(9000.0, top_air_f - 1800.0)}:g={top_air_tilt}"
-            f"[mx_air_out]"
+            f"[mx_after_sheen]"
+            f"highshelf=f={air_f}:g={air_g},"
+            f"highshelf=f={max(9000.0, air_f - 1800.0)}:g={air_tilt}"
+            f"[mx_after_air]"
         )
     else:
         parts.append(
-            f"[mx_sheen_out]"
-            f"highshelf=f={top_air_f}:g={top_air_g}"
-            f"[mx_air_out]"
+            f"[mx_after_sheen]"
+            f"highshelf=f={air_f}:g={air_g}"
+            f"[mx_after_air]"
         )
 
-    # D. Final Top Guard
+    # B6. Split B for width
+    parts.append("[mx_after_air]asplit=2[mx_main_b][mx_width_in]")
+
+    # B7. Width branch
     parts.append(
-        f"[mx_air_out]"
-        f"equalizer=f={top_guard_lo_f}:t=q:w={top_guard_lo_w}:g={top_guard_lo_g},"
-        f"equalizer=f={top_guard_hi_f}:t=q:w={top_guard_hi_w}:g={top_guard_hi_g}"
+        f"[mx_width_in]"
+        f"highpass=f={wid_hp}:width=0.707,"
+        f"extrastereo=m={wid_m},"
+        f"equalizer=f={wid_post_f}:t=q:w={wid_post_w}:g={wid_post_g},"
+        f"volume={wid_mix}"
+        f"[mx_width_wet]"
+    )
+
+    # B8. Width sum
+    parts.append("[mx_main_b][mx_width_wet]amix=inputs=2:normalize=0[mx_after_width]")
+
+    # B9. Final top guard
+    parts.append(
+        f"[mx_after_width]"
+        f"equalizer=f={tg_lo_f}:t=q:w={tg_lo_w}:g={tg_lo_g},"
+        f"equalizer=f={tg_hi_f}:t=q:w={tg_hi_w}:g={tg_hi_g}"
         f"[mx_after_top]"
     )
 
@@ -1372,7 +1467,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f'{out_args} {shlex.quote(out_path)}'
     )
     _run(cmd)
-    return out_path, out_name    # WRAPPERS
+    return out_path, out_name
 def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     return _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
 
