@@ -1358,29 +1358,28 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     parts = []
     parts.append(f"[0:a]{','.join(serial_parts)}[mx_core]")
 
-# A. Front Push moved earlier into face formation
-parts.append(
-    f"[mx_core]"
-    f"equalizer=f={fp_f}:t=q:w={fp_w}:g={fp_g}"
-    f"[mx_front_push]"
-)
+    # A. Front Push moved earlier into face formation
+    parts.append(
+        f"[mx_core]"
+        f"equalizer=f={fp_f}:t=q:w={fp_w}:g={fp_g}"
+        f"[mx_front_push]"
+    )
 
-# B. Stage-1 V4 serial corrective/build path after front contour
-parts.append(
-    f"[mx_front_push]"
-    f"equalizer=f={pres_peak_f}:t=q:w={pres_peak_w}:g={pres_peak_g},"
-    f"equalizer=f={pres_harsh_f}:t=q:w={pres_harsh_w}:g={pres_harsh_g},"
-    f"equalizer=f={pres_sib_f}:t=q:w={pres_sib_w}:g={pres_sib_g},"
-    f"equalizer=f={pres_focus_f}:t=q:w={pres_focus_w}:g={pres_focus_g},"
-    f"equalizer=f={pres_center_f}:t=q:w={pres_center_w}:g={pres_center_g}"
-    f"[mx_presence_focus]"
-)
+    # B. Stage-1 V4 serial corrective/build path after front contour
+    parts.append(
+        f"[mx_front_push]"
+        f"equalizer=f={pres_peak_f}:t=q:w={pres_peak_w}:g={pres_peak_g},"
+        f"equalizer=f={pres_harsh_f}:t=q:w={pres_harsh_w}:g={pres_harsh_g},"
+        f"equalizer=f={pres_sib_f}:t=q:w={pres_sib_w}:g={pres_sib_g},"
+        f"equalizer=f={pres_focus_f}:t=q:w={pres_focus_w}:g={pres_focus_g},"
+        f"equalizer=f={pres_center_f}:t=q:w={pres_center_w}:g={pres_center_g}"
+        f"[mx_presence_focus]"
+    )
 
-# C. Split A for sheen
-parts.append("[mx_presence_focus]asplit=2[mx_main_a][mx_sheen_in]")
-
-# B3. Sheen branch
-parts.append(
+    # C. Split A for sheen
+    parts.append("[mx_presence_focus]asplit=2[mx_main_a][mx_sheen_in]")
+    # B3. Sheen branch
+    parts.append(
         f"[mx_sheen_in]"
         f"highpass=f={sh_hp}:width=0.707,"
         f"lowpass=f={sh_lp}:width=0.707,"
