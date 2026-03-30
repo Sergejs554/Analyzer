@@ -1379,8 +1379,8 @@ parts.append(
 # C. Split A for sheen
 parts.append("[mx_presence_focus]asplit=2[mx_main_a][mx_sheen_in]")
 
-    # B3. Sheen branch
-    parts.append(
+# B3. Sheen branch
+parts.append(
         f"[mx_sheen_in]"
         f"highpass=f={sh_hp}:width=0.707,"
         f"lowpass=f={sh_lp}:width=0.707,"
