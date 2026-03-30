@@ -1021,6 +1021,15 @@ _MX_PUNCH_MAKEUP_DB = float(os.getenv("MX_PUNCH_MAKEUP_DB", "0.0"))
 
 _MX_TRIM_DB = float(os.getenv("MX_TRIM_DB", "1.02"))
 
+_CT_HP = float(os.getenv("CT_HP", "2400"))
+_CT_LP = float(os.getenv("CT_LP", "5600"))
+_CT_F = float(os.getenv("CT_F", "3380"))
+_CT_G = float(os.getenv("CT_G", "0.95"))
+_CT_W = float(os.getenv("CT_W", "0.78"))
+_CT_POST_F = float(os.getenv("CT_POST_F", "6100"))
+_CT_POST_G = float(os.getenv("CT_POST_G", "-0.18"))
+_CT_POST_W = float(os.getenv("CT_POST_W", "1.05"))
+_CT_MIX = float(os.getenv("CT_MIX", "0.085"))
 
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
@@ -1237,6 +1246,21 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     fp_w = _clamp(_FP_W, 0.70, 1.60)
 
+        # --- Contour donor ---
+    ct_hp = _clamp(_CT_HP, 1800.0, 3200.0)
+    ct_lp = _clamp(_CT_LP, 4500.0, 7200.0)
+    if ct_lp <= ct_hp + 1200.0:
+        ct_lp = ct_hp + 1200.0
+
+    ct_f = _clamp(_CT_F, 2800.0, 4200.0)
+    ct_g = _clamp(_CT_G, 0.10, 1.80)
+    ct_w = _clamp(_CT_W, 0.50, 1.40)
+
+    ct_post_f = _clamp(_CT_POST_F, 5200.0, 7600.0)
+    ct_post_g = _clamp(_CT_POST_G, -0.60, 0.0)
+    ct_post_w = _clamp(_CT_POST_W, 0.80, 1.80)
+
+    ct_mix = _clamp(_CT_MIX, 0.02, 0.18)
     # --- Sheen ---
     sh_tone_mode = {
         "warm": 0.94,
@@ -1376,8 +1400,26 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f"[mx_presence_focus]"
     )
 
-    # C. Split A for sheen
-    parts.append("[mx_presence_focus]asplit=2[mx_main_a][mx_sheen_in]")
+        # C. Split for contour donor
+    parts.append("[mx_presence_focus]asplit=2[mx_main_ct][mx_contour_in]")
+
+    # C1. Contour donor branch
+    parts.append(
+        f"[mx_contour_in]"
+        f"highpass=f={ct_hp}:width=0.707,"
+        f"lowpass=f={ct_lp}:width=0.707,"
+        f"equalizer=f={ct_f}:t=q:w={ct_w}:g={ct_g},"
+        f"equalizer=f={ct_post_f}:t=q:w={ct_post_w}:g={ct_post_g},"
+        f"volume={ct_mix}"
+        f"[mx_contour_wet]"
+    )
+
+    # C2. Contour sum back into main path
+    parts.append("[mx_main_ct][mx_contour_wet]amix=inputs=2:normalize=0[mx_after_contour]")
+
+    # C3. Split A for sheen
+    parts.append("[mx_after_contour]asplit=2[mx_main_a][mx_sheen_in]")
+
     # B3. Sheen branch
     parts.append(
         f"[mx_sheen_in]"
@@ -1392,7 +1434,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
     # B4. Sheen sum
     parts.append("[mx_main_a][mx_sheen_wet]amix=inputs=2:normalize=0[mx_after_sheen]")
-
     # B5. Air lift
     if air_tilt > 1e-9:
         parts.append(
