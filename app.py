@@ -336,11 +336,11 @@ def _build_loudnorm_two_pass(in_path: str, ln: dict, out_args: str, out_path: st
     if stats:
         measured_args = (
             f"I={target_I}:TP={target_TP}:LRA={target_LRA}:"
-            f"measured_I={stats.get('input_i', '-14')}:"
-            f"measured_LRA={stats.get('input_lra', '7')}:"
-            f"measured_TP={stats.get('input_tp', '-2')}:"
-            f"measured_thresh={stats.get('input_thresh', '-24')}:"
-            f"offset={stats.get('target_offset', '0')}:print_format=summary"
+            f"measured_I={stats.get("input_i", "-14")}:"
+            f"measured_LRA={stats.get("input_lra", "7")}:"
+            f"measured_TP={stats.get("input_tp", "-2")}:"
+            f"measured_thresh={stats.get("input_thresh", "-24")}:"
+            f"offset={stats.get("target_offset", "0")}:print_format=summary"
         )
         pass2_ln = "loudnorm=" + measured_args
     else:
@@ -625,7 +625,7 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
         body_chain.append("pan=stereo|c0=.5*c0+.5*c1|c1=.5*c0+.5*c1")
 
     if _LS_BODY_ON and body_mix > 0.0:
-        parts.append(f"[body]{','.join(body_chain)}[b1]")
+        parts.append(f"[body]{",".join(body_chain)}[b1]")
     else:
         parts.append("[body]volume=0[b1]")
 
@@ -780,7 +780,7 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     core_chain.append(f"volume={core_mix}")
 
     if _RV_CORE_ON and core_mix > 0.0:
-        parts.append(f"[core]{','.join(core_chain)}[c1]")
+        parts.append(f"[core]{",".join(core_chain)}[c1]")
     else:
         parts.append("[core]volume=0[c1]")
 
@@ -1246,7 +1246,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     fp_w = _clamp(_FP_W, 0.70, 1.60)
 
-        # --- Contour donor ---
+    # --- Contour donor ---
     ct_hp = _clamp(_CT_HP, 1800.0, 3200.0)
     ct_lp = _clamp(_CT_LP, 4500.0, 7200.0)
     if ct_lp <= ct_hp + 1200.0:
@@ -1261,6 +1261,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     ct_post_w = _clamp(_CT_POST_W, 0.80, 1.80)
 
     ct_mix = _clamp(_CT_MIX, 0.02, 0.18)
+
     # --- Sheen ---
     sh_tone_mode = {
         "warm": 0.94,
@@ -1380,7 +1381,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
     # build filter graph
     parts = []
-    parts.append(f"[0:a]{','.join(serial_parts)}[mx_core]")
+    parts.append(f"[0:a]{",".join(serial_parts)}[mx_core]")
 
     # A. Front Push moved earlier into face formation
     parts.append(
@@ -1400,7 +1401,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f"[mx_presence_focus]"
     )
 
-        # C. Split for contour donor
+    # C. Split for contour donor
     parts.append("[mx_presence_focus]asplit=2[mx_main_ct][mx_contour_in]")
 
     # C1. Contour donor branch
@@ -1434,6 +1435,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
     # B4. Sheen sum
     parts.append("[mx_main_a][mx_sheen_wet]amix=inputs=2:normalize=0[mx_after_sheen]")
+
     # B5. Air lift
     if air_tilt > 1e-9:
         parts.append(
@@ -1508,6 +1510,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     _run(cmd)
     return out_path, out_name
+
 def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     return _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
 
@@ -1610,6 +1613,85 @@ def _render_artistic_sum(base_src: str, reveal_src: str, polish_src: str, out_pa
     cmd = (
         f'ffmpeg -y -hide_banner '
         f'-i {shlex.quote(base_src)} '
+        f'-i {shlex.quote(reveal_src)} '
+        f'-i {shlex.quote(polish_src)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+
+def _render_polish_plus_reveal(polish_src: str, reveal_src: str, out_path: str):
+    reveal_gain_db = _clamp(_ART_REVEAL_GAIN_DB, -36.0, 6.0)
+
+    fc = (
+        f"[0:a]volume=1[polish];"
+        f"[1:a]volume={reveal_gain_db}dB[reveal];"
+        f"[polish][reveal]amix=inputs=2:normalize=0[out]"
+    )
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(polish_src)} '
+        f'-i {shlex.quote(reveal_src)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+
+def _render_bakuage_plus_reveal(low_src: str, reveal_src: str, out_path: str):
+    reveal_gain_db = _clamp(_ART_REVEAL_GAIN_DB, -36.0, 6.0)
+
+    fc = (
+        f"[0:a]volume=1[low];"
+        f"[1:a]volume={reveal_gain_db}dB[reveal];"
+        f"[low][reveal]amix=inputs=2:normalize=0[out]"
+    )
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(low_src)} '
+        f'-i {shlex.quote(reveal_src)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+
+def _render_bakuage_plus_polish(low_src: str, polish_src: str, out_path: str):
+    polish_gain_db = _clamp(_ART_POLISH_GAIN_DB, -36.0, 6.0)
+
+    fc = (
+        f"[0:a]volume=1[low];"
+        f"[1:a]volume={polish_gain_db}dB[polish];"
+        f"[low][polish]amix=inputs=2:normalize=0[out]"
+    )
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(low_src)} '
+        f'-i {shlex.quote(polish_src)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+
+
+def _render_bakuage_reveal_polish_sum(low_src: str, reveal_src: str, polish_src: str, out_path: str):
+    reveal_gain_db = _clamp(_ART_REVEAL_GAIN_DB, -36.0, 6.0)
+    polish_gain_db = _clamp(_ART_POLISH_GAIN_DB, -36.0, 6.0)
+
+    fc = (
+        f"[0:a]volume=1[low];"
+        f"[1:a]volume={reveal_gain_db}dB[reveal];"
+        f"[2:a]volume={polish_gain_db}dB[polish];"
+        f"[low][reveal][polish]amix=inputs=3:normalize=0[out]"
+    )
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(low_src)} '
         f'-i {shlex.quote(reveal_src)} '
         f'-i {shlex.quote(polish_src)} '
         f'-filter_complex "{fc}" -map "[out]" '
@@ -1725,6 +1807,83 @@ def _render_artistic_blend(in_path: str, tone: str, intensity: str, fmt: str, td
     artistic_path = os.path.join(td, artistic_name)
     os.replace(out_path, artistic_path)
     return artistic_path, artistic_name
+
+
+def _render_polish_reveal_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    reveal_wav, _ = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+
+    premix_wav = os.path.join(td, "polish_reveal_premix.wav")
+    _render_polish_plus_reveal(polish_wav, reveal_wav, premix_wav)
+
+    out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
+
+    final_name = f"polish_reveal_{out_name}"
+    final_path = os.path.join(td, final_name)
+    os.replace(out_path, final_path)
+    return final_path, final_name
+
+
+def _render_bakuage_reveal_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    low_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    reveal_wav, _ = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+
+    premix_wav = os.path.join(td, "bakuage_reveal_premix.wav")
+    _render_bakuage_plus_reveal(low_wav, reveal_wav, premix_wav)
+
+    out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
+
+    final_name = f"bakuage_reveal_{out_name}"
+    final_path = os.path.join(td, final_name)
+    os.replace(out_path, final_path)
+    return final_path, final_name
+
+
+def _render_bakuage_polish_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    low_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+
+    premix_wav = os.path.join(td, "bakuage_polish_premix.wav")
+    _render_bakuage_plus_polish(low_wav, polish_wav, premix_wav)
+
+    out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
+
+    final_name = f"bakuage_polish_{out_name}"
+    final_path = os.path.join(td, final_name)
+    os.replace(out_path, final_path)
+    return final_path, final_name
+
+
+def _render_bakuage_reveal_polish_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    low_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    reveal_wav, _ = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+
+    premix_wav = os.path.join(td, "bakuage_reveal_polish_premix.wav")
+    _render_bakuage_reveal_polish_sum(low_wav, reveal_wav, polish_wav, premix_wav)
+
+    out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
+
+    final_name = f"bakuage_reveal_polish_{out_name}"
+    final_path = os.path.join(td, final_name)
+    os.replace(out_path, final_path)
+    return final_path, final_name
 
 
 # ---------------------------
@@ -1907,6 +2066,10 @@ def root():
             "/enhance",
             "/blend",
             "/artistic_blend",
+            "/polish_reveal",
+            "/bakuage_reveal",
+            "/bakuage_polish",
+            "/bakuage_reveal_polish",
             "/bandlab_branch",
             "/bakuage_branch",
             "/enhance_branch",
@@ -2415,6 +2578,130 @@ def artistic_blend_route():
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_artistic_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/polish_reveal")
+def polish_reveal_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_polish_reveal_blend(
+                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
+            )
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/bakuage_reveal")
+def bakuage_reveal_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_bakuage_reveal_blend(
+                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
+            )
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/bakuage_polish")
+def bakuage_polish_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_bakuage_polish_blend(
+                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
+            )
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/bakuage_reveal_polish")
+def bakuage_reveal_polish_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_bakuage_reveal_polish_blend(
+                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
+            )
             _out_args_str, _out_name2, mime = _out_args(fmt)
 
             return send_file(
