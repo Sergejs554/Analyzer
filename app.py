@@ -79,10 +79,6 @@ def _requests_session() -> requests.Session:
 
 
 def download_file(url: str, out_path: str, timeout: int = 180) -> tuple[int, str, str]:
-    """
-    Stream download into temp file.
-    Safer for Railway than loading full file into RAM.
-    """
     last_err = None
 
     for attempt in range(3):
@@ -336,11 +332,11 @@ def _build_loudnorm_two_pass(in_path: str, ln: dict, out_args: str, out_path: st
     if stats:
         measured_args = (
             f"I={target_I}:TP={target_TP}:LRA={target_LRA}:"
-            f"measured_I={stats.get("input_i", "-14")}:"
-            f"measured_LRA={stats.get("input_lra", "7")}:"
-            f"measured_TP={stats.get("input_tp", "-2")}:"
-            f"measured_thresh={stats.get("input_thresh", "-24")}:"
-            f"offset={stats.get("target_offset", "0")}:print_format=summary"
+            f"measured_I={stats.get('input_i', '-14')}:"
+            f"measured_LRA={stats.get('input_lra', '7')}:"
+            f"measured_TP={stats.get('input_tp', '-2')}:"
+            f"measured_thresh={stats.get('input_thresh', '-24')}:"
+            f"offset={stats.get('target_offset', '0')}:print_format=summary"
         )
         pass2_ln = "loudnorm=" + measured_args
     else:
@@ -625,7 +621,7 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
         body_chain.append("pan=stereo|c0=.5*c0+.5*c1|c1=.5*c0+.5*c1")
 
     if _LS_BODY_ON and body_mix > 0.0:
-        parts.append(f"[body]{",".join(body_chain)}[b1]")
+        parts.append(f"[body]{','.join(body_chain)}[b1]")
     else:
         parts.append("[body]volume=0[b1]")
 
@@ -780,7 +776,7 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     core_chain.append(f"volume={core_mix}")
 
     if _RV_CORE_ON and core_mix > 0.0:
-        parts.append(f"[core]{",".join(core_chain)}[c1]")
+        parts.append(f"[core]{','.join(core_chain)}[c1]")
     else:
         parts.append("[core]volume=0[c1]")
 
@@ -843,15 +839,13 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     _run(cmd)
     return out_path, out_name
 
+
 # ---------------------------
 # POLISH / ENHANCE BRANCH
 # branch-only donor
 # Mixea V4.2 + presentation layer
-# cleanup -> body -> center -> corrective serial presence
-# -> front push -> sheen -> air -> width -> top guard -> punch
 # ---------------------------
 
-# --- shared scaling ---
 _MX_TONE_BODY_MUL = float(os.getenv("MX_TONE_BODY_MUL", "1.00"))
 _MX_TONE_MID_MUL = float(os.getenv("MX_TONE_MID_MUL", "1.00"))
 _MX_TONE_FINISH_MUL = float(os.getenv("MX_TONE_FINISH_MUL", "1.00"))
@@ -860,7 +854,6 @@ _MX_INTENSITY_CORE = float(os.getenv("MX_INTENSITY_CORE", "1.00"))
 _MX_INTENSITY_FINISH = float(os.getenv("MX_INTENSITY_FINISH", "1.00"))
 _MX_INTENSITY_DYNAMIC = float(os.getenv("MX_INTENSITY_DYNAMIC", "1.00"))
 
-# --- structural cleanup ---
 _MX_CLEAN_F1 = float(os.getenv("MX_CLEAN_F1", "280"))
 _MX_CLEAN_G1 = float(os.getenv("MX_CLEAN_G1", "-0.95"))
 _MX_CLEAN_W1 = float(os.getenv("MX_CLEAN_W1", "1.10"))
@@ -873,7 +866,6 @@ _MX_CLEAN_F3 = float(os.getenv("MX_CLEAN_F3", "670"))
 _MX_CLEAN_G3 = float(os.getenv("MX_CLEAN_G3", "-0.18"))
 _MX_CLEAN_W3 = float(os.getenv("MX_CLEAN_W3", "1.00"))
 
-# --- body anchor ---
 _MX_BODY_F1 = float(os.getenv("MX_BODY_F1", "205"))
 _MX_BODY_G1 = float(os.getenv("MX_BODY_G1", "1.66"))
 _MX_BODY_W1 = float(os.getenv("MX_BODY_W1", "1.00"))
@@ -886,7 +878,6 @@ _MX_BODY_GUARD_F = float(os.getenv("MX_BODY_GUARD_F", "390"))
 _MX_BODY_GUARD_G = float(os.getenv("MX_BODY_GUARD_G", "-0.30"))
 _MX_BODY_GUARD_W = float(os.getenv("MX_BODY_GUARD_W", "1.15"))
 
-# --- mid-anchor projection ---
 _MX_PROJ_F1 = float(os.getenv("MX_PROJ_F1", "1280"))
 _MX_PROJ_G1 = float(os.getenv("MX_PROJ_G1", "1.30"))
 _MX_PROJ_W1 = float(os.getenv("MX_PROJ_W1", "0.95"))
@@ -899,54 +890,37 @@ _MX_PROJ_F3 = float(os.getenv("MX_PROJ_F3", "3500"))
 _MX_PROJ_G3 = float(os.getenv("MX_PROJ_G3", "-0.22"))
 _MX_PROJ_W3 = float(os.getenv("MX_PROJ_W3", "1.15"))
 
-# ---------------------------
-# STAGE-1 V4 SERIAL PRESENCE PATH
-# corrective -> focused build -> centering
-# ---------------------------
-
-# --- shared Stage-1 scalers ---
 _PRES_CORR_MUL = float(os.getenv("PRES_CORR_MUL", "1.00"))
 _PRES_BUILD_MUL = float(os.getenv("PRES_BUILD_MUL", "1.00"))
 _PRES_INTENSITY_MUL = float(os.getenv("PRES_INTENSITY_MUL", "1.00"))
 _PRES_TONE_MUL = float(os.getenv("PRES_TONE_MUL", "1.00"))
 _PRES_SAFE_MUL = float(os.getenv("PRES_SAFE_MUL", "1.00"))
 
-# --- Presence Peak Stabilizer ---
 _PRES_PEAK_F = float(os.getenv("PRES_PEAK_F", "3820"))
 _PRES_PEAK_G = float(os.getenv("PRES_PEAK_G", "-0.16"))
 _PRES_PEAK_W = float(os.getenv("PRES_PEAK_W", "0.92"))
 _PRES_PEAK_AMOUNT = float(os.getenv("PRES_PEAK_AMOUNT", "0.76"))
 
-# --- Harsh Stabilizer ---
 _PRES_HARSH_F = float(os.getenv("PRES_HARSH_F", "4260"))
 _PRES_HARSH_G = float(os.getenv("PRES_HARSH_G", "-0.12"))
 _PRES_HARSH_W = float(os.getenv("PRES_HARSH_W", "0.98"))
 _PRES_HARSH_AMOUNT = float(os.getenv("PRES_HARSH_AMOUNT", "0.74"))
 
-# --- Sibilant / Edge Restraint ---
 _PRES_SIB_F = float(os.getenv("PRES_SIB_F", "6400"))
 _PRES_SIB_G = float(os.getenv("PRES_SIB_G", "-0.08"))
 _PRES_SIB_W = float(os.getenv("PRES_SIB_W", "1.45"))
 _PRES_SIB_AMOUNT = float(os.getenv("PRES_SIB_AMOUNT", "0.84"))
 
-# --- Focused Presence Anchor ---
 _PRES_FOCUS_F = float(os.getenv("PRES_FOCUS_F", "3180"))
 _PRES_FOCUS_G = float(os.getenv("PRES_FOCUS_G", "1.74"))
 _PRES_FOCUS_W = float(os.getenv("PRES_FOCUS_W", "0.82"))
 _PRES_FOCUS_TILT = float(os.getenv("PRES_FOCUS_TILT", "0.00"))
 _PRES_FOCUS_AMOUNT = float(os.getenv("PRES_FOCUS_AMOUNT", "1.14"))
 
-# --- Presence Centering ---
 _PRES_CENTER_F = float(os.getenv("PRES_CENTER_F", "4180"))
 _PRES_CENTER_G = float(os.getenv("PRES_CENTER_G", "-0.00"))
 _PRES_CENTER_W = float(os.getenv("PRES_CENTER_W", "1.10"))
 
-# ---------------------------
-# PRESENTATION LAYER
-# front push -> sheen -> air -> width -> top guard
-# ---------------------------
-
-# --- Front Push ---
 _FP_F = float(os.getenv("FP_F", "3440"))
 _FP_G = float(os.getenv("FP_G", "0.34"))
 _FP_W = float(os.getenv("FP_W", "0.92"))
@@ -958,7 +932,6 @@ _FP_INTENSITY_MUL = float(os.getenv("FP_INTENSITY_MUL", "1.00"))
 _FP_TONE_MUL = float(os.getenv("FP_TONE_MUL", "1.00"))
 _FP_SAFE_MUL = float(os.getenv("FP_SAFE_MUL", "1.00"))
 
-# --- Sheen ---
 _SH_HP = float(os.getenv("SH_HP", "5680"))
 _SH_LP = float(os.getenv("SH_LP", "9150"))
 _SH_DRIVE = float(os.getenv("SH_DRIVE", "1.36"))
@@ -973,7 +946,6 @@ _SH_INTENSITY_MUL = float(os.getenv("SH_INTENSITY_MUL", "1.00"))
 _SH_TONE_MUL = float(os.getenv("SH_TONE_MUL", "1.00"))
 _SH_SAFE_MUL = float(os.getenv("SH_SAFE_MUL", "1.00"))
 
-# --- Air ---
 _AIR_F = float(os.getenv("AIR_F", "10800"))
 _AIR_G = float(os.getenv("AIR_G", "0.84"))
 _AIR_TILT = float(os.getenv("AIR_TILT", "0.00"))
@@ -984,7 +956,6 @@ _AIR_TONE_MUL = float(os.getenv("AIR_TONE_MUL", "1.00"))
 _AIR_INTENSITY_MUL = float(os.getenv("AIR_INTENSITY_MUL", "1.00"))
 _AIR_SAFE_MUL = float(os.getenv("AIR_SAFE_MUL", "1.00"))
 
-# --- Width ---
 _WID_HP = float(os.getenv("WID_HP", "5600"))
 _WID_M = float(os.getenv("WID_M", "1.10"))
 _WID_MIX = float(os.getenv("WID_MIX", "0.060"))
@@ -996,7 +967,6 @@ _WID_MUL = float(os.getenv("WID_MUL", "1.00"))
 _WID_INTENSITY_MUL = float(os.getenv("WID_INTENSITY_MUL", "1.00"))
 _WID_SAFE_MUL = float(os.getenv("WID_SAFE_MUL", "1.00"))
 
-# --- Top Guard ---
 _TG_LO_F = float(os.getenv("TG_LO_F", "4100"))
 _TG_LO_G = float(os.getenv("TG_LO_G", "-0.26"))
 _TG_LO_W = float(os.getenv("TG_LO_W", "1.10"))
@@ -1010,7 +980,6 @@ _TG_MUL = float(os.getenv("TG_MUL", "1.00"))
 _TG_INTENSITY_MUL = float(os.getenv("TG_INTENSITY_MUL", "1.00"))
 _TG_SAFE_MUL = float(os.getenv("TG_SAFE_MUL", "1.00"))
 
-# --- punch keeper / output ---
 _MX_PUNCH_ON = (os.getenv("MX_PUNCH_ON", "1").strip() == "1")
 _MX_PUNCH_THRESHOLD_DB = float(os.getenv("MX_PUNCH_THRESHOLD_DB", "-24"))
 _MX_PUNCH_RATIO = float(os.getenv("MX_PUNCH_RATIO", "1.16"))
@@ -1031,12 +1000,12 @@ _CT_POST_G = float(os.getenv("CT_POST_G", "-0.28"))
 _CT_POST_W = float(os.getenv("CT_POST_W", "0.98"))
 _CT_MIX = float(os.getenv("CT_MIX", "0.070"))
 
+
 def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
     intensity = _normalize_intensity(intensity)
     fmt = _normalize_format(fmt)
 
-    # --- shared tone scalers ---
     tone_body_mul = {
         "warm": 1.10,
         "balanced": 1.00,
@@ -1055,7 +1024,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         "bright": 1.08,
     }[tone] * _MX_TONE_FINISH_MUL
 
-    # --- shared intensity scalers ---
     intensity_core = {
         "low": 0.88,
         "balanced": 1.00,
@@ -1073,11 +1041,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         "balanced": 1.00,
         "high": 1.08,
     }[intensity] * _MX_INTENSITY_DYNAMIC
-
-    # ---------------------------
-    # Section 1-3: serial tonal core
-    # cleanup -> body -> center
-    # ---------------------------
 
     clean_f1 = _clamp(_MX_CLEAN_F1, 220.0, 340.0)
     clean_g1 = _clamp(_MX_CLEAN_G1 * intensity_core, -2.5, -0.2)
@@ -1127,10 +1090,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f"equalizer=f={proj_f3}:t=q:w={proj_w3}:g={proj_g3}",
     ]
 
-    # ---------------------------
-    # Section 4: Stage-1 V4 serial corrective/build path
-    # ---------------------------
-
     pres_intensity_mode = {
         "low": 0.90,
         "balanced": 1.00,
@@ -1158,7 +1117,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         * pres_tone_mode
     )
 
-    # --- Presence Peak Stabilizer ---
     pres_peak_f = _clamp(_PRES_PEAK_F, 3000.0, 4400.0)
     pres_peak_g = _clamp(
         _PRES_PEAK_G * _clamp(_PRES_PEAK_AMOUNT, 0.70, 1.25) * pres_corr_shared,
@@ -1167,7 +1125,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     pres_peak_w = _clamp(_PRES_PEAK_W, 0.60, 1.40)
 
-    # --- Harsh Stabilizer ---
     pres_harsh_f = _clamp(_PRES_HARSH_F, 3400.0, 5200.0)
     pres_harsh_g = _clamp(
         _PRES_HARSH_G * _clamp(_PRES_HARSH_AMOUNT, 0.70, 1.25) * pres_corr_shared,
@@ -1176,7 +1133,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     pres_harsh_w = _clamp(_PRES_HARSH_W, 0.80, 1.90)
 
-    # --- Sibilant / Edge Restraint ---
     pres_sib_f = _clamp(_PRES_SIB_F, 5200.0, 7800.0)
     pres_sib_g = _clamp(
         _PRES_SIB_G * _clamp(_PRES_SIB_AMOUNT, 0.70, 1.20) * pres_corr_shared,
@@ -1185,7 +1141,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     pres_sib_w = _clamp(_PRES_SIB_W, 0.90, 2.20)
 
-    # --- Focused Presence Anchor ---
     pres_focus_f = _clamp(
         _PRES_FOCUS_F + (_clamp(_PRES_FOCUS_TILT, -0.30, 0.20) * 180.0),
         2800.0,
@@ -1198,7 +1153,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     pres_focus_w = _clamp(_PRES_FOCUS_W, 0.70, 1.40)
 
-    # --- Presence Centering ---
     pres_center_f = _clamp(_PRES_CENTER_F, 3800.0, 4800.0)
     pres_center_g = _clamp(
         _PRES_CENTER_G * _clamp(_PRES_BUILD_MUL, 0.85, 1.20) * _clamp(_PRES_TONE_MUL, 0.90, 1.10),
@@ -1206,11 +1160,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         0.50,
     )
     pres_center_w = _clamp(_PRES_CENTER_W, 0.80, 1.80)
-
-    # ---------------------------
-    # Section 5: presentation-layer
-    # front push -> sheen -> air -> width -> top guard
-    # ---------------------------
 
     pres_presentation_intensity = {
         "low": 0.92,
@@ -1224,7 +1173,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         "bright": 1.06,
     }[tone]
 
-    # --- Front Push ---
     fp_shared = (
         _clamp(_FP_MUL, 0.85, 1.15)
         * _clamp(_FP_INTENSITY_MUL, 0.90, 1.15)
@@ -1246,7 +1194,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     fp_w = _clamp(_FP_W, 0.70, 1.60)
 
-    # --- Contour donor ---
     ct_hp = _clamp(_CT_HP, 1800.0, 3200.0)
     ct_lp = _clamp(_CT_LP, 4500.0, 7200.0)
     if ct_lp <= ct_hp + 1200.0:
@@ -1262,7 +1209,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
     ct_mix = _clamp(_CT_MIX, 0.02, 0.18)
 
-    # --- Sheen ---
     sh_tone_mode = {
         "warm": 0.94,
         "balanced": 1.00,
@@ -1290,7 +1236,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     sh_post_w = _clamp(_SH_POST_W, 0.80, 2.00)
     sh_texture_gain = _clamp(_SH_TEXTURE_GAIN * sh_tone_mode, 0.05, 1.20)
 
-    # --- Air ---
     air_tone_mode = {
         "warm": 0.94,
         "balanced": 1.00,
@@ -1314,7 +1259,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     air_tilt = _clamp(_AIR_TILT, 0.00, 0.60)
 
-    # --- Width ---
     wid_shared = (
         _clamp(_WID_MUL, 0.85, 1.15)
         * _clamp(_WID_INTENSITY_MUL, 0.90, 1.12)
@@ -1329,7 +1273,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     wid_post_g = _clamp(_WID_POST_G, -0.50, 0.30)
     wid_post_w = _clamp(_WID_POST_W, 0.80, 2.20)
 
-    # --- Top Guard ---
     tg_shared = (
         _clamp(_TG_MUL, 0.85, 1.15)
         * _clamp(_TG_INTENSITY_MUL, 0.90, 1.15)
@@ -1365,10 +1308,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         2.40,
     )
 
-    # ---------------------------
-    # Section 6: punch keeper + output trim
-    # ---------------------------
-
     punch_on = _MX_PUNCH_ON
     punch_thr = _clamp(_MX_PUNCH_THRESHOLD_DB / intensity_dynamic, -36.0, -12.0)
     punch_ratio = _clamp(_MX_PUNCH_RATIO * intensity_dynamic, 1.0, 1.5)
@@ -1379,18 +1318,15 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
     trim_db = _clamp(_MX_TRIM_DB, -6.0, 2.0)
 
-    # build filter graph
     parts = []
-    parts.append(f"[0:a]{",".join(serial_parts)}[mx_core]")
+    parts.append(f"[0:a]{','.join(serial_parts)}[mx_core]")
 
-    # A. Front Push moved earlier into face formation
     parts.append(
         f"[mx_core]"
         f"equalizer=f={fp_f}:t=q:w={fp_w}:g={fp_g}"
         f"[mx_front_push]"
     )
 
-    # B. Stage-1 V4 serial corrective/build path after front contour
     parts.append(
         f"[mx_front_push]"
         f"equalizer=f={pres_peak_f}:t=q:w={pres_peak_w}:g={pres_peak_g},"
@@ -1401,10 +1337,8 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f"[mx_presence_focus]"
     )
 
-    # C. Split for contour donor
     parts.append("[mx_presence_focus]asplit=2[mx_main_ct][mx_contour_in]")
 
-    # C1. Contour donor branch
     parts.append(
         f"[mx_contour_in]"
         f"highpass=f={ct_hp}:width=0.707,"
@@ -1415,13 +1349,9 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f"[mx_contour_wet]"
     )
 
-    # C2. Contour sum back into main path
     parts.append("[mx_main_ct][mx_contour_wet]amix=inputs=2:normalize=0[mx_after_contour]")
-
-    # C3. Split A for sheen
     parts.append("[mx_after_contour]asplit=2[mx_main_a][mx_sheen_in]")
 
-    # B3. Sheen branch
     parts.append(
         f"[mx_sheen_in]"
         f"highpass=f={sh_hp}:width=0.707,"
@@ -1433,10 +1363,8 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f"[mx_sheen_wet]"
     )
 
-    # B4. Sheen sum
     parts.append("[mx_main_a][mx_sheen_wet]amix=inputs=2:normalize=0[mx_after_sheen]")
 
-    # B5. Air lift
     if air_tilt > 1e-9:
         parts.append(
             f"[mx_after_sheen]"
@@ -1451,10 +1379,8 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
             f"[mx_after_air]"
         )
 
-    # B6. Split B for width
     parts.append("[mx_after_air]asplit=2[mx_main_b][mx_width_in]")
 
-    # B7. Width branch
     parts.append(
         f"[mx_width_in]"
         f"highpass=f={wid_hp}:width=0.707,"
@@ -1464,10 +1390,8 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f"[mx_width_wet]"
     )
 
-    # B8. Width sum
     parts.append("[mx_main_b][mx_width_wet]amix=inputs=2:normalize=0[mx_after_width]")
 
-    # B9. Final top guard
     parts.append(
         f"[mx_after_width]"
         f"equalizer=f={tg_lo_f}:t=q:w={tg_lo_w}:g={tg_lo_g},"
@@ -1475,7 +1399,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
         f"[mx_after_top]"
     )
 
-    # E. Punch keeper
     if punch_on:
         parts.append(
             f"[mx_after_top]"
@@ -1491,7 +1414,6 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     else:
         parts.append("[mx_after_top]anull[mx_after_punch]")
 
-    # F. Output trim
     if abs(trim_db) > 1e-9:
         parts.append(f"[mx_after_punch]volume={trim_db}dB[out]")
     else:
@@ -1510,6 +1432,7 @@ def _render_polish_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     _run(cmd)
     return out_path, out_name
+
 
 def _render_bandlab_like(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     return _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
@@ -1640,60 +1563,41 @@ def _render_polish_plus_reveal(polish_src: str, reveal_src: str, out_path: str):
     _run(cmd)
 
 
-def _render_bakuage_plus_reveal(low_src: str, reveal_src: str, out_path: str):
-    reveal_gain_db = _clamp(_ART_REVEAL_GAIN_DB, -36.0, 6.0)
+def _render_polish_plus_bakuage(polish_src: str, low_src: str, out_path: str):
+    low_gain_db = _clamp(_BLEND_LOW_GAIN_DB, -36.0, 6.0)
 
     fc = (
-        f"[0:a]volume=1[low];"
-        f"[1:a]volume={reveal_gain_db}dB[reveal];"
-        f"[low][reveal]amix=inputs=2:normalize=0[out]"
+        f"[0:a]volume=1[polish];"
+        f"[1:a]volume={low_gain_db}dB[low];"
+        f"[polish][low]amix=inputs=2:normalize=0[out]"
     )
 
     cmd = (
         f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(polish_src)} '
         f'-i {shlex.quote(low_src)} '
-        f'-i {shlex.quote(reveal_src)} '
         f'-filter_complex "{fc}" -map "[out]" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
     _run(cmd)
 
 
-def _render_bakuage_plus_polish(low_src: str, polish_src: str, out_path: str):
-    polish_gain_db = _clamp(_ART_POLISH_GAIN_DB, -36.0, 6.0)
-
-    fc = (
-        f"[0:a]volume=1[low];"
-        f"[1:a]volume={polish_gain_db}dB[polish];"
-        f"[low][polish]amix=inputs=2:normalize=0[out]"
-    )
-
-    cmd = (
-        f'ffmpeg -y -hide_banner '
-        f'-i {shlex.quote(low_src)} '
-        f'-i {shlex.quote(polish_src)} '
-        f'-filter_complex "{fc}" -map "[out]" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
-    )
-    _run(cmd)
-
-
-def _render_bakuage_reveal_polish_sum(low_src: str, reveal_src: str, polish_src: str, out_path: str):
+def _render_polish_bakuage_reveal_sum(polish_src: str, low_src: str, reveal_src: str, out_path: str):
+    low_gain_db = _clamp(_BLEND_LOW_GAIN_DB, -36.0, 6.0)
     reveal_gain_db = _clamp(_ART_REVEAL_GAIN_DB, -36.0, 6.0)
-    polish_gain_db = _clamp(_ART_POLISH_GAIN_DB, -36.0, 6.0)
 
     fc = (
-        f"[0:a]volume=1[low];"
-        f"[1:a]volume={reveal_gain_db}dB[reveal];"
-        f"[2:a]volume={polish_gain_db}dB[polish];"
-        f"[low][reveal][polish]amix=inputs=3:normalize=0[out]"
+        f"[0:a]volume=1[polish];"
+        f"[1:a]volume={low_gain_db}dB[low];"
+        f"[2:a]volume={reveal_gain_db}dB[reveal];"
+        f"[polish][low][reveal]amix=inputs=3:normalize=0[out]"
     )
 
     cmd = (
         f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(polish_src)} '
         f'-i {shlex.quote(low_src)} '
         f'-i {shlex.quote(reveal_src)} '
-        f'-i {shlex.quote(polish_src)} '
         f'-filter_complex "{fc}" -map "[out]" '
         f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(out_path)}'
     )
@@ -1837,7 +1741,7 @@ def _render_bakuage_reveal_blend(in_path: str, tone: str, intensity: str, fmt: s
     reveal_wav, _ = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
 
     premix_wav = os.path.join(td, "bakuage_reveal_premix.wav")
-    _render_bakuage_plus_reveal(low_wav, reveal_wav, premix_wav)
+    _render_polish_plus_reveal(low_wav, reveal_wav, premix_wav)
 
     out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
 
@@ -1852,15 +1756,34 @@ def _render_bakuage_polish_blend(in_path: str, tone: str, intensity: str, fmt: s
     intensity = _normalize_intensity(intensity)
     fmt = _normalize_format(fmt)
 
-    low_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
     polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    low_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
 
     premix_wav = os.path.join(td, "bakuage_polish_premix.wav")
-    _render_bakuage_plus_polish(low_wav, polish_wav, premix_wav)
+    _render_polish_plus_bakuage(polish_wav, low_wav, premix_wav)
 
     out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
 
     final_name = f"bakuage_polish_{out_name}"
+    final_path = os.path.join(td, final_name)
+    os.replace(out_path, final_path)
+    return final_path, final_name
+
+
+def _render_polish_bakuage_blend(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+    low_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
+
+    premix_wav = os.path.join(td, "polish_bakuage_premix.wav")
+    _render_polish_plus_bakuage(polish_wav, low_wav, premix_wav)
+
+    out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
+
+    final_name = f"polish_bakuage_{out_name}"
     final_path = os.path.join(td, final_name)
     os.replace(out_path, final_path)
     return final_path, final_name
@@ -1871,12 +1794,12 @@ def _render_bakuage_reveal_polish_blend(in_path: str, tone: str, intensity: str,
     intensity = _normalize_intensity(intensity)
     fmt = _normalize_format(fmt)
 
+    polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
     low_wav, _ = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
     reveal_wav, _ = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
-    polish_wav, _ = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt="wav16", td=td)
 
     premix_wav = os.path.join(td, "bakuage_reveal_polish_premix.wav")
-    _render_bakuage_reveal_polish_sum(low_wav, reveal_wav, polish_wav, premix_wav)
+    _render_polish_bakuage_reveal_sum(polish_wav, low_wav, reveal_wav, premix_wav)
 
     out_path, out_name = _render_post_stage(premix_wav, fmt=fmt, td=td, loudnorm_params=None)
 
@@ -1984,7 +1907,7 @@ def _render_bandlab_diagnostic_bundle(
     _run(cmd)
 
     reveal_wav, reveal_name = _render_reveal_branch(
-        in_path,
+        in_path=in_path,
         tone=tone,
         intensity=intensity,
         fmt="wav16",
@@ -2069,6 +1992,7 @@ def root():
             "/polish_reveal",
             "/bakuage_reveal",
             "/bakuage_polish",
+            "/polish_bakuage",
             "/bakuage_reveal_polish",
             "/bandlab_branch",
             "/bakuage_branch",
@@ -2082,23 +2006,18 @@ def root():
 def health():
     return jsonify({
         "ok": True,
-
         "ENABLE_AFFTDN": os.getenv("ENABLE_AFFTDN"),
-
         "BASE_LOWMID_ON": os.getenv("BASE_LOWMID_ON"),
         "BASE_LOWMID_F": os.getenv("BASE_LOWMID_F"),
         "BASE_LOWMID_W": os.getenv("BASE_LOWMID_W"),
         "BASE_LOWMID_G": os.getenv("BASE_LOWMID_G"),
-
         "GLUE_ON": os.getenv("GLUE_ON"),
         "GLUE_RATIO": os.getenv("GLUE_RATIO"),
         "GLUE_THRESHOLD_DB": os.getenv("GLUE_THRESHOLD_DB"),
         "GLUE_ATTACK_MS": os.getenv("GLUE_ATTACK_MS"),
         "GLUE_RELEASE_MS": os.getenv("GLUE_RELEASE_MS"),
         "GLUE_MIX": os.getenv("GLUE_MIX"),
-
         "TRANSIENT_ON": os.getenv("TRANSIENT_ON"),
-
         "LS_FOUND_ON": os.getenv("LS_FOUND_ON"),
         "LS_FOUND_LO_HZ": os.getenv("LS_FOUND_LO_HZ"),
         "LS_FOUND_HI_HZ": os.getenv("LS_FOUND_HI_HZ"),
@@ -2114,7 +2033,6 @@ def health():
         "LS_GUARD_F": os.getenv("LS_GUARD_F"),
         "LS_GUARD_G": os.getenv("LS_GUARD_G"),
         "LS_MONO_ON": os.getenv("LS_MONO_ON"),
-
         "RV_CORE_ON": os.getenv("RV_CORE_ON"),
         "RV_LO_HZ": os.getenv("RV_LO_HZ"),
         "RV_HI_HZ": os.getenv("RV_HI_HZ"),
@@ -2131,45 +2049,6 @@ def health():
         "RV_WIDTH_HP_HZ": os.getenv("RV_WIDTH_HP_HZ"),
         "RV_WIDTH_M": os.getenv("RV_WIDTH_M"),
         "RV_GUARD_ON": os.getenv("RV_GUARD_ON"),
-
-        "PL_CLEAN_ON": os.getenv("PL_CLEAN_ON"),
-        "PL_CLEAN_F1": os.getenv("PL_CLEAN_F1"),
-        "PL_CLEAN_G1": os.getenv("PL_CLEAN_G1"),
-        "PL_CLEAN_F2": os.getenv("PL_CLEAN_F2"),
-        "PL_CLEAN_G2": os.getenv("PL_CLEAN_G2"),
-        "PL_CLEAN_F3": os.getenv("PL_CLEAN_F3"),
-        "PL_CLEAN_G3": os.getenv("PL_CLEAN_G3"),
-
-        "PL_PROJ_ON": os.getenv("PL_PROJ_ON"),
-        "PL_PROJ_F1": os.getenv("PL_PROJ_F1"),
-        "PL_PROJ_G1": os.getenv("PL_PROJ_G1"),
-        "PL_PROJ_F2": os.getenv("PL_PROJ_F2"),
-        "PL_PROJ_G2": os.getenv("PL_PROJ_G2"),
-        "PL_PROJ_F3": os.getenv("PL_PROJ_F3"),
-        "PL_PROJ_G3": os.getenv("PL_PROJ_G3"),
-
-        "PL_PUNCH_ON": os.getenv("PL_PUNCH_ON"),
-        "PL_PUNCH_MODE": os.getenv("PL_PUNCH_MODE"),
-        "PL_PUNCH_THRESHOLD_DB": os.getenv("PL_PUNCH_THRESHOLD_DB"),
-        "PL_PUNCH_RATIO": os.getenv("PL_PUNCH_RATIO"),
-
-        "PL_EDGE_ON": os.getenv("PL_EDGE_ON"),
-        "PL_EDGE_HP_HZ": os.getenv("PL_EDGE_HP_HZ"),
-        "PL_EDGE_LP_HZ": os.getenv("PL_EDGE_LP_HZ"),
-        "PL_EDGE_DRIVE_DB": os.getenv("PL_EDGE_DRIVE_DB"),
-        "PL_EDGE_MIX": os.getenv("PL_EDGE_MIX"),
-
-        "PL_AIR_ON": os.getenv("PL_AIR_ON"),
-        "PL_AIR_F": os.getenv("PL_AIR_F"),
-        "PL_AIR_G": os.getenv("PL_AIR_G"),
-
-        "PL_WIDTH_ON": os.getenv("PL_WIDTH_ON"),
-        "PL_WIDTH_HP_HZ": os.getenv("PL_WIDTH_HP_HZ"),
-        "PL_WIDTH_M": os.getenv("PL_WIDTH_M"),
-        "PL_WIDTH_MIX": os.getenv("PL_WIDTH_MIX"),
-
-        "PL_TRIM_DB": os.getenv("PL_TRIM_DB"),
-
         "BLEND_BASE_GAIN": os.getenv("BLEND_BASE_GAIN"),
         "BLEND_LOW_GAIN_DB": os.getenv("BLEND_LOW_GAIN_DB"),
         "BLEND_REVEAL_GAIN_DB": os.getenv("BLEND_REVEAL_GAIN_DB"),
@@ -2177,15 +2056,12 @@ def health():
         "PREPOST_CLIP_ON": os.getenv("PREPOST_CLIP_ON"),
         "PREPOST_CLIP_DRIVE_DB": os.getenv("PREPOST_CLIP_DRIVE_DB"),
         "PREPOST_CLIP_POST_GAIN_DB": os.getenv("PREPOST_CLIP_POST_GAIN_DB"),
-
         "BLEND_POST_I": os.getenv("BLEND_POST_I"),
         "BLEND_POST_TP": os.getenv("BLEND_POST_TP"),
         "BLEND_POST_LRA": os.getenv("BLEND_POST_LRA"),
-
         "BANDLAB_PREVIEW_GAIN_DB": os.getenv("BANDLAB_PREVIEW_GAIN_DB"),
         "BAKUAGE_PREVIEW_GAIN_DB": os.getenv("BAKUAGE_PREVIEW_GAIN_DB"),
         "ENHANCE_PREVIEW_GAIN_DB": os.getenv("ENHANCE_PREVIEW_GAIN_DB"),
-
         "ART_BASE_GAIN": os.getenv("ART_BASE_GAIN"),
         "ART_REVEAL_GAIN_DB": os.getenv("ART_REVEAL_GAIN_DB"),
         "ART_POLISH_GAIN_DB": os.getenv("ART_POLISH_GAIN_DB"),
@@ -2347,13 +2223,7 @@ def master_route():
             in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_master(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2374,16 +2244,9 @@ def bandlab_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_reveal_branch(
-                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
-            )
+            out_path, out_name = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2404,16 +2267,9 @@ def bakuage_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_low_support_branch(
-                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
-            )
+            out_path, out_name = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2434,16 +2290,9 @@ def enhance_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_polish_branch(
-                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
-            )
+            out_path, out_name = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2466,12 +2315,7 @@ def bandlab_branch_route():
             in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_reveal_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2494,12 +2338,7 @@ def bakuage_branch_route():
             in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_low_support_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2522,12 +2361,7 @@ def enhance_branch_route():
             in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_polish_branch(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2550,13 +2384,7 @@ def blend_route():
             in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2579,13 +2407,7 @@ def artistic_blend_route():
             in_path, _dbg = _dl_to_named(td, "file", url)
             out_path, out_name = _render_artistic_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2606,17 +2428,9 @@ def polish_reveal_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_polish_reveal_blend(
-                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
-            )
+            out_path, out_name = _render_polish_reveal_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2637,17 +2451,9 @@ def bakuage_reveal_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_bakuage_reveal_blend(
-                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
-            )
+            out_path, out_name = _render_bakuage_reveal_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2668,17 +2474,32 @@ def bakuage_polish_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_bakuage_polish_blend(
-                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
-            )
+            out_path, out_name = _render_bakuage_polish_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+
+@app.get("/polish_bakuage")
+def polish_bakuage_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_polish_bakuage_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            _out_args_str, _out_name2, mime = _out_args(fmt)
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -2699,17 +2520,9 @@ def bakuage_reveal_polish_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_bakuage_reveal_polish_blend(
-                in_path, tone=tone, intensity=intensity, fmt=fmt, td=td
-            )
+            out_path, out_name = _render_bakuage_reveal_polish_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
-
-            return send_file(
-                out_path,
-                mimetype=mime,
-                as_attachment=True,
-                download_name=out_name
-            )
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
