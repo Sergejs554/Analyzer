@@ -507,37 +507,34 @@ def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
 
 # ---------------------------
 # LOW SUPPORT BRANCH
+# staged v1:
+# foundation -> control -> tame -> output
 # donor only, pre-limiter
 # ---------------------------
 
-_LS_FOUND_ON = (os.getenv("LS_FOUND_ON", "1").strip() == "1")
-_LS_FOUND_LO_HZ = float(os.getenv("LS_FOUND_LO_HZ", "32"))
-_LS_FOUND_HI_HZ = float(os.getenv("LS_FOUND_HI_HZ", "120"))
-_LS_FOUND_RATIO = float(os.getenv("LS_FOUND_RATIO", "1.5"))
-_LS_FOUND_THRESHOLD_DB = float(os.getenv("LS_FOUND_THRESHOLD_DB", "-22"))
-_LS_FOUND_ATTACK_MS = float(os.getenv("LS_FOUND_ATTACK_MS", "28"))
-_LS_FOUND_RELEASE_MS = float(os.getenv("LS_FOUND_RELEASE_MS", "180"))
-_LS_FOUND_MIX = float(os.getenv("LS_FOUND_MIX", "0.18"))
+_LS_FOUNDATION_FLOOR_HZ = float(os.getenv("LS_FOUNDATION_FLOOR_HZ", "30"))
+_LS_FOUNDATION_ANCHOR_HZ = float(os.getenv("LS_FOUNDATION_ANCHOR_HZ", "86"))
+_LS_FOUNDATION_CEILING_HZ = float(os.getenv("LS_FOUNDATION_CEILING_HZ", "158"))
+_LS_FOUNDATION_GAIN_DB = float(os.getenv("LS_FOUNDATION_GAIN_DB", "1.20"))
+_LS_FOUNDATION_NOTE_F_HZ = float(os.getenv("LS_FOUNDATION_NOTE_F_HZ", "92"))
+_LS_FOUNDATION_NOTE_GAIN_DB = float(os.getenv("LS_FOUNDATION_NOTE_GAIN_DB", "0.45"))
+_LS_FOUNDATION_NOTE_W = float(os.getenv("LS_FOUNDATION_NOTE_W", "0.90"))
 
-_LS_HARM_ON = (os.getenv("LS_HARM_ON", "1").strip() == "1")
-_LS_HARM_HP_HZ = float(os.getenv("LS_HARM_HP_HZ", "48"))
-_LS_HARM_LP_HZ = float(os.getenv("LS_HARM_LP_HZ", "165"))
-_LS_HARM_DRIVE_DB = float(os.getenv("LS_HARM_DRIVE_DB", "6"))
-_LS_HARM_MIX = float(os.getenv("LS_HARM_MIX", "0.08"))
+_LS_CONTROL_THRESHOLD_DB = float(os.getenv("LS_CONTROL_THRESHOLD_DB", "-24"))
+_LS_CONTROL_RATIO = float(os.getenv("LS_CONTROL_RATIO", "1.30"))
+_LS_CONTROL_ATTACK_MS = float(os.getenv("LS_CONTROL_ATTACK_MS", "28"))
+_LS_CONTROL_RELEASE_MS = float(os.getenv("LS_CONTROL_RELEASE_MS", "180"))
+_LS_CONTROL_KNEE_DB = float(os.getenv("LS_CONTROL_KNEE_DB", "2.0"))
+_LS_CONTROL_MAKEUP_DB = float(os.getenv("LS_CONTROL_MAKEUP_DB", "0.0"))
 
-_LS_BODY_ON = (os.getenv("LS_BODY_ON", "1").strip() == "1")
-_LS_BODY_F = float(os.getenv("LS_BODY_F", "220"))
-_LS_BODY_G = float(os.getenv("LS_BODY_G", "0.8"))
-_LS_BODY_W = float(os.getenv("LS_BODY_W", "0.9"))
-_LS_BODY_MIX = float(os.getenv("LS_BODY_MIX", "0.08"))
+_LS_TAME_THRESHOLD_DB = float(os.getenv("LS_TAME_THRESHOLD_DB", "-18"))
+_LS_TAME_RATIO = float(os.getenv("LS_TAME_RATIO", "1.12"))
+_LS_TAME_ATTACK_MS = float(os.getenv("LS_TAME_ATTACK_MS", "14"))
+_LS_TAME_RELEASE_MS = float(os.getenv("LS_TAME_RELEASE_MS", "140"))
+_LS_TAME_KNEE_DB = float(os.getenv("LS_TAME_KNEE_DB", "1.5"))
+_LS_TAME_MAKEUP_DB = float(os.getenv("LS_TAME_MAKEUP_DB", "0.0"))
 
-_LS_GUARD_ON = (os.getenv("LS_GUARD_ON", "1").strip() == "1")
-_LS_GUARD_F = float(os.getenv("LS_GUARD_F", "280"))
-_LS_GUARD_G = float(os.getenv("LS_GUARD_G", "-1.2"))
-_LS_GUARD_W = float(os.getenv("LS_GUARD_W", "1.1"))
-
-_LS_MONO_ON = (os.getenv("LS_MONO_ON", "1").strip() == "1")
-_LS_OUT_TRIM_DB = float(os.getenv("LS_OUT_TRIM_DB", "-1.0"))
+_LS_OUTPUT_TRIM_DB = float(os.getenv("LS_OUTPUT_TRIM_DB", "-1.0"))
 
 
 def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -545,91 +542,94 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
     intensity = _normalize_intensity(intensity)
     fmt = _normalize_format(fmt)
 
-    intensity_scale = {
-        "low": 0.88,
+    foundation_gain_mul = {
+        "low": 0.90,
         "balanced": 1.00,
-        "high": 1.12,
+        "high": 1.10,
     }[intensity]
 
-    tone_body_mul = {
-        "warm": 1.10,
+    note_gain_mul = {
+        "low": 0.92,
         "balanced": 1.00,
-        "bright": 0.92,
+        "high": 1.08,
+    }[intensity]
+
+    tone_gain_mul = {
+        "warm": 1.08,
+        "balanced": 1.00,
+        "bright": 0.94,
     }[tone]
 
-    found_lo = _clamp(_LS_FOUND_LO_HZ, 20.0, 70.0)
-    found_hi = _clamp(_LS_FOUND_HI_HZ, 70.0, 220.0)
-    if found_hi <= found_lo + 10:
-        found_hi = found_lo + 10
+    floor_hz = _clamp(_LS_FOUNDATION_FLOOR_HZ, 20.0, 50.0)
+    anchor_hz = _clamp(_LS_FOUNDATION_ANCHOR_HZ, 60.0, 110.0)
+    ceiling_hz = _clamp(_LS_FOUNDATION_CEILING_HZ, 135.0, 175.0)
+    if ceiling_hz <= anchor_hz + 40.0:
+        ceiling_hz = anchor_hz + 40.0
 
-    found_ratio = _clamp(_LS_FOUND_RATIO, 1.0, 4.0)
-    found_thr = _clamp(_LS_FOUND_THRESHOLD_DB, -60.0, 0.0)
-    found_att = _clamp(_LS_FOUND_ATTACK_MS, 1.0, 200.0)
-    found_rel = _clamp(_LS_FOUND_RELEASE_MS, 20.0, 1200.0)
-    found_mix = _clamp(_LS_FOUND_MIX * intensity_scale, 0.0, 0.40)
+    foundation_gain_db = _clamp(_LS_FOUNDATION_GAIN_DB * foundation_gain_mul * tone_gain_mul, 0.0, 2.5)
+    note_f_hz = _clamp(_LS_FOUNDATION_NOTE_F_HZ, 70.0, 120.0)
+    note_gain_db = _clamp(_LS_FOUNDATION_NOTE_GAIN_DB * note_gain_mul, 0.0, 1.2)
+    note_w = _clamp(_LS_FOUNDATION_NOTE_W, 0.45, 1.40)
 
-    harm_hp = _clamp(_LS_HARM_HP_HZ, 35.0, 100.0)
-    harm_lp = _clamp(_LS_HARM_LP_HZ, 90.0, 260.0)
-    if harm_lp <= harm_hp + 10:
-        harm_lp = harm_hp + 10
-    harm_drive = _clamp(_LS_HARM_DRIVE_DB, 0.0, 18.0)
-    harm_mix = _clamp(_LS_HARM_MIX * intensity_scale, 0.0, 0.25)
+    ctrl_thr = _clamp(_LS_CONTROL_THRESHOLD_DB, -36.0, -10.0)
+    ctrl_ratio = _clamp(_LS_CONTROL_RATIO, 1.0, 1.6)
+    ctrl_att = _clamp(_LS_CONTROL_ATTACK_MS, 8.0, 80.0)
+    ctrl_rel = _clamp(_LS_CONTROL_RELEASE_MS, 60.0, 350.0)
+    ctrl_knee = _clamp(_LS_CONTROL_KNEE_DB, 0.0, 6.0)
+    ctrl_makeup = _clamp(_LS_CONTROL_MAKEUP_DB, -1.0, 1.0)
 
-    body_f = _clamp(_LS_BODY_F, 120.0, 380.0)
-    body_g = _clamp(_LS_BODY_G * tone_body_mul, -1.0, 3.0)
-    body_w = _clamp(_LS_BODY_W, 0.2, 3.0)
-    body_mix = _clamp(_LS_BODY_MIX * intensity_scale, 0.0, 0.20)
+    tame_thr = _clamp(_LS_TAME_THRESHOLD_DB, -30.0, -8.0)
+    tame_ratio = _clamp(_LS_TAME_RATIO, 1.0, 1.3)
+    tame_att = _clamp(_LS_TAME_ATTACK_MS, 4.0, 50.0)
+    tame_rel = _clamp(_LS_TAME_RELEASE_MS, 40.0, 260.0)
+    tame_knee = _clamp(_LS_TAME_KNEE_DB, 0.0, 4.0)
+    tame_makeup = _clamp(_LS_TAME_MAKEUP_DB, -1.0, 1.0)
 
-    guard_f = _clamp(_LS_GUARD_F, 180.0, 450.0)
-    guard_g = _clamp(_LS_GUARD_G, -6.0, 0.0)
-    guard_w = _clamp(_LS_GUARD_W, 0.2, 3.0)
+    output_trim_db = _clamp(_LS_OUTPUT_TRIM_DB, -6.0, 2.0)
 
-    out_trim_db = _clamp(_LS_OUT_TRIM_DB, -18.0, 6.0)
+    parts = []
 
-    parts = ["[0:a]asplit=3[fnd][harm][body]"]
+    # foundation stage
+    parts.append(
+        f"[0:a]"
+        f"highpass=f={floor_hz}:width=0.707,"
+        f"lowpass=f={ceiling_hz}:width=0.707,"
+        f"bass=g={foundation_gain_db}:f={anchor_hz}:w=0.70,"
+        f"equalizer=f={note_f_hz}:t=q:w={note_w}:g={note_gain_db}"
+        f"[ls_found]"
+    )
 
-    if _LS_FOUND_ON and found_mix > 0.0:
-        parts.append(
-            f"[fnd]"
-            f"highpass=f={found_lo}:width=0.707,"
-            f"lowpass=f={found_hi}:width=0.707,"
-            f"acompressor=threshold={found_thr}dB:ratio={found_ratio}:attack={found_att}:release={found_rel}:knee=2dB:makeup=0dB:mix=1,"
-            f"volume={found_mix}[f1]"
-        )
+    # control stage
+    parts.append(
+        f"[ls_found]"
+        f"acompressor=threshold={ctrl_thr}dB:"
+        f"ratio={ctrl_ratio}:"
+        f"attack={ctrl_att}:"
+        f"release={ctrl_rel}:"
+        f"knee={ctrl_knee}dB:"
+        f"makeup={ctrl_makeup}dB:"
+        f"mix=1"
+        f"[ls_ctrl]"
+    )
+
+    # tame stage
+    parts.append(
+        f"[ls_ctrl]"
+        f"acompressor=threshold={tame_thr}dB:"
+        f"ratio={tame_ratio}:"
+        f"attack={tame_att}:"
+        f"release={tame_rel}:"
+        f"knee={tame_knee}dB:"
+        f"makeup={tame_makeup}dB:"
+        f"mix=1"
+        f"[ls_tame]"
+    )
+
+    # final output stage
+    if abs(output_trim_db) > 1e-9:
+        parts.append(f"[ls_tame]volume={output_trim_db}dB[out]")
     else:
-        parts.append("[fnd]volume=0[f1]")
-
-    if _LS_HARM_ON and harm_mix > 0.0:
-        parts.append(
-            f"[harm]"
-            f"{_os_softclip_chain(drive_db=harm_drive, hp=harm_hp, lp=harm_lp)},"
-            f"lowpass=f={max(harm_lp, 120.0)}:width=0.707,"
-            f"volume={harm_mix}[h1]"
-        )
-    else:
-        parts.append("[harm]volume=0[h1]")
-
-    body_chain = [
-        f"highpass=f={max(found_hi - 20.0, 80.0)}:width=0.707",
-        f"lowpass=f={max(body_f + 130.0, 240.0)}:width=0.707",
-        f"equalizer=f={body_f}:t=q:w={body_w}:g={body_g}",
-    ]
-    if _LS_GUARD_ON:
-        body_chain.append(f"equalizer=f={guard_f}:t=q:w={guard_w}:g={guard_g}")
-    body_chain.append(f"volume={body_mix}")
-    if _LS_MONO_ON:
-        body_chain.append("pan=stereo|c0=.5*c0+.5*c1|c1=.5*c0+.5*c1")
-
-    if _LS_BODY_ON and body_mix > 0.0:
-        parts.append(f"[body]{','.join(body_chain)}[b1]")
-    else:
-        parts.append("[body]volume=0[b1]")
-
-    parts.append("[f1][h1][b1]amix=inputs=3:normalize=0[m0]")
-    if abs(out_trim_db) > 1e-9:
-        parts.append(f"[m0]volume={out_trim_db}dB[out]")
-    else:
-        parts.append("[m0]anull[out]")
+        parts.append("[ls_tame]anull[out]")
 
     fc = ";".join(parts)
 
@@ -2018,21 +2018,28 @@ def health():
         "GLUE_RELEASE_MS": os.getenv("GLUE_RELEASE_MS"),
         "GLUE_MIX": os.getenv("GLUE_MIX"),
         "TRANSIENT_ON": os.getenv("TRANSIENT_ON"),
-        "LS_FOUND_ON": os.getenv("LS_FOUND_ON"),
-        "LS_FOUND_LO_HZ": os.getenv("LS_FOUND_LO_HZ"),
-        "LS_FOUND_HI_HZ": os.getenv("LS_FOUND_HI_HZ"),
-        "LS_FOUND_MIX": os.getenv("LS_FOUND_MIX"),
-        "LS_HARM_ON": os.getenv("LS_HARM_ON"),
-        "LS_HARM_DRIVE_DB": os.getenv("LS_HARM_DRIVE_DB"),
-        "LS_HARM_MIX": os.getenv("LS_HARM_MIX"),
-        "LS_BODY_ON": os.getenv("LS_BODY_ON"),
-        "LS_BODY_F": os.getenv("LS_BODY_F"),
-        "LS_BODY_G": os.getenv("LS_BODY_G"),
-        "LS_BODY_MIX": os.getenv("LS_BODY_MIX"),
-        "LS_GUARD_ON": os.getenv("LS_GUARD_ON"),
-        "LS_GUARD_F": os.getenv("LS_GUARD_F"),
-        "LS_GUARD_G": os.getenv("LS_GUARD_G"),
-        "LS_MONO_ON": os.getenv("LS_MONO_ON"),
+
+        "LS_FOUNDATION_FLOOR_HZ": os.getenv("LS_FOUNDATION_FLOOR_HZ"),
+        "LS_FOUNDATION_ANCHOR_HZ": os.getenv("LS_FOUNDATION_ANCHOR_HZ"),
+        "LS_FOUNDATION_CEILING_HZ": os.getenv("LS_FOUNDATION_CEILING_HZ"),
+        "LS_FOUNDATION_GAIN_DB": os.getenv("LS_FOUNDATION_GAIN_DB"),
+        "LS_FOUNDATION_NOTE_F_HZ": os.getenv("LS_FOUNDATION_NOTE_F_HZ"),
+        "LS_FOUNDATION_NOTE_GAIN_DB": os.getenv("LS_FOUNDATION_NOTE_GAIN_DB"),
+        "LS_FOUNDATION_NOTE_W": os.getenv("LS_FOUNDATION_NOTE_W"),
+        "LS_CONTROL_THRESHOLD_DB": os.getenv("LS_CONTROL_THRESHOLD_DB"),
+        "LS_CONTROL_RATIO": os.getenv("LS_CONTROL_RATIO"),
+        "LS_CONTROL_ATTACK_MS": os.getenv("LS_CONTROL_ATTACK_MS"),
+        "LS_CONTROL_RELEASE_MS": os.getenv("LS_CONTROL_RELEASE_MS"),
+        "LS_CONTROL_KNEE_DB": os.getenv("LS_CONTROL_KNEE_DB"),
+        "LS_CONTROL_MAKEUP_DB": os.getenv("LS_CONTROL_MAKEUP_DB"),
+        "LS_TAME_THRESHOLD_DB": os.getenv("LS_TAME_THRESHOLD_DB"),
+        "LS_TAME_RATIO": os.getenv("LS_TAME_RATIO"),
+        "LS_TAME_ATTACK_MS": os.getenv("LS_TAME_ATTACK_MS"),
+        "LS_TAME_RELEASE_MS": os.getenv("LS_TAME_RELEASE_MS"),
+        "LS_TAME_KNEE_DB": os.getenv("LS_TAME_KNEE_DB"),
+        "LS_TAME_MAKEUP_DB": os.getenv("LS_TAME_MAKEUP_DB"),
+        "LS_OUTPUT_TRIM_DB": os.getenv("LS_OUTPUT_TRIM_DB"),
+
         "RV_CORE_ON": os.getenv("RV_CORE_ON"),
         "RV_LO_HZ": os.getenv("RV_LO_HZ"),
         "RV_HI_HZ": os.getenv("RV_HI_HZ"),
@@ -2049,6 +2056,7 @@ def health():
         "RV_WIDTH_HP_HZ": os.getenv("RV_WIDTH_HP_HZ"),
         "RV_WIDTH_M": os.getenv("RV_WIDTH_M"),
         "RV_GUARD_ON": os.getenv("RV_GUARD_ON"),
+
         "BLEND_BASE_GAIN": os.getenv("BLEND_BASE_GAIN"),
         "BLEND_LOW_GAIN_DB": os.getenv("BLEND_LOW_GAIN_DB"),
         "BLEND_REVEAL_GAIN_DB": os.getenv("BLEND_REVEAL_GAIN_DB"),
