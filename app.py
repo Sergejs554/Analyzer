@@ -1604,6 +1604,50 @@ def _render_polish_bakuage_reveal_sum(polish_src: str, low_src: str, reveal_src:
     _run(cmd)
 
 
+def _build_polish_reveal_subgroup(polish_path: str, reveal_path: str, td: str) -> str:
+    subgroup_path = os.path.join(td, "presentation_subgroup.wav")
+
+    reveal_gain_db = _clamp(_ART_REVEAL_GAIN_DB, -36.0, 6.0)
+
+    fc = (
+        f"[0:a]volume=1[polish];"
+        f"[1:a]volume={reveal_gain_db}dB[reveal];"
+        f"[polish][reveal]amix=inputs=2:normalize=0[out]"
+    )
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(polish_path)} '
+        f'-i {shlex.quote(reveal_path)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(subgroup_path)}'
+    )
+    _run(cmd)
+    return subgroup_path
+
+
+def _add_low_support_structural(subgroup_path: str, low_support_path: str, td: str) -> str:
+    prepost_path = os.path.join(td, "full_product_prepost.wav")
+
+    low_gain_db = _clamp(_BLEND_LOW_GAIN_DB, -36.0, 6.0)
+
+    fc = (
+        f"[0:a]volume=1[subgroup];"
+        f"[1:a]volume={low_gain_db}dB[low];"
+        f"[subgroup][low]amix=inputs=2:normalize=0[out]"
+    )
+
+    cmd = (
+        f'ffmpeg -y -hide_banner '
+        f'-i {shlex.quote(subgroup_path)} '
+        f'-i {shlex.quote(low_support_path)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(prepost_path)}'
+    )
+    _run(cmd)
+    return prepost_path
+
+
 def _render_post_stage(in_path: str, fmt: str, td: str, loudnorm_params: dict | None = None) -> tuple[str, str]:
     fmt = _normalize_format(fmt)
     out_args, out_name, _mime = _out_args(fmt)
@@ -1618,6 +1662,60 @@ def _render_post_stage(in_path: str, fmt: str, td: str, loudnorm_params: dict | 
 
     _build_loudnorm_two_pass(in_path, loudnorm_params, out_args, out_path)
     return out_path, out_name
+
+
+def _render_full_product_staged(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    polish_wav, _ = _render_polish_branch(
+        in_path=in_path,
+        tone=tone,
+        intensity=intensity,
+        fmt="wav16",
+        td=td,
+    )
+
+    reveal_wav, _ = _render_reveal_branch(
+        in_path=in_path,
+        tone=tone,
+        intensity=intensity,
+        fmt="wav16",
+        td=td,
+    )
+
+    presentation_subgroup_wav = _build_polish_reveal_subgroup(
+        polish_path=polish_wav,
+        reveal_path=reveal_wav,
+        td=td,
+    )
+
+    low_support_wav, _ = _render_low_support_branch(
+        in_path=in_path,
+        tone=tone,
+        intensity=intensity,
+        fmt="wav16",
+        td=td,
+    )
+
+    full_product_prepost_wav = _add_low_support_structural(
+        subgroup_path=presentation_subgroup_wav,
+        low_support_path=low_support_wav,
+        td=td,
+    )
+
+    out_path, out_name = _render_post_stage(
+        in_path=full_product_prepost_wav,
+        fmt=fmt,
+        td=td,
+        loudnorm_params=None,
+    )
+
+    staged_name = f"blend_{out_name}"
+    staged_path = os.path.join(td, staged_name)
+    os.replace(out_path, staged_path)
+    return staged_path, staged_name
 
 
 def _render_single_branch_preview(
@@ -2390,7 +2488,7 @@ def blend_route():
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_blend(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+            out_path, out_name = _render_full_product_staged(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
             _out_args_str, _out_name2, mime = _out_args(fmt)
             return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
     except Exception as e:
