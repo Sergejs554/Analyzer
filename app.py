@@ -694,7 +694,7 @@ _RV_OUT_TRIM_DB = float(os.getenv("RV_OUT_TRIM_DB", "-1.5"))
 
 _RV_CONTOUR_ON = (os.getenv("RV_CONTOUR_ON", "1").strip() == "1")
 _RV_CONTOUR_HP_HZ = float(os.getenv("RV_CONTOUR_HP_HZ", "140"))
-_RV_CONTOUR_LP_HZ = float(os.getenv("RV_CONTOUR_LP_HZ", "260"))
+_RV_CONTOUR_LP_HZ = float(os.getenv("RV_CONTOUR_LP_HZ", "275"))
 _RV_CONTOUR_F = float(os.getenv("RV_CONTOUR_F", "190"))
 _RV_CONTOUR_G = float(os.getenv("RV_CONTOUR_G", "0.85"))
 _RV_CONTOUR_W = float(os.getenv("RV_CONTOUR_W", "0.90"))
