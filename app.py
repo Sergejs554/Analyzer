@@ -515,7 +515,7 @@ def _render_base_no_loudnorm(in_path: str, chain_no_ln: str, out_path: str):
 _LS_FOUNDATION_FLOOR_HZ = float(os.getenv("LS_FOUNDATION_FLOOR_HZ", "30"))
 _LS_FOUNDATION_ANCHOR_HZ = float(os.getenv("LS_FOUNDATION_ANCHOR_HZ", "89"))
 _LS_FOUNDATION_CEILING_HZ = float(os.getenv("LS_FOUNDATION_CEILING_HZ", "165"))
-_LS_FOUNDATION_GAIN_DB = float(os.getenv("LS_FOUNDATION_GAIN_DB", "1.52"))
+_LS_FOUNDATION_GAIN_DB = float(os.getenv("LS_FOUNDATION_GAIN_DB", "1.47"))
 _LS_FOUNDATION_NOTE_F_HZ = float(os.getenv("LS_FOUNDATION_NOTE_F_HZ", "92"))
 _LS_FOUNDATION_NOTE_GAIN_DB = float(os.getenv("LS_FOUNDATION_NOTE_GAIN_DB", "0.45"))
 _LS_FOUNDATION_NOTE_W = float(os.getenv("LS_FOUNDATION_NOTE_W", "0.90"))
