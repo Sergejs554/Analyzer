@@ -692,6 +692,14 @@ _RV_SIB_W = float(os.getenv("RV_SIB_W", "1.5"))
 
 _RV_OUT_TRIM_DB = float(os.getenv("RV_OUT_TRIM_DB", "-1.5"))
 
+_RV_CONTOUR_ON = (os.getenv("RV_CONTOUR_ON", "1").strip() == "1")
+_RV_CONTOUR_HP_HZ = float(os.getenv("RV_CONTOUR_HP_HZ", "140"))
+_RV_CONTOUR_LP_HZ = float(os.getenv("RV_CONTOUR_LP_HZ", "260"))
+_RV_CONTOUR_F = float(os.getenv("RV_CONTOUR_F", "190"))
+_RV_CONTOUR_G = float(os.getenv("RV_CONTOUR_G", "0.85"))
+_RV_CONTOUR_W = float(os.getenv("RV_CONTOUR_W", "0.90"))
+_RV_CONTOUR_TRIM = float(os.getenv("RV_CONTOUR_TRIM", "0.032"))
+
 
 def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
@@ -762,7 +770,17 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
 
     out_trim_db = _clamp(_RV_OUT_TRIM_DB, -18.0, 6.0)
 
-    parts = ["[0:a]asplit=4[core][exc][air][wid]"]
+    contour_hp = _clamp(_RV_CONTOUR_HP_HZ, 80.0, 220.0)
+    contour_lp = _clamp(_RV_CONTOUR_LP_HZ, 180.0, 420.0)
+    if contour_lp <= contour_hp + 40.0:
+        contour_lp = contour_hp + 40.0
+
+    contour_f = _clamp(_RV_CONTOUR_F, 150.0, 220.0)
+    contour_g = _clamp(_RV_CONTOUR_G, -1.0, 2.0)
+    contour_w = _clamp(_RV_CONTOUR_W, 0.4, 1.6)
+    contour_trim = _clamp(_RV_CONTOUR_TRIM * intensity_scale, 0.0, 0.08)
+
+    parts = ["[0:a]asplit=5[core][exc][air][wid][cnt]"]
 
     core_chain = [
         f"highpass=f={lo_hz}:width=0.707",
@@ -819,7 +837,18 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     else:
         parts.append("[wid]volume=0[w1]")
 
-    parts.append("[c1][e1][a1][w1]amix=inputs=4:normalize=0[m0]")
+    if _RV_CONTOUR_ON and contour_trim > 0.0:
+        parts.append(
+            f"[cnt]"
+            f"highpass=f={contour_hp}:width=0.707,"
+            f"lowpass=f={contour_lp}:width=0.707,"
+            f"equalizer=f={contour_f}:t=q:w={contour_w}:g={contour_g},"
+            f"volume={contour_trim}[ct1]"
+        )
+    else:
+        parts.append("[cnt]volume=0[ct1]")
+
+    parts.append("[c1][e1][a1][w1][ct1]amix=inputs=5:normalize=0[m0]")
     if abs(out_trim_db) > 1e-9:
         parts.append(f"[m0]volume={out_trim_db}dB[out]")
     else:
@@ -838,8 +867,6 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     _run(cmd)
     return out_path, out_name
-
-
 # ---------------------------
 # POLISH / ENHANCE BRANCH
 # branch-only donor
