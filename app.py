@@ -708,6 +708,14 @@ _RV_LOWER_CONTOUR_SHAPE_G = float(os.getenv("RV_LOWER_CONTOUR_SHAPE_G", "0.45"))
 _RV_LOWER_CONTOUR_SHAPE_W = float(os.getenv("RV_LOWER_CONTOUR_SHAPE_W", "1.10"))
 _RV_LOWER_CONTOUR_TRIM = float(os.getenv("RV_LOWER_CONTOUR_TRIM", "0.040"))
 
+_RV_UPPER_BODY_ON = (os.getenv("RV_UPPER_BODY_ON", "1").strip() == "1")
+_RV_UPPER_BODY_HP_HZ = float(os.getenv("RV_UPPER_BODY_HP_HZ", "240"))
+_RV_UPPER_BODY_LP_HZ = float(os.getenv("RV_UPPER_BODY_LP_HZ", "380"))
+_RV_UPPER_BODY_F = float(os.getenv("RV_UPPER_BODY_F", "310"))
+_RV_UPPER_BODY_SHAPE_G = float(os.getenv("RV_UPPER_BODY_SHAPE_G", "0.30"))
+_RV_UPPER_BODY_SHAPE_W = float(os.getenv("RV_UPPER_BODY_SHAPE_W", "1.20"))
+_RV_UPPER_BODY_TRIM = float(os.getenv("RV_UPPER_BODY_TRIM", "0.022"))
+
 
 def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
@@ -798,7 +806,17 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     lower_contour_shape_w = _clamp(_RV_LOWER_CONTOUR_SHAPE_W, 0.35, 2.0)
     lower_contour_trim = _clamp(_RV_LOWER_CONTOUR_TRIM * intensity_scale, 0.0, 0.10)
 
-    parts = ["[0:a]asplit=6[core][exc][air][wid][cnt][lct]"]
+    upper_body_hp = _clamp(_RV_UPPER_BODY_HP_HZ, 180.0, 320.0)
+    upper_body_lp = _clamp(_RV_UPPER_BODY_LP_HZ, 320.0, 520.0)
+    if upper_body_lp <= upper_body_hp + 40.0:
+        upper_body_lp = upper_body_hp + 40.0
+
+    upper_body_f = _clamp(_RV_UPPER_BODY_F, 260.0, 360.0)
+    upper_body_shape_g = _clamp(_RV_UPPER_BODY_SHAPE_G, 0.0, 1.0)
+    upper_body_shape_w = _clamp(_RV_UPPER_BODY_SHAPE_W, 0.50, 2.20)
+    upper_body_trim = _clamp(_RV_UPPER_BODY_TRIM * intensity_scale, 0.0, 0.06)
+
+    parts = ["[0:a]asplit=7[core][exc][air][wid][cnt][lct][ubd]"]
 
     core_chain = [
         f"highpass=f={lo_hz}:width=0.707",
@@ -877,7 +895,18 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     else:
         parts.append("[lct]volume=0[lc1]")
 
-    parts.append("[c1][e1][a1][w1][ct1][lc1]amix=inputs=6:normalize=0[m0]")
+    if _RV_UPPER_BODY_ON and upper_body_trim > 0.0:
+        parts.append(
+            f"[ubd]"
+            f"highpass=f={upper_body_hp}:width=0.707,"
+            f"lowpass=f={upper_body_lp}:width=0.707,"
+            f"equalizer=f={upper_body_f}:t=q:w={upper_body_shape_w}:g={upper_body_shape_g},"
+            f"volume={upper_body_trim}[ub1]"
+        )
+    else:
+        parts.append("[ubd]volume=0[ub1]")
+
+    parts.append("[c1][e1][a1][w1][ct1][lc1][ub1]amix=inputs=7:normalize=0[m0]")
     if abs(out_trim_db) > 1e-9:
         parts.append(f"[m0]volume={out_trim_db}dB[out]")
     else:
