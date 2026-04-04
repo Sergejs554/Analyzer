@@ -698,7 +698,7 @@ _RV_CONTOUR_LP_HZ = float(os.getenv("RV_CONTOUR_LP_HZ", "260"))
 _RV_CONTOUR_F = float(os.getenv("RV_CONTOUR_F", "190"))
 _RV_CONTOUR_G = float(os.getenv("RV_CONTOUR_G", "0.85"))
 _RV_CONTOUR_W = float(os.getenv("RV_CONTOUR_W", "0.90"))
-_RV_CONTOUR_TRIM = float(os.getenv("RV_CONTOUR_TRIM", "0.032"))
+_RV_CONTOUR_TRIM = float(os.getenv("RV_CONTOUR_TRIM", "0.040"))
 
 
 def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
