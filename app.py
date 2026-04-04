@@ -714,7 +714,7 @@ _RV_UPPER_BODY_LP_HZ = float(os.getenv("RV_UPPER_BODY_LP_HZ", "380"))
 _RV_UPPER_BODY_F = float(os.getenv("RV_UPPER_BODY_F", "310"))
 _RV_UPPER_BODY_SHAPE_G = float(os.getenv("RV_UPPER_BODY_SHAPE_G", "0.30"))
 _RV_UPPER_BODY_SHAPE_W = float(os.getenv("RV_UPPER_BODY_SHAPE_W", "1.20"))
-_RV_UPPER_BODY_TRIM = float(os.getenv("RV_UPPER_BODY_TRIM", "0.028"))
+_RV_UPPER_BODY_TRIM = float(os.getenv("RV_UPPER_BODY_TRIM", "0.032"))
 
 
 def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
