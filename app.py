@@ -695,10 +695,18 @@ _RV_OUT_TRIM_DB = float(os.getenv("RV_OUT_TRIM_DB", "-1.5"))
 _RV_CONTOUR_ON = (os.getenv("RV_CONTOUR_ON", "1").strip() == "1")
 _RV_CONTOUR_HP_HZ = float(os.getenv("RV_CONTOUR_HP_HZ", "140"))
 _RV_CONTOUR_LP_HZ = float(os.getenv("RV_CONTOUR_LP_HZ", "275"))
-_RV_CONTOUR_F = float(os.getenv("RV_CONTOUR_F", "195"))
+_RV_CONTOUR_F = float(os.getenv("RV_CONTOUR_F", "190"))
 _RV_CONTOUR_G = float(os.getenv("RV_CONTOUR_G", "0.85"))
 _RV_CONTOUR_W = float(os.getenv("RV_CONTOUR_W", "0.90"))
 _RV_CONTOUR_TRIM = float(os.getenv("RV_CONTOUR_TRIM", "0.050"))
+
+_RV_LOWER_CONTOUR_ON = (os.getenv("RV_LOWER_CONTOUR_ON", "1").strip() == "1")
+_RV_LOWER_CONTOUR_HP_HZ = float(os.getenv("RV_LOWER_CONTOUR_HP_HZ", "150"))
+_RV_LOWER_CONTOUR_LP_HZ = float(os.getenv("RV_LOWER_CONTOUR_LP_HZ", "260"))
+_RV_LOWER_CONTOUR_F = float(os.getenv("RV_LOWER_CONTOUR_F", "195"))
+_RV_LOWER_CONTOUR_SHAPE_G = float(os.getenv("RV_LOWER_CONTOUR_SHAPE_G", "0.45"))
+_RV_LOWER_CONTOUR_SHAPE_W = float(os.getenv("RV_LOWER_CONTOUR_SHAPE_W", "1.10"))
+_RV_LOWER_CONTOUR_TRIM = float(os.getenv("RV_LOWER_CONTOUR_TRIM", "0.040"))
 
 
 def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -780,7 +788,17 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     contour_w = _clamp(_RV_CONTOUR_W, 0.4, 1.6)
     contour_trim = _clamp(_RV_CONTOUR_TRIM * intensity_scale, 0.0, 0.08)
 
-    parts = ["[0:a]asplit=5[core][exc][air][wid][cnt]"]
+    lower_contour_hp = _clamp(_RV_LOWER_CONTOUR_HP_HZ, 110.0, 220.0)
+    lower_contour_lp = _clamp(_RV_LOWER_CONTOUR_LP_HZ, 220.0, 360.0)
+    if lower_contour_lp <= lower_contour_hp + 40.0:
+        lower_contour_lp = lower_contour_hp + 40.0
+
+    lower_contour_f = _clamp(_RV_LOWER_CONTOUR_F, 170.0, 230.0)
+    lower_contour_shape_g = _clamp(_RV_LOWER_CONTOUR_SHAPE_G, 0.0, 1.2)
+    lower_contour_shape_w = _clamp(_RV_LOWER_CONTOUR_SHAPE_W, 0.35, 2.0)
+    lower_contour_trim = _clamp(_RV_LOWER_CONTOUR_TRIM * intensity_scale, 0.0, 0.10)
+
+    parts = ["[0:a]asplit=6[core][exc][air][wid][cnt][lct]"]
 
     core_chain = [
         f"highpass=f={lo_hz}:width=0.707",
@@ -848,7 +866,18 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     else:
         parts.append("[cnt]volume=0[ct1]")
 
-    parts.append("[c1][e1][a1][w1][ct1]amix=inputs=5:normalize=0[m0]")
+    if _RV_LOWER_CONTOUR_ON and lower_contour_trim > 0.0:
+        parts.append(
+            f"[lct]"
+            f"highpass=f={lower_contour_hp}:width=0.707,"
+            f"lowpass=f={lower_contour_lp}:width=0.707,"
+            f"equalizer=f={lower_contour_f}:t=q:w={lower_contour_shape_w}:g={lower_contour_shape_g},"
+            f"volume={lower_contour_trim}[lc1]"
+        )
+    else:
+        parts.append("[lct]volume=0[lc1]")
+
+    parts.append("[c1][e1][a1][w1][ct1][lc1]amix=inputs=6:normalize=0[m0]")
     if abs(out_trim_db) > 1e-9:
         parts.append(f"[m0]volume={out_trim_db}dB[out]")
     else:
