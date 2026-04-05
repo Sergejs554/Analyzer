@@ -793,7 +793,7 @@ _DIRTY_UPPER_BODY_RETAIN_LP_HZ = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_LP_HZ"
 _DIRTY_UPPER_BODY_RETAIN_F = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_F", "308"))
 _DIRTY_UPPER_BODY_RETAIN_SHAPE_G = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_SHAPE_G", "0.16"))
 _DIRTY_UPPER_BODY_RETAIN_SHAPE_W = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_SHAPE_W", "0.95"))
-_DIRTY_UPPER_BODY_RETAIN_TRIM = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_TRIM", "0.010"))
+_DIRTY_UPPER_BODY_RETAIN_TRIM = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_TRIM", "0.020"))
 
 
 def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
