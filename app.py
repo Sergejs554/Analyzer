@@ -580,6 +580,87 @@ def _render_dirty_upper_body_retain(in_path: str, fmt: str, td: str) -> tuple[st
     return out_path, out_name
 
 
+def _dirty_dense_debug_payload(in_path: str, td: str) -> dict:
+    profile = _analyze_input_profile(in_path, td)
+
+    integrated_lufs = _safe_float(profile.get("integrated_lufs"))
+    true_peak_dbtp = _safe_float(profile.get("true_peak_dbtp"))
+    near_clip_ratio = _safe_float(profile.get("near_clip_ratio"))
+    limiter_stress_proxy = _safe_float(profile.get("limiter_stress_proxy"))
+
+    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300"))
+    low_body_150_300 = _safe_float(profile.get("low_body_150_300"))
+    body_150_400 = _safe_float(profile.get("body_150_400"))
+    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400"))
+    mud_200_500 = _safe_float(profile.get("mud_200_500"))
+
+    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k"))
+    presence_2k_5k = _safe_float(profile.get("presence_2k_5k"))
+    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k"))
+    harshness_index = _safe_float(profile.get("harshness_index"))
+
+    hot_dense_gate_reasons = {
+        "integrated_lufs_ge_-8.8": bool(integrated_lufs is not None and integrated_lufs >= -8.8),
+        "true_peak_dbtp_ge_0.8": bool(true_peak_dbtp is not None and true_peak_dbtp >= 0.8),
+        "near_clip_ratio_ge_5e-4": bool(near_clip_ratio is not None and near_clip_ratio >= 5e-4),
+        "limiter_stress_proxy_ge_1.00": bool(limiter_stress_proxy is not None and limiter_stress_proxy >= 1.00),
+    }
+
+    body_mud_reasons = {
+        "lowmid_120_300_ge_36.0": bool(lowmid_120_300 is not None and lowmid_120_300 >= 36.0),
+        "low_body_150_300_ge_35.5": bool(low_body_150_300 is not None and low_body_150_300 >= 35.5),
+        "body_150_400_ge_35.5": bool(body_150_400 is not None and body_150_400 >= 35.5),
+        "lowmid_buildup_200_400_ge_35.5": bool(lowmid_buildup_200_400 is not None and lowmid_buildup_200_400 >= 35.5),
+        "mud_200_500_ge_35.0": bool(mud_200_500 is not None and mud_200_500 >= 35.0),
+    }
+
+    hot_edge_reasons = {
+        "harsh_2p5k_6k_ge_17.0": bool(harsh_2p5k_6k is not None and harsh_2p5k_6k >= 17.0),
+        "presence_2k_5k_ge_19.0": bool(presence_2k_5k is not None and presence_2k_5k >= 19.0),
+        "sibilance_5k_9k_ge_14.0": bool(sibilance_5k_9k is not None and sibilance_5k_9k >= 14.0),
+        "harshness_index_ge_-14.0": bool(harshness_index is not None and harshness_index >= -14.0),
+    }
+
+    hot_dense_gate = any(hot_dense_gate_reasons.values())
+    body_mud_count = sum(1 for v in body_mud_reasons.values() if v)
+    hot_edge_count = sum(1 for v in hot_edge_reasons.values() if v)
+    dirty_dense_mode = bool(hot_dense_gate and body_mud_count >= 3 and hot_edge_count >= 1)
+
+    return {
+        "dirty_dense_mode": dirty_dense_mode,
+        "hot_dense_gate": hot_dense_gate,
+        "body_mud_count": body_mud_count,
+        "hot_edge_count": hot_edge_count,
+        "hot_dense_gate_reasons": hot_dense_gate_reasons,
+        "body_mud_reasons": body_mud_reasons,
+        "hot_edge_reasons": hot_edge_reasons,
+        "key_metrics": {
+            "integrated_lufs": integrated_lufs,
+            "true_peak_dbtp": true_peak_dbtp,
+            "near_clip_ratio": near_clip_ratio,
+            "limiter_stress_proxy": limiter_stress_proxy,
+            "lowmid_120_300": lowmid_120_300,
+            "low_body_150_300": low_body_150_300,
+            "body_150_400": body_150_400,
+            "lowmid_buildup_200_400": lowmid_buildup_200_400,
+            "mud_200_500": mud_200_500,
+            "harsh_2p5k_6k": harsh_2p5k_6k,
+            "presence_2k_5k": presence_2k_5k,
+            "sibilance_5k_9k": sibilance_5k_9k,
+            "harshness_index": harshness_index,
+        },
+        "retain_env": {
+            "DIRTY_UPPER_BODY_RETAIN_ON": _DIRTY_UPPER_BODY_RETAIN_ON,
+            "DIRTY_UPPER_BODY_RETAIN_HP_HZ": _DIRTY_UPPER_BODY_RETAIN_HP_HZ,
+            "DIRTY_UPPER_BODY_RETAIN_LP_HZ": _DIRTY_UPPER_BODY_RETAIN_LP_HZ,
+            "DIRTY_UPPER_BODY_RETAIN_F": _DIRTY_UPPER_BODY_RETAIN_F,
+            "DIRTY_UPPER_BODY_RETAIN_SHAPE_G": _DIRTY_UPPER_BODY_RETAIN_SHAPE_G,
+            "DIRTY_UPPER_BODY_RETAIN_SHAPE_W": _DIRTY_UPPER_BODY_RETAIN_SHAPE_W,
+            "DIRTY_UPPER_BODY_RETAIN_TRIM": _DIRTY_UPPER_BODY_RETAIN_TRIM,
+        },
+    }
+
+
 # ---------------------------
 # NORMALIZERS
 # ---------------------------
@@ -2432,6 +2513,7 @@ def root():
             "/analyze",
             "/analyze_sections",
             "/compare_sections",
+            "/dirty_debug",
             "/master",
             "/bandlab",
             "/bakuage",
@@ -2602,6 +2684,28 @@ def compare_sections_route():
                 "before": before_res,
                 "after": after_res,
                 "debug": debug
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/dirty_debug")
+def dirty_debug_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, dbg = _dl_to_named(td, "file", url)
+            payload = _dirty_dense_debug_payload(in_path, td)
+            return jsonify({
+                "ok": True,
+                "debug": dbg,
+                "dirty_dense_debug": payload,
             })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
