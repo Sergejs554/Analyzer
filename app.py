@@ -724,7 +724,7 @@ _RV_SHOULDER_HELPER_LP_HZ = float(os.getenv("RV_SHOULDER_HELPER_LP_HZ", "430"))
 _RV_SHOULDER_HELPER_F = float(os.getenv("RV_SHOULDER_HELPER_F", "385"))
 _RV_SHOULDER_HELPER_SHAPE_G = float(os.getenv("RV_SHOULDER_HELPER_SHAPE_G", "0.14"))
 _RV_SHOULDER_HELPER_SHAPE_W = float(os.getenv("RV_SHOULDER_HELPER_SHAPE_W", "1.25"))
-_RV_SHOULDER_HELPER_TRIM = float(os.getenv("RV_SHOULDER_HELPER_TRIM", "0.010"))
+_RV_SHOULDER_HELPER_TRIM = float(os.getenv("RV_SHOULDER_HELPER_TRIM", "0.014"))
 
 
 def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
