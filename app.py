@@ -213,6 +213,18 @@ def _os_softclip_chain(
 _ENABLE_AFFTDN = (os.getenv("ENABLE_AFFTDN", "0").strip() == "1")
 _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7" + (",afftdn=nf=-25" if _ENABLE_AFFTDN else "")
 
+_DIRTY_PRE_CLEAN_CHAIN = (
+    "highpass=f=25:width=0.7,"
+    "volume=-1.2dB,"
+    "equalizer=f=220:t=q:w=1.00:g=-1.0,"
+    "equalizer=f=330:t=q:w=0.95:g=-0.7,"
+    "equalizer=f=3100:t=q:w=0.90:g=-0.7,"
+    "equalizer=f=4300:t=q:w=0.95:g=-0.9,"
+    "equalizer=f=6500:t=q:w=1.20:g=-0.5,"
+    "equalizer=f=8200:t=q:w=1.30:g=-0.35,"
+    "equalizer=f=285:t=q:w=1.10:g=0.20"
+)
+
 _BASE_LOWMID_ON = (os.getenv("BASE_LOWMID_ON", "1").strip() == "1")
 _BASE_LOWMID_F = float(os.getenv("BASE_LOWMID_F", "220"))
 _BASE_LOWMID_W = float(os.getenv("BASE_LOWMID_W", "0.9"))
@@ -458,12 +470,6 @@ def _metric_deltas(ref: dict, cur: dict) -> dict:
 
 
 def _analyze_input_profile(in_path: str, td: str) -> dict:
-    """
-    Conservative single-file profile extractor.
-    Important: do NOT call run_analysis(file, file), because in this mode
-    rich body/mud metrics may come back partial/null.
-    Instead, create a probe copy and read report["before"].
-    """
     try:
         out_dir = os.path.join(td, "dirty_dense_profile")
         os.makedirs(out_dir, exist_ok=True)
@@ -479,23 +485,7 @@ def _analyze_input_profile(in_path: str, td: str) -> dict:
         report, _suggestion = run_analysis(in_path, probe_path, out_dir)
 
         if isinstance(report, dict) and isinstance(report.get("before"), dict):
-            before = report["before"]
-
-            must_have_any = [
-                "lowmid_120_300_db",
-                "low_body_150_300_db",
-                "body_150_400_db",
-                "lowmid_buildup_200_400_db",
-                "mud_200_500_db",
-                "harsh_2p5k_6k_db",
-                "presence_2k_5k_db",
-                "sibilance_5k_9k_db",
-            ]
-
-            if any(before.get(k) is not None for k in must_have_any):
-                return before
-
-            return before
+            return report["before"]
     except Exception:
         pass
 
@@ -503,26 +493,20 @@ def _analyze_input_profile(in_path: str, td: str) -> dict:
 
 
 def _is_dirty_dense_input(profile: dict) -> bool:
-    """
-    IMPORTANT:
-    This detector must stay conservative.
-    Good-dense base must not be touched unless the input clearly looks like
-    hot + packed + somewhat messy / edgy.
-    """
     integrated_lufs = _safe_float(profile.get("integrated_lufs"))
     true_peak_dbtp = _safe_float(profile.get("true_peak_dbtp"))
     near_clip_ratio = _safe_float(profile.get("near_clip_ratio"))
     limiter_stress_proxy = _safe_float(profile.get("limiter_stress_proxy"))
 
-    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300_db"))
-    low_body_150_300 = _safe_float(profile.get("low_body_150_300_db"))
-    body_150_400 = _safe_float(profile.get("body_150_400_db"))
-    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400_db"))
-    mud_200_500 = _safe_float(profile.get("mud_200_500_db"))
+    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300"))
+    low_body_150_300 = _safe_float(profile.get("low_body_150_300"))
+    body_150_400 = _safe_float(profile.get("body_150_400"))
+    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400"))
+    mud_200_500 = _safe_float(profile.get("mud_200_500"))
 
-    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k_db"))
-    presence_2k_5k = _safe_float(profile.get("presence_2k_5k_db"))
-    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k_db"))
+    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k"))
+    presence_2k_5k = _safe_float(profile.get("presence_2k_5k"))
+    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k"))
     harshness_index = _safe_float(profile.get("harshness_index"))
 
     hot_dense_gate = any([
@@ -561,52 +545,6 @@ def _is_dirty_dense_input(profile: dict) -> bool:
     )
 
 
-def _render_dirty_upper_body_retain(in_path: str, fmt: str, td: str) -> tuple[str, str]:
-    """
-    Overlay-only helper.
-    Never global. Never always-on inside the frozen base.
-    """
-    fmt = _normalize_format(fmt)
-
-    dirty_upper_body_retain_hp = _clamp(_DIRTY_UPPER_BODY_RETAIN_HP_HZ, 260.0, 300.0)
-    dirty_upper_body_retain_lp = _clamp(_DIRTY_UPPER_BODY_RETAIN_LP_HZ, 315.0, 350.0)
-    if dirty_upper_body_retain_lp <= dirty_upper_body_retain_hp + 25.0:
-        dirty_upper_body_retain_lp = dirty_upper_body_retain_hp + 25.0
-
-    dirty_upper_body_retain_f = _clamp(_DIRTY_UPPER_BODY_RETAIN_F, 295.0, 320.0)
-    dirty_upper_body_retain_shape_g = _clamp(_DIRTY_UPPER_BODY_RETAIN_SHAPE_G, 0.0, 0.5)
-    dirty_upper_body_retain_shape_w = _clamp(_DIRTY_UPPER_BODY_RETAIN_SHAPE_W, 0.70, 1.30)
-    dirty_upper_body_retain_trim = _clamp(_DIRTY_UPPER_BODY_RETAIN_TRIM, 0.0, 0.02)
-
-    parts = []
-
-    if _DIRTY_UPPER_BODY_RETAIN_ON and dirty_upper_body_retain_trim > 0.0:
-        parts.append(
-            f"[0:a]"
-            f"highpass=f={dirty_upper_body_retain_hp}:width=0.707,"
-            f"lowpass=f={dirty_upper_body_retain_lp}:width=0.707,"
-            f"equalizer=f={dirty_upper_body_retain_f}:t=q:w={dirty_upper_body_retain_shape_w}:g={dirty_upper_body_retain_shape_g},"
-            f"volume={dirty_upper_body_retain_trim}"
-            f"[out]"
-        )
-    else:
-        parts.append("[0:a]volume=0[out]")
-
-    fc = ";".join(parts)
-
-    out_args, out_name, _mime = _out_args(fmt)
-    out_name = f"dirty_upper_body_retain_{out_name}"
-    out_path = os.path.join(td, out_name)
-
-    cmd = (
-        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
-        f'-filter_complex "{fc}" -map "[out]" '
-        f'{out_args} {shlex.quote(out_path)}'
-    )
-    _run(cmd)
-    return out_path, out_name
-
-
 def _dirty_dense_debug_payload(in_path: str, td: str) -> dict:
     profile = _analyze_input_profile(in_path, td)
 
@@ -615,15 +553,15 @@ def _dirty_dense_debug_payload(in_path: str, td: str) -> dict:
     near_clip_ratio = _safe_float(profile.get("near_clip_ratio"))
     limiter_stress_proxy = _safe_float(profile.get("limiter_stress_proxy"))
 
-    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300_db"))
-    low_body_150_300 = _safe_float(profile.get("low_body_150_300_db"))
-    body_150_400 = _safe_float(profile.get("body_150_400_db"))
-    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400_db"))
-    mud_200_500 = _safe_float(profile.get("mud_200_500_db"))
+    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300"))
+    low_body_150_300 = _safe_float(profile.get("low_body_150_300"))
+    body_150_400 = _safe_float(profile.get("body_150_400"))
+    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400"))
+    mud_200_500 = _safe_float(profile.get("mud_200_500"))
 
-    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k_db"))
-    presence_2k_5k = _safe_float(profile.get("presence_2k_5k_db"))
-    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k_db"))
+    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k"))
+    presence_2k_5k = _safe_float(profile.get("presence_2k_5k"))
+    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k"))
     harshness_index = _safe_float(profile.get("harshness_index"))
 
     hot_dense_gate_reasons = {
@@ -676,17 +614,8 @@ def _dirty_dense_debug_payload(in_path: str, td: str) -> dict:
             "sibilance_5k_9k": sibilance_5k_9k,
             "harshness_index": harshness_index,
         },
-        "retain_env": {
-            "DIRTY_UPPER_BODY_RETAIN_ON": _DIRTY_UPPER_BODY_RETAIN_ON,
-            "DIRTY_UPPER_BODY_RETAIN_HP_HZ": _DIRTY_UPPER_BODY_RETAIN_HP_HZ,
-            "DIRTY_UPPER_BODY_RETAIN_LP_HZ": _DIRTY_UPPER_BODY_RETAIN_LP_HZ,
-            "DIRTY_UPPER_BODY_RETAIN_F": _DIRTY_UPPER_BODY_RETAIN_F,
-            "DIRTY_UPPER_BODY_RETAIN_SHAPE_G": _DIRTY_UPPER_BODY_RETAIN_SHAPE_G,
-            "DIRTY_UPPER_BODY_RETAIN_SHAPE_W": _DIRTY_UPPER_BODY_RETAIN_SHAPE_W,
-            "DIRTY_UPPER_BODY_RETAIN_TRIM": _DIRTY_UPPER_BODY_RETAIN_TRIM,
-        },
+        "dirty_pre_clean_chain": _DIRTY_PRE_CLEAN_CHAIN,
     }
-
 # ---------------------------
 # NORMALIZERS
 # ---------------------------
@@ -2118,8 +2047,18 @@ def _render_full_product_staged(in_path: str, tone: str, intensity: str, fmt: st
     input_profile = _analyze_input_profile(in_path, td)
     dirty_dense_mode = _is_dirty_dense_input(input_profile)
 
+    prepared_input_wav = os.path.join(td, "prepared_input.wav")
+
+    pre_clean_chain = _DIRTY_PRE_CLEAN_CHAIN if dirty_dense_mode else _PRE_CLEAN_CHAIN
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-af "{pre_clean_chain}" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(prepared_input_wav)}'
+    )
+    _run(cmd)
+
     polish_wav, _ = _render_polish_branch(
-        in_path=in_path,
+        in_path=prepared_input_wav,
         tone=tone,
         intensity=intensity,
         fmt="wav16",
@@ -2127,7 +2066,7 @@ def _render_full_product_staged(in_path: str, tone: str, intensity: str, fmt: st
     )
 
     reveal_wav, _ = _render_reveal_branch(
-        in_path=in_path,
+        in_path=prepared_input_wav,
         tone=tone,
         intensity=intensity,
         fmt="wav16",
@@ -2141,26 +2080,18 @@ def _render_full_product_staged(in_path: str, tone: str, intensity: str, fmt: st
     )
 
     low_support_wav, _ = _render_low_support_branch(
-        in_path=in_path,
+        in_path=prepared_input_wav,
         tone=tone,
         intensity=intensity,
         fmt="wav16",
         td=td,
     )
 
-    dirty_upper_body_retain_wav = None
-    if dirty_dense_mode:
-        dirty_upper_body_retain_wav, _ = _render_dirty_upper_body_retain(
-            in_path=in_path,
-            fmt="wav16",
-            td=td,
-        )
-
     full_product_prepost_wav = _add_low_support_structural(
         subgroup_path=presentation_subgroup_wav,
         low_support_path=low_support_wav,
         td=td,
-        dirty_upper_body_retain_path=dirty_upper_body_retain_wav,
+        dirty_upper_body_retain_path=None,
     )
 
     out_path, out_name = _render_post_stage(
@@ -2174,8 +2105,6 @@ def _render_full_product_staged(in_path: str, tone: str, intensity: str, fmt: st
     staged_path = os.path.join(td, staged_name)
     os.replace(out_path, staged_path)
     return staged_path, staged_name
-
-
 def _render_single_branch_preview(
     in_path: str,
     tone: str,
