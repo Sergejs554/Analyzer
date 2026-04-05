@@ -598,6 +598,18 @@ def _dirty_dense_debug_payload(in_path: str, td: str) -> dict:
         "hot_dense_gate_reasons": hot_dense_gate_reasons,
         "body_mud_reasons": body_mud_reasons,
         "hot_edge_reasons": hot_edge_reasons,
+        "profile_has_keys": {
+            "lowmid_120_300_db": "lowmid_120_300_db" in profile,
+            "low_body_150_300_db": "low_body_150_300_db" in profile,
+            "body_150_400_db": "body_150_400_db" in profile,
+            "lowmid_buildup_200_400_db": "lowmid_buildup_200_400_db" in profile,
+            "mud_200_500_db": "mud_200_500_db" in profile,
+            "harsh_2p5k_6k_db": "harsh_2p5k_6k_db" in profile,
+            "presence_2k_5k_db": "presence_2k_5k_db" in profile,
+            "sibilance_5k_9k_db": "sibilance_5k_9k_db" in profile,
+            "harshness_index": "harshness_index" in profile,
+        },
+        "profile_key_sample": sorted(list(profile.keys()))[:80],
         "key_metrics": {
             "integrated_lufs": integrated_lufs,
             "true_peak_dbtp": true_peak_dbtp,
