@@ -708,21 +708,23 @@ _RV_LOWER_CONTOUR_SHAPE_G = float(os.getenv("RV_LOWER_CONTOUR_SHAPE_G", "0.45"))
 _RV_LOWER_CONTOUR_SHAPE_W = float(os.getenv("RV_LOWER_CONTOUR_SHAPE_W", "1.10"))
 _RV_LOWER_CONTOUR_TRIM = float(os.getenv("RV_LOWER_CONTOUR_TRIM", "0.040"))
 
-_RV_UPPER_CORE_ON = (os.getenv("RV_UPPER_CORE_ON", "1").strip() == "1")
-_RV_UPPER_CORE_HP_HZ = float(os.getenv("RV_UPPER_CORE_HP_HZ", "260"))
-_RV_UPPER_CORE_LP_HZ = float(os.getenv("RV_UPPER_CORE_LP_HZ", "350"))
-_RV_UPPER_CORE_F = float(os.getenv("RV_UPPER_CORE_F", "315"))
-_RV_UPPER_CORE_SHAPE_G = float(os.getenv("RV_UPPER_CORE_SHAPE_G", "0.26"))
-_RV_UPPER_CORE_SHAPE_W = float(os.getenv("RV_UPPER_CORE_SHAPE_W", "1.00"))
-_RV_UPPER_CORE_TRIM = float(os.getenv("RV_UPPER_CORE_TRIM", "0.029"))
+# last good single upper base
+_RV_UPPER_BODY_ON = (os.getenv("RV_UPPER_BODY_ON", "1").strip() == "1")
+_RV_UPPER_BODY_HP_HZ = float(os.getenv("RV_UPPER_BODY_HP_HZ", "240"))
+_RV_UPPER_BODY_LP_HZ = float(os.getenv("RV_UPPER_BODY_LP_HZ", "380"))
+_RV_UPPER_BODY_F = float(os.getenv("RV_UPPER_BODY_F", "310"))
+_RV_UPPER_BODY_SHAPE_G = float(os.getenv("RV_UPPER_BODY_SHAPE_G", "0.30"))
+_RV_UPPER_BODY_SHAPE_W = float(os.getenv("RV_UPPER_BODY_SHAPE_W", "1.20"))
+_RV_UPPER_BODY_TRIM = float(os.getenv("RV_UPPER_BODY_TRIM", "0.036"))
 
-_RV_UPPER_SHOULDER_ON = (os.getenv("RV_UPPER_SHOULDER_ON", "1").strip() == "1")
-_RV_UPPER_SHOULDER_HP_HZ = float(os.getenv("RV_UPPER_SHOULDER_HP_HZ", "330"))
-_RV_UPPER_SHOULDER_LP_HZ = float(os.getenv("RV_UPPER_SHOULDER_LP_HZ", "420"))
-_RV_UPPER_SHOULDER_F = float(os.getenv("RV_UPPER_SHOULDER_F", "370"))
-_RV_UPPER_SHOULDER_SHAPE_G = float(os.getenv("RV_UPPER_SHOULDER_SHAPE_G", "0.16"))
-_RV_UPPER_SHOULDER_SHAPE_W = float(os.getenv("RV_UPPER_SHOULDER_SHAPE_W", "1.25"))
-_RV_UPPER_SHOULDER_TRIM = float(os.getenv("RV_UPPER_SHOULDER_TRIM", "0.010"))
+# additive shoulder helper
+_RV_SHOULDER_HELPER_ON = (os.getenv("RV_SHOULDER_HELPER_ON", "1").strip() == "1")
+_RV_SHOULDER_HELPER_HP_HZ = float(os.getenv("RV_SHOULDER_HELPER_HP_HZ", "340"))
+_RV_SHOULDER_HELPER_LP_HZ = float(os.getenv("RV_SHOULDER_HELPER_LP_HZ", "430"))
+_RV_SHOULDER_HELPER_F = float(os.getenv("RV_SHOULDER_HELPER_F", "385"))
+_RV_SHOULDER_HELPER_SHAPE_G = float(os.getenv("RV_SHOULDER_HELPER_SHAPE_G", "0.14"))
+_RV_SHOULDER_HELPER_SHAPE_W = float(os.getenv("RV_SHOULDER_HELPER_SHAPE_W", "1.25"))
+_RV_SHOULDER_HELPER_TRIM = float(os.getenv("RV_SHOULDER_HELPER_TRIM", "0.010"))
 
 
 def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -814,27 +816,27 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     lower_contour_shape_w = _clamp(_RV_LOWER_CONTOUR_SHAPE_W, 0.35, 2.0)
     lower_contour_trim = _clamp(_RV_LOWER_CONTOUR_TRIM * intensity_scale, 0.0, 0.10)
 
-    upper_core_hp = _clamp(_RV_UPPER_CORE_HP_HZ, 220.0, 320.0)
-    upper_core_lp = _clamp(_RV_UPPER_CORE_LP_HZ, 300.0, 390.0)
-    if upper_core_lp <= upper_core_hp + 30.0:
-        upper_core_lp = upper_core_hp + 30.0
+    upper_body_hp = _clamp(_RV_UPPER_BODY_HP_HZ, 180.0, 320.0)
+    upper_body_lp = _clamp(_RV_UPPER_BODY_LP_HZ, 320.0, 520.0)
+    if upper_body_lp <= upper_body_hp + 40.0:
+        upper_body_lp = upper_body_hp + 40.0
 
-    upper_core_f = _clamp(_RV_UPPER_CORE_F, 280.0, 340.0)
-    upper_core_shape_g = _clamp(_RV_UPPER_CORE_SHAPE_G, 0.0, 0.8)
-    upper_core_shape_w = _clamp(_RV_UPPER_CORE_SHAPE_W, 0.60, 1.60)
-    upper_core_trim = _clamp(_RV_UPPER_CORE_TRIM * intensity_scale, 0.0, 0.05)
+    upper_body_f = _clamp(_RV_UPPER_BODY_F, 260.0, 360.0)
+    upper_body_shape_g = _clamp(_RV_UPPER_BODY_SHAPE_G, 0.0, 1.0)
+    upper_body_shape_w = _clamp(_RV_UPPER_BODY_SHAPE_W, 0.50, 2.20)
+    upper_body_trim = _clamp(_RV_UPPER_BODY_TRIM * intensity_scale, 0.0, 0.06)
 
-    upper_shoulder_hp = _clamp(_RV_UPPER_SHOULDER_HP_HZ, 300.0, 380.0)
-    upper_shoulder_lp = _clamp(_RV_UPPER_SHOULDER_LP_HZ, 380.0, 480.0)
-    if upper_shoulder_lp <= upper_shoulder_hp + 30.0:
-        upper_shoulder_lp = upper_shoulder_hp + 30.0
+    shoulder_helper_hp = _clamp(_RV_SHOULDER_HELPER_HP_HZ, 320.0, 390.0)
+    shoulder_helper_lp = _clamp(_RV_SHOULDER_HELPER_LP_HZ, 390.0, 470.0)
+    if shoulder_helper_lp <= shoulder_helper_hp + 30.0:
+        shoulder_helper_lp = shoulder_helper_hp + 30.0
 
-    upper_shoulder_f = _clamp(_RV_UPPER_SHOULDER_F, 340.0, 410.0)
-    upper_shoulder_shape_g = _clamp(_RV_UPPER_SHOULDER_SHAPE_G, 0.0, 0.6)
-    upper_shoulder_shape_w = _clamp(_RV_UPPER_SHOULDER_SHAPE_W, 0.80, 1.80)
-    upper_shoulder_trim = _clamp(_RV_UPPER_SHOULDER_TRIM * intensity_scale, 0.0, 0.03)
+    shoulder_helper_f = _clamp(_RV_SHOULDER_HELPER_F, 360.0, 410.0)
+    shoulder_helper_shape_g = _clamp(_RV_SHOULDER_HELPER_SHAPE_G, 0.0, 0.5)
+    shoulder_helper_shape_w = _clamp(_RV_SHOULDER_HELPER_SHAPE_W, 0.80, 1.80)
+    shoulder_helper_trim = _clamp(_RV_SHOULDER_HELPER_TRIM * intensity_scale, 0.0, 0.03)
 
-    parts = ["[0:a]asplit=8[core][exc][air][wid][cnt][lct][ubc][ubs]"]
+    parts = ["[0:a]asplit=8[core][exc][air][wid][cnt][lct][ubd][shh]"]
 
     core_chain = [
         f"highpass=f={lo_hz}:width=0.707",
@@ -913,29 +915,29 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     else:
         parts.append("[lct]volume=0[lc1]")
 
-    if _RV_UPPER_CORE_ON and upper_core_trim > 0.0:
+    if _RV_UPPER_BODY_ON and upper_body_trim > 0.0:
         parts.append(
-            f"[ubc]"
-            f"highpass=f={upper_core_hp}:width=0.707,"
-            f"lowpass=f={upper_core_lp}:width=0.707,"
-            f"equalizer=f={upper_core_f}:t=q:w={upper_core_shape_w}:g={upper_core_shape_g},"
-            f"volume={upper_core_trim}[uc1]"
+            f"[ubd]"
+            f"highpass=f={upper_body_hp}:width=0.707,"
+            f"lowpass=f={upper_body_lp}:width=0.707,"
+            f"equalizer=f={upper_body_f}:t=q:w={upper_body_shape_w}:g={upper_body_shape_g},"
+            f"volume={upper_body_trim}[ub1]"
         )
     else:
-        parts.append("[ubc]volume=0[uc1]")
+        parts.append("[ubd]volume=0[ub1]")
 
-    if _RV_UPPER_SHOULDER_ON and upper_shoulder_trim > 0.0:
+    if _RV_SHOULDER_HELPER_ON and shoulder_helper_trim > 0.0:
         parts.append(
-            f"[ubs]"
-            f"highpass=f={upper_shoulder_hp}:width=0.707,"
-            f"lowpass=f={upper_shoulder_lp}:width=0.707,"
-            f"equalizer=f={upper_shoulder_f}:t=q:w={upper_shoulder_shape_w}:g={upper_shoulder_shape_g},"
-            f"volume={upper_shoulder_trim}[us1]"
+            f"[shh]"
+            f"highpass=f={shoulder_helper_hp}:width=0.707,"
+            f"lowpass=f={shoulder_helper_lp}:width=0.707,"
+            f"equalizer=f={shoulder_helper_f}:t=q:w={shoulder_helper_shape_w}:g={shoulder_helper_shape_g},"
+            f"volume={shoulder_helper_trim}[sh1]"
         )
     else:
-        parts.append("[ubs]volume=0[us1]")
+        parts.append("[shh]volume=0[sh1]")
 
-    parts.append("[c1][e1][a1][w1][ct1][lc1][uc1][us1]amix=inputs=8:normalize=0[m0]")
+    parts.append("[c1][e1][a1][w1][ct1][lc1][ub1][sh1]amix=inputs=8:normalize=0[m0]")
     if abs(out_trim_db) > 1e-9:
         parts.append(f"[m0]volume={out_trim_db}dB[out]")
     else:
