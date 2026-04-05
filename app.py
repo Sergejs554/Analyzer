@@ -2469,6 +2469,7 @@ def root():
             "/analyze_sections",
             "/compare_sections",
             "/dirty_debug",
+            "/prepared_input",
             "/master",
             "/bandlab",
             "/bakuage",
@@ -2487,7 +2488,7 @@ def root():
         ]
     })
 
-
+    
 @app.get("/health")
 def health():
     return jsonify({
@@ -2561,6 +2562,39 @@ def health():
         "ART_POLISH_GAIN_DB": os.getenv("ART_POLISH_GAIN_DB"),
     })
 
+@app.get("/prepared_input")
+def prepared_input_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+
+            input_profile = _analyze_input_profile(in_path, td)
+            dirty_dense_mode = _is_dirty_dense_input(input_profile)
+            pre_clean_chain = _DIRTY_PRE_CLEAN_CHAIN if dirty_dense_mode else _PRE_CLEAN_CHAIN
+
+            prepared_input_path = os.path.join(td, "prepared_input.wav")
+
+            cmd = (
+                f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+                f'-af "{pre_clean_chain}" -ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(prepared_input_path)}'
+            )
+            _run(cmd)
+
+            return send_file(
+                prepared_input_path,
+                mimetype="audio/wav",
+                as_attachment=True,
+                download_name="prepared_input.wav"
+            )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.get("/analyze")
 def analyze():
