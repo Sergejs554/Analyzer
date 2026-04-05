@@ -215,14 +215,14 @@ _PRE_CLEAN_CHAIN = "highpass=f=25:width=0.7" + (",afftdn=nf=-25" if _ENABLE_AFFT
 
 _DIRTY_PRE_CLEAN_CHAIN = (
     "highpass=f=25:width=0.7,"
-    "volume=-1.2dB,"
-    "equalizer=f=220:t=q:w=1.00:g=-1.0,"
-    "equalizer=f=330:t=q:w=0.95:g=-0.7,"
-    "equalizer=f=3100:t=q:w=0.90:g=-0.7,"
-    "equalizer=f=4300:t=q:w=0.95:g=-0.9,"
-    "equalizer=f=6500:t=q:w=1.20:g=-0.5,"
-    "equalizer=f=8200:t=q:w=1.30:g=-0.35,"
-    "equalizer=f=285:t=q:w=1.10:g=0.20"
+    "volume=-0.8dB,"
+    "equalizer=f=210:t=q:w=0.95:g=-1.2,"
+    "equalizer=f=345:t=q:w=0.90:g=-1.0,"
+    "equalizer=f=3050:t=q:w=0.85:g=-0.8,"
+    "equalizer=f=4300:t=q:w=0.90:g=-1.1,"
+    "equalizer=f=6500:t=q:w=1.15:g=-0.45,"
+    "equalizer=f=8200:t=q:w=1.20:g=-0.25,"
+    "equalizer=f=285:t=q:w=1.00:g=0.32"
 )
 
 _BASE_LOWMID_ON = (os.getenv("BASE_LOWMID_ON", "1").strip() == "1")
