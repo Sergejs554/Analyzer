@@ -536,6 +536,14 @@ _LS_TAME_MAKEUP_DB = float(os.getenv("LS_TAME_MAKEUP_DB", "0.0"))
 
 _LS_OUTPUT_TRIM_DB = float(os.getenv("LS_OUTPUT_TRIM_DB", "-1.0"))
 
+_LS_BODY_BRIDGE_ON = (os.getenv("LS_BODY_BRIDGE_ON", "1").strip() == "1")
+_LS_BODY_BRIDGE_HP_HZ = float(os.getenv("LS_BODY_BRIDGE_HP_HZ", "180"))
+_LS_BODY_BRIDGE_LP_HZ = float(os.getenv("LS_BODY_BRIDGE_LP_HZ", "320"))
+_LS_BODY_BRIDGE_F = float(os.getenv("LS_BODY_BRIDGE_F", "245"))
+_LS_BODY_BRIDGE_SHAPE_G = float(os.getenv("LS_BODY_BRIDGE_SHAPE_G", "0.22"))
+_LS_BODY_BRIDGE_SHAPE_W = float(os.getenv("LS_BODY_BRIDGE_SHAPE_W", "1.10"))
+_LS_BODY_BRIDGE_TRIM = float(os.getenv("LS_BODY_BRIDGE_TRIM", "0.012"))
+
 
 def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
@@ -587,11 +595,22 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
 
     output_trim_db = _clamp(_LS_OUTPUT_TRIM_DB, -6.0, 2.0)
 
+    bridge_hp = _clamp(_LS_BODY_BRIDGE_HP_HZ, 150.0, 240.0)
+    bridge_lp = _clamp(_LS_BODY_BRIDGE_LP_HZ, 260.0, 360.0)
+    if bridge_lp <= bridge_hp + 40.0:
+        bridge_lp = bridge_hp + 40.0
+
+    bridge_f = _clamp(_LS_BODY_BRIDGE_F, 210.0, 280.0)
+    bridge_shape_g = _clamp(_LS_BODY_BRIDGE_SHAPE_G, 0.0, 0.8)
+    bridge_shape_w = _clamp(_LS_BODY_BRIDGE_SHAPE_W, 0.60, 1.80)
+    bridge_trim = _clamp(_LS_BODY_BRIDGE_TRIM, 0.0, 0.03)
+
     parts = []
+    parts.append("[0:a]asplit=2[ls_main_in][ls_bridge_in]")
 
     # foundation stage
     parts.append(
-        f"[0:a]"
+        f"[ls_main_in]"
         f"highpass=f={floor_hz}:width=0.707,"
         f"lowpass=f={ceiling_hz}:width=0.707,"
         f"bass=g={foundation_gain_db}:f={anchor_hz}:w=0.70,"
@@ -625,11 +644,25 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
         f"[ls_tame]"
     )
 
-    # final output stage
-    if abs(output_trim_db) > 1e-9:
-        parts.append(f"[ls_tame]volume={output_trim_db}dB[out]")
+    # body bridge helper
+    if _LS_BODY_BRIDGE_ON and bridge_trim > 0.0:
+        parts.append(
+            f"[ls_bridge_in]"
+            f"highpass=f={bridge_hp}:width=0.707,"
+            f"lowpass=f={bridge_lp}:width=0.707,"
+            f"equalizer=f={bridge_f}:t=q:w={bridge_shape_w}:g={bridge_shape_g},"
+            f"volume={bridge_trim}[ls_bridge]"
+        )
     else:
-        parts.append("[ls_tame]anull[out]")
+        parts.append("[ls_bridge_in]volume=0[ls_bridge]")
+
+    # final output stage
+    parts.append("[ls_tame][ls_bridge]amix=inputs=2:normalize=0[ls_sum]")
+
+    if abs(output_trim_db) > 1e-9:
+        parts.append(f"[ls_sum]volume={output_trim_db}dB[out]")
+    else:
+        parts.append("[ls_sum]anull[out]")
 
     fc = ";".join(parts)
 
@@ -644,8 +677,6 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
     )
     _run(cmd)
     return out_path, out_name
-
-
 # ---------------------------
 # REVEAL / PRESENCE / MID-AIR BRANCH
 # donor only, pre-limiter
