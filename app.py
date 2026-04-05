@@ -550,7 +550,7 @@ _LS_UPPER_BODY_TRANSITION_LP_HZ = float(os.getenv("LS_UPPER_BODY_TRANSITION_LP_H
 _LS_UPPER_BODY_TRANSITION_F = float(os.getenv("LS_UPPER_BODY_TRANSITION_F", "312"))
 _LS_UPPER_BODY_TRANSITION_SHAPE_G = float(os.getenv("LS_UPPER_BODY_TRANSITION_SHAPE_G", "0.18"))
 _LS_UPPER_BODY_TRANSITION_SHAPE_W = float(os.getenv("LS_UPPER_BODY_TRANSITION_SHAPE_W", "1.00"))
-_LS_UPPER_BODY_TRANSITION_TRIM = float(os.getenv("LS_UPPER_BODY_TRANSITION_TRIM", "0.010"))
+_LS_UPPER_BODY_TRANSITION_TRIM = float(os.getenv("LS_UPPER_BODY_TRANSITION_TRIM", "0.014"))
 
 
 def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
