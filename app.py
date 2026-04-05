@@ -460,20 +460,50 @@ def _metric_deltas(ref: dict, cur: dict) -> dict:
 def _analyze_input_profile(in_path: str, td: str) -> dict:
     """
     Conservative single-file profile extractor.
-    Uses run_analysis(file, file) only to get the rich 'before' metrics block.
-    If anything fails, falls back to lightweight stage metrics.
+    Tries to recover the richest possible metrics dict for detector logic.
+    If one source is partial, merges non-null keys from alternative sources.
     """
+    rich = {}
+
     try:
         out_dir = os.path.join(td, "dirty_dense_profile")
         os.makedirs(out_dir, exist_ok=True)
+
         report, _suggestion = run_analysis(in_path, in_path, out_dir)
-        if isinstance(report, dict) and isinstance(report.get("before"), dict):
-            return report["before"]
+
+        if isinstance(report, dict):
+            before = report.get("before") if isinstance(report.get("before"), dict) else {}
+            after = report.get("after") if isinstance(report.get("after"), dict) else {}
+            diff = report.get("diff") if isinstance(report.get("diff"), dict) else {}
+
+            # base merge: prefer before, then after for missing/null values
+            merged = {}
+            for src in (before, after):
+                for k, v in src.items():
+                    if k not in merged or merged[k] is None:
+                        merged[k] = v
+
+            # if some rich keys are still missing, try reconstructing from diff+before/after presence
+            rich = merged
+
+            must_have_any = [
+                "lowmid_120_300",
+                "low_body_150_300",
+                "body_150_400",
+                "lowmid_buildup_200_400",
+                "mud_200_500",
+                "harsh_2p5k_6k",
+                "presence_2k_5k",
+                "sibilance_5k_9k",
+            ]
+
+            if any(rich.get(k) is not None for k in must_have_any):
+                return rich
     except Exception:
         pass
 
+    # hard fallback
     return _collect_stage_metrics(in_path)
-
 
 def _is_dirty_dense_input(profile: dict) -> bool:
     """
