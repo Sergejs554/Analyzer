@@ -460,31 +460,26 @@ def _metric_deltas(ref: dict, cur: dict) -> dict:
 def _analyze_input_profile(in_path: str, td: str) -> dict:
     """
     Conservative single-file profile extractor.
-    Tries to recover the richest possible metrics dict for detector logic.
-    If one source is partial, merges non-null keys from alternative sources.
+    Important: do NOT call run_analysis(file, file), because in this mode
+    rich body/mud metrics may come back partial/null.
+    Instead, create a probe copy and read report["before"].
     """
-    rich = {}
-
     try:
         out_dir = os.path.join(td, "dirty_dense_profile")
         os.makedirs(out_dir, exist_ok=True)
 
-        report, _suggestion = run_analysis(in_path, in_path, out_dir)
+        probe_path = os.path.join(td, "dirty_probe.wav")
 
-        if isinstance(report, dict):
-            before = report.get("before") if isinstance(report.get("before"), dict) else {}
-            after = report.get("after") if isinstance(report.get("after"), dict) else {}
-            diff = report.get("diff") if isinstance(report.get("diff"), dict) else {}
+        cmd = (
+            f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+            f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(probe_path)}'
+        )
+        _run(cmd)
 
-            # base merge: prefer before, then after for missing/null values
-            merged = {}
-            for src in (before, after):
-                for k, v in src.items():
-                    if k not in merged or merged[k] is None:
-                        merged[k] = v
+        report, _suggestion = run_analysis(in_path, probe_path, out_dir)
 
-            # if some rich keys are still missing, try reconstructing from diff+before/after presence
-            rich = merged
+        if isinstance(report, dict) and isinstance(report.get("before"), dict):
+            before = report["before"]
 
             must_have_any = [
                 "lowmid_120_300",
@@ -497,14 +492,14 @@ def _analyze_input_profile(in_path: str, td: str) -> dict:
                 "sibilance_5k_9k",
             ]
 
-            if any(rich.get(k) is not None for k in must_have_any):
-                return rich
+            if any(before.get(k) is not None for k in must_have_any):
+                return before
+
+            return before
     except Exception:
         pass
 
-    # hard fallback
     return _collect_stage_metrics(in_path)
-
 def _is_dirty_dense_input(profile: dict) -> bool:
     """
     IMPORTANT:
