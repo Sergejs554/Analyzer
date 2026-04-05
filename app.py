@@ -714,7 +714,7 @@ _RV_UPPER_CORE_LP_HZ = float(os.getenv("RV_UPPER_CORE_LP_HZ", "340"))
 _RV_UPPER_CORE_F = float(os.getenv("RV_UPPER_CORE_F", "310"))
 _RV_UPPER_CORE_SHAPE_G = float(os.getenv("RV_UPPER_CORE_SHAPE_G", "0.26"))
 _RV_UPPER_CORE_SHAPE_W = float(os.getenv("RV_UPPER_CORE_SHAPE_W", "1.00"))
-_RV_UPPER_CORE_TRIM = float(os.getenv("RV_UPPER_CORE_TRIM", "0.026"))
+_RV_UPPER_CORE_TRIM = float(os.getenv("RV_UPPER_CORE_TRIM", "0.029"))
 
 _RV_UPPER_SHOULDER_ON = (os.getenv("RV_UPPER_SHOULDER_ON", "1").strip() == "1")
 _RV_UPPER_SHOULDER_HP_HZ = float(os.getenv("RV_UPPER_SHOULDER_HP_HZ", "330"))
