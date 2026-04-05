@@ -542,7 +542,7 @@ _LS_BODY_BRIDGE_LP_HZ = float(os.getenv("LS_BODY_BRIDGE_LP_HZ", "320"))
 _LS_BODY_BRIDGE_F = float(os.getenv("LS_BODY_BRIDGE_F", "245"))
 _LS_BODY_BRIDGE_SHAPE_G = float(os.getenv("LS_BODY_BRIDGE_SHAPE_G", "0.22"))
 _LS_BODY_BRIDGE_SHAPE_W = float(os.getenv("LS_BODY_BRIDGE_SHAPE_W", "1.10"))
-_LS_BODY_BRIDGE_TRIM = float(os.getenv("LS_BODY_BRIDGE_TRIM", "0.012"))
+_LS_BODY_BRIDGE_TRIM = float(os.getenv("LS_BODY_BRIDGE_TRIM", "0.014"))
 
 _LS_UPPER_BODY_TRANSITION_ON = (os.getenv("LS_UPPER_BODY_TRANSITION_ON", "1").strip() == "1")
 _LS_UPPER_BODY_TRANSITION_HP_HZ = float(os.getenv("LS_UPPER_BODY_TRANSITION_HP_HZ", "270"))
