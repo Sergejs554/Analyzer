@@ -457,6 +457,129 @@ def _metric_deltas(ref: dict, cur: dict) -> dict:
     return out
 
 
+def _analyze_input_profile(in_path: str, td: str) -> dict:
+    """
+    Conservative single-file profile extractor.
+    Uses run_analysis(file, file) only to get the rich 'before' metrics block.
+    If anything fails, falls back to lightweight stage metrics.
+    """
+    try:
+        out_dir = os.path.join(td, "dirty_dense_profile")
+        os.makedirs(out_dir, exist_ok=True)
+        report, _suggestion = run_analysis(in_path, in_path, out_dir)
+        if isinstance(report, dict) and isinstance(report.get("before"), dict):
+            return report["before"]
+    except Exception:
+        pass
+
+    return _collect_stage_metrics(in_path)
+
+
+def _is_dirty_dense_input(profile: dict) -> bool:
+    """
+    IMPORTANT:
+    This detector must stay conservative.
+    Good-dense base must not be touched unless the input clearly looks like
+    hot + packed + somewhat messy / edgy.
+    """
+    integrated_lufs = _safe_float(profile.get("integrated_lufs"))
+    true_peak_dbtp = _safe_float(profile.get("true_peak_dbtp"))
+    near_clip_ratio = _safe_float(profile.get("near_clip_ratio"))
+    limiter_stress_proxy = _safe_float(profile.get("limiter_stress_proxy"))
+
+    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300"))
+    low_body_150_300 = _safe_float(profile.get("low_body_150_300"))
+    body_150_400 = _safe_float(profile.get("body_150_400"))
+    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400"))
+    mud_200_500 = _safe_float(profile.get("mud_200_500"))
+
+    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k"))
+    presence_2k_5k = _safe_float(profile.get("presence_2k_5k"))
+    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k"))
+    harshness_index = _safe_float(profile.get("harshness_index"))
+
+    hot_dense_gate = any([
+        integrated_lufs is not None and integrated_lufs >= -8.8,
+        true_peak_dbtp is not None and true_peak_dbtp >= 0.8,
+        near_clip_ratio is not None and near_clip_ratio >= 5e-4,
+        limiter_stress_proxy is not None and limiter_stress_proxy >= 1.00,
+    ])
+
+    body_mud_flags = 0
+    if lowmid_120_300 is not None and lowmid_120_300 >= 36.0:
+        body_mud_flags += 1
+    if low_body_150_300 is not None and low_body_150_300 >= 35.5:
+        body_mud_flags += 1
+    if body_150_400 is not None and body_150_400 >= 35.5:
+        body_mud_flags += 1
+    if lowmid_buildup_200_400 is not None and lowmid_buildup_200_400 >= 35.5:
+        body_mud_flags += 1
+    if mud_200_500 is not None and mud_200_500 >= 35.0:
+        body_mud_flags += 1
+
+    hot_edge_flags = 0
+    if harsh_2p5k_6k is not None and harsh_2p5k_6k >= 17.0:
+        hot_edge_flags += 1
+    if presence_2k_5k is not None and presence_2k_5k >= 19.0:
+        hot_edge_flags += 1
+    if sibilance_5k_9k is not None and sibilance_5k_9k >= 14.0:
+        hot_edge_flags += 1
+    if harshness_index is not None and harshness_index >= -14.0:
+        hot_edge_flags += 1
+
+    return bool(
+        hot_dense_gate
+        and body_mud_flags >= 3
+        and hot_edge_flags >= 1
+    )
+
+
+def _render_dirty_upper_body_retain(in_path: str, fmt: str, td: str) -> tuple[str, str]:
+    """
+    Overlay-only helper.
+    Never global. Never always-on inside the frozen base.
+    """
+    fmt = _normalize_format(fmt)
+
+    dirty_upper_body_retain_hp = _clamp(_DIRTY_UPPER_BODY_RETAIN_HP_HZ, 260.0, 300.0)
+    dirty_upper_body_retain_lp = _clamp(_DIRTY_UPPER_BODY_RETAIN_LP_HZ, 315.0, 350.0)
+    if dirty_upper_body_retain_lp <= dirty_upper_body_retain_hp + 25.0:
+        dirty_upper_body_retain_lp = dirty_upper_body_retain_hp + 25.0
+
+    dirty_upper_body_retain_f = _clamp(_DIRTY_UPPER_BODY_RETAIN_F, 295.0, 320.0)
+    dirty_upper_body_retain_shape_g = _clamp(_DIRTY_UPPER_BODY_RETAIN_SHAPE_G, 0.0, 0.5)
+    dirty_upper_body_retain_shape_w = _clamp(_DIRTY_UPPER_BODY_RETAIN_SHAPE_W, 0.70, 1.30)
+    dirty_upper_body_retain_trim = _clamp(_DIRTY_UPPER_BODY_RETAIN_TRIM, 0.0, 0.02)
+
+    parts = []
+
+    if _DIRTY_UPPER_BODY_RETAIN_ON and dirty_upper_body_retain_trim > 0.0:
+        parts.append(
+            f"[0:a]"
+            f"highpass=f={dirty_upper_body_retain_hp}:width=0.707,"
+            f"lowpass=f={dirty_upper_body_retain_lp}:width=0.707,"
+            f"equalizer=f={dirty_upper_body_retain_f}:t=q:w={dirty_upper_body_retain_shape_w}:g={dirty_upper_body_retain_shape_g},"
+            f"volume={dirty_upper_body_retain_trim}"
+            f"[out]"
+        )
+    else:
+        parts.append("[0:a]volume=0[out]")
+
+    fc = ";".join(parts)
+
+    out_args, out_name, _mime = _out_args(fmt)
+    out_name = f"dirty_upper_body_retain_{out_name}"
+    out_path = os.path.join(td, out_name)
+
+    cmd = (
+        f'ffmpeg -y -hide_banner -i {shlex.quote(in_path)} '
+        f'-filter_complex "{fc}" -map "[out]" '
+        f'{out_args} {shlex.quote(out_path)}'
+    )
+    _run(cmd)
+    return out_path, out_name
+
+
 # ---------------------------
 # NORMALIZERS
 # ---------------------------
@@ -551,6 +674,19 @@ _LS_UPPER_BODY_TRANSITION_F = float(os.getenv("LS_UPPER_BODY_TRANSITION_F", "312
 _LS_UPPER_BODY_TRANSITION_SHAPE_G = float(os.getenv("LS_UPPER_BODY_TRANSITION_SHAPE_G", "0.18"))
 _LS_UPPER_BODY_TRANSITION_SHAPE_W = float(os.getenv("LS_UPPER_BODY_TRANSITION_SHAPE_W", "1.00"))
 _LS_UPPER_BODY_TRANSITION_TRIM = float(os.getenv("LS_UPPER_BODY_TRANSITION_TRIM", "0.014"))
+
+# ---------------------------
+# DIRTY-DENSE OVERLAY / UPPER BODY RETAIN
+# overlay-only, never global
+# ---------------------------
+
+_DIRTY_UPPER_BODY_RETAIN_ON = (os.getenv("DIRTY_UPPER_BODY_RETAIN_ON", "1").strip() == "1")
+_DIRTY_UPPER_BODY_RETAIN_HP_HZ = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_HP_HZ", "280"))
+_DIRTY_UPPER_BODY_RETAIN_LP_HZ = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_LP_HZ", "330"))
+_DIRTY_UPPER_BODY_RETAIN_F = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_F", "308"))
+_DIRTY_UPPER_BODY_RETAIN_SHAPE_G = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_SHAPE_G", "0.16"))
+_DIRTY_UPPER_BODY_RETAIN_SHAPE_W = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_SHAPE_W", "0.95"))
+_DIRTY_UPPER_BODY_RETAIN_TRIM = float(os.getenv("DIRTY_UPPER_BODY_RETAIN_TRIM", "0.010"))
 
 
 def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
@@ -707,6 +843,7 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
     )
     _run(cmd)
     return out_path, out_name
+
 # ---------------------------
 # REVEAL / PRESENCE / MID-AIR BRANCH
 # donor only, pre-limiter
@@ -1017,6 +1154,7 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     _run(cmd)
     return out_path, out_name
+
 # ---------------------------
 # POLISH / ENHANCE BRANCH
 # branch-only donor
@@ -1803,24 +1941,47 @@ def _build_polish_reveal_subgroup(polish_path: str, reveal_path: str, td: str) -
     return subgroup_path
 
 
-def _add_low_support_structural(subgroup_path: str, low_support_path: str, td: str) -> str:
+def _add_low_support_structural(
+    subgroup_path: str,
+    low_support_path: str,
+    td: str,
+    dirty_upper_body_retain_path: str | None = None,
+) -> str:
     prepost_path = os.path.join(td, "full_product_prepost.wav")
 
     low_gain_db = _clamp(_BLEND_LOW_GAIN_DB, -36.0, 6.0)
 
-    fc = (
-        f"[0:a]volume=1[subgroup];"
-        f"[1:a]volume={low_gain_db}dB[low];"
-        f"[subgroup][low]amix=inputs=2:normalize=0[out]"
-    )
+    if dirty_upper_body_retain_path:
+        fc = (
+            f"[0:a]volume=1[subgroup];"
+            f"[1:a]volume={low_gain_db}dB[low];"
+            f"[2:a]volume=1[dirty_ubr];"
+            f"[subgroup][low][dirty_ubr]amix=inputs=3:normalize=0[out]"
+        )
 
-    cmd = (
-        f'ffmpeg -y -hide_banner '
-        f'-i {shlex.quote(subgroup_path)} '
-        f'-i {shlex.quote(low_support_path)} '
-        f'-filter_complex "{fc}" -map "[out]" '
-        f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(prepost_path)}'
-    )
+        cmd = (
+            f'ffmpeg -y -hide_banner '
+            f'-i {shlex.quote(subgroup_path)} '
+            f'-i {shlex.quote(low_support_path)} '
+            f'-i {shlex.quote(dirty_upper_body_retain_path)} '
+            f'-filter_complex "{fc}" -map "[out]" '
+            f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(prepost_path)}'
+        )
+    else:
+        fc = (
+            f"[0:a]volume=1[subgroup];"
+            f"[1:a]volume={low_gain_db}dB[low];"
+            f"[subgroup][low]amix=inputs=2:normalize=0[out]"
+        )
+
+        cmd = (
+            f'ffmpeg -y -hide_banner '
+            f'-i {shlex.quote(subgroup_path)} '
+            f'-i {shlex.quote(low_support_path)} '
+            f'-filter_complex "{fc}" -map "[out]" '
+            f'-ar 48000 -ac 2 -c:a pcm_s16le {shlex.quote(prepost_path)}'
+        )
+
     _run(cmd)
     return prepost_path
 
@@ -1845,6 +2006,10 @@ def _render_full_product_staged(in_path: str, tone: str, intensity: str, fmt: st
     tone = _normalize_tone(tone)
     intensity = _normalize_intensity(intensity)
     fmt = _normalize_format(fmt)
+
+    # --- detect dirty-dense conservatively from input only ---
+    input_profile = _analyze_input_profile(in_path, td)
+    dirty_dense_mode = _is_dirty_dense_input(input_profile)
 
     polish_wav, _ = _render_polish_branch(
         in_path=in_path,
@@ -1876,10 +2041,19 @@ def _render_full_product_staged(in_path: str, tone: str, intensity: str, fmt: st
         td=td,
     )
 
+    dirty_upper_body_retain_wav = None
+    if dirty_dense_mode:
+        dirty_upper_body_retain_wav, _ = _render_dirty_upper_body_retain(
+            in_path=in_path,
+            fmt="wav16",
+            td=td,
+        )
+
     full_product_prepost_wav = _add_low_support_structural(
         subgroup_path=presentation_subgroup_wav,
         low_support_path=low_support_wav,
         td=td,
+        dirty_upper_body_retain_path=dirty_upper_body_retain_wav,
     )
 
     out_path, out_name = _render_post_stage(
