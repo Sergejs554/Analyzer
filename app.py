@@ -498,15 +498,15 @@ def _is_dirty_dense_input(profile: dict) -> bool:
     near_clip_ratio = _safe_float(profile.get("near_clip_ratio"))
     limiter_stress_proxy = _safe_float(profile.get("limiter_stress_proxy"))
 
-    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300"))
-    low_body_150_300 = _safe_float(profile.get("low_body_150_300"))
-    body_150_400 = _safe_float(profile.get("body_150_400"))
-    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400"))
-    mud_200_500 = _safe_float(profile.get("mud_200_500"))
+    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300_db"))
+    low_body_150_300 = _safe_float(profile.get("low_body_150_300_db"))
+    body_150_400 = _safe_float(profile.get("body_150_400_db"))
+    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400_db"))
+    mud_200_500 = _safe_float(profile.get("mud_200_500_db"))
 
-    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k"))
-    presence_2k_5k = _safe_float(profile.get("presence_2k_5k"))
-    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k"))
+    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k_db"))
+    presence_2k_5k = _safe_float(profile.get("presence_2k_5k_db"))
+    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k_db"))
     harshness_index = _safe_float(profile.get("harshness_index"))
 
     hot_dense_gate = any([
@@ -544,7 +544,6 @@ def _is_dirty_dense_input(profile: dict) -> bool:
         and hot_edge_flags >= 1
     )
 
-
 def _dirty_dense_debug_payload(in_path: str, td: str) -> dict:
     profile = _analyze_input_profile(in_path, td)
 
@@ -553,15 +552,15 @@ def _dirty_dense_debug_payload(in_path: str, td: str) -> dict:
     near_clip_ratio = _safe_float(profile.get("near_clip_ratio"))
     limiter_stress_proxy = _safe_float(profile.get("limiter_stress_proxy"))
 
-    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300"))
-    low_body_150_300 = _safe_float(profile.get("low_body_150_300"))
-    body_150_400 = _safe_float(profile.get("body_150_400"))
-    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400"))
-    mud_200_500 = _safe_float(profile.get("mud_200_500"))
+    lowmid_120_300 = _safe_float(profile.get("lowmid_120_300_db"))
+    low_body_150_300 = _safe_float(profile.get("low_body_150_300_db"))
+    body_150_400 = _safe_float(profile.get("body_150_400_db"))
+    lowmid_buildup_200_400 = _safe_float(profile.get("lowmid_buildup_200_400_db"))
+    mud_200_500 = _safe_float(profile.get("mud_200_500_db"))
 
-    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k"))
-    presence_2k_5k = _safe_float(profile.get("presence_2k_5k"))
-    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k"))
+    harsh_2p5k_6k = _safe_float(profile.get("harsh_2p5k_6k_db"))
+    presence_2k_5k = _safe_float(profile.get("presence_2k_5k_db"))
+    sibilance_5k_9k = _safe_float(profile.get("sibilance_5k_9k_db"))
     harshness_index = _safe_float(profile.get("harshness_index"))
 
     hot_dense_gate_reasons = {
