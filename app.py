@@ -544,6 +544,14 @@ _LS_BODY_BRIDGE_SHAPE_G = float(os.getenv("LS_BODY_BRIDGE_SHAPE_G", "0.22"))
 _LS_BODY_BRIDGE_SHAPE_W = float(os.getenv("LS_BODY_BRIDGE_SHAPE_W", "1.10"))
 _LS_BODY_BRIDGE_TRIM = float(os.getenv("LS_BODY_BRIDGE_TRIM", "0.012"))
 
+_LS_UPPER_BODY_TRANSITION_ON = (os.getenv("LS_UPPER_BODY_TRANSITION_ON", "1").strip() == "1")
+_LS_UPPER_BODY_TRANSITION_HP_HZ = float(os.getenv("LS_UPPER_BODY_TRANSITION_HP_HZ", "270"))
+_LS_UPPER_BODY_TRANSITION_LP_HZ = float(os.getenv("LS_UPPER_BODY_TRANSITION_LP_HZ", "350"))
+_LS_UPPER_BODY_TRANSITION_F = float(os.getenv("LS_UPPER_BODY_TRANSITION_F", "312"))
+_LS_UPPER_BODY_TRANSITION_SHAPE_G = float(os.getenv("LS_UPPER_BODY_TRANSITION_SHAPE_G", "0.18"))
+_LS_UPPER_BODY_TRANSITION_SHAPE_W = float(os.getenv("LS_UPPER_BODY_TRANSITION_SHAPE_W", "1.00"))
+_LS_UPPER_BODY_TRANSITION_TRIM = float(os.getenv("LS_UPPER_BODY_TRANSITION_TRIM", "0.010"))
+
 
 def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
     tone = _normalize_tone(tone)
@@ -605,8 +613,18 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
     bridge_shape_w = _clamp(_LS_BODY_BRIDGE_SHAPE_W, 0.60, 1.80)
     bridge_trim = _clamp(_LS_BODY_BRIDGE_TRIM, 0.0, 0.03)
 
+    upper_body_transition_hp = _clamp(_LS_UPPER_BODY_TRANSITION_HP_HZ, 240.0, 300.0)
+    upper_body_transition_lp = _clamp(_LS_UPPER_BODY_TRANSITION_LP_HZ, 330.0, 390.0)
+    if upper_body_transition_lp <= upper_body_transition_hp + 30.0:
+        upper_body_transition_lp = upper_body_transition_hp + 30.0
+
+    upper_body_transition_f = _clamp(_LS_UPPER_BODY_TRANSITION_F, 290.0, 330.0)
+    upper_body_transition_shape_g = _clamp(_LS_UPPER_BODY_TRANSITION_SHAPE_G, 0.0, 0.6)
+    upper_body_transition_shape_w = _clamp(_LS_UPPER_BODY_TRANSITION_SHAPE_W, 0.70, 1.40)
+    upper_body_transition_trim = _clamp(_LS_UPPER_BODY_TRANSITION_TRIM, 0.0, 0.025)
+
     parts = []
-    parts.append("[0:a]asplit=2[ls_main_in][ls_bridge_in]")
+    parts.append("[0:a]asplit=3[ls_main_in][ls_bridge_in][ls_ubt_in]")
 
     # foundation stage
     parts.append(
@@ -656,8 +674,20 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
     else:
         parts.append("[ls_bridge_in]volume=0[ls_bridge]")
 
+    # upper body transition helper
+    if _LS_UPPER_BODY_TRANSITION_ON and upper_body_transition_trim > 0.0:
+        parts.append(
+            f"[ls_ubt_in]"
+            f"highpass=f={upper_body_transition_hp}:width=0.707,"
+            f"lowpass=f={upper_body_transition_lp}:width=0.707,"
+            f"equalizer=f={upper_body_transition_f}:t=q:w={upper_body_transition_shape_w}:g={upper_body_transition_shape_g},"
+            f"volume={upper_body_transition_trim}[ls_ubt]"
+        )
+    else:
+        parts.append("[ls_ubt_in]volume=0[ls_ubt]")
+
     # final output stage
-    parts.append("[ls_tame][ls_bridge]amix=inputs=2:normalize=0[ls_sum]")
+    parts.append("[ls_tame][ls_bridge][ls_ubt]amix=inputs=3:normalize=0[ls_sum]")
 
     if abs(output_trim_db) > 1e-9:
         parts.append(f"[ls_sum]volume={output_trim_db}dB[out]")
