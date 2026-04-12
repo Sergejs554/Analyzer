@@ -127,8 +127,8 @@ def _collect_stage_metrics(in_path: str) -> Dict[str, Optional[float]]:
 
 def _extract_input_profile_from_analysis(input_path: str, td: str) -> Dict[str, Any]:
     """
-    Берём ту же идею, что уже была в app.py:
-    рендерим neutral probe wav и читаем report['before'] из run_analysis.
+    Берём rich metric set из текущего analyze_mastering.run_analysis.
+    Сохраняем probe wav и читаем report['before'].
     """
     out_dir = os.path.join(td, "sm_metric_probe")
     os.makedirs(out_dir, exist_ok=True)
@@ -157,53 +157,75 @@ def _get_metric(src: Dict[str, Any], key: str, fallback: Optional[float] = None)
 
 def collect_sm_metrics(input_path: str) -> AnalysisMetrics:
     """
-    Первая рабочая версия.
-    1. Пытается вытащить rich metric set из analyze_mastering.run_analysis
-    2. Дозаполняет базовые loudness/crest/plr через ffmpeg, если чего-то нет
+    Финальный production metric set для V1.
+    1. Тянем rich metrics из текущего analyze_mastering
+    2. Добираем базовые loudness / crest / plr через ffmpeg как fallback
     """
     with tempfile.TemporaryDirectory() as td:
-        profile = {}
         try:
             profile = _extract_input_profile_from_analysis(input_path, td)
         except Exception:
             profile = {}
 
-        stage = {}
         try:
             stage = _collect_stage_metrics(input_path)
         except Exception:
             stage = {}
 
         return AnalysisMetrics(
+            # Body / support
             body_150_400_db=_get_metric(profile, "body_150_400_db"),
             low_body_150_300_db=_get_metric(profile, "low_body_150_300_db"),
             lowmid_120_300_db=_get_metric(profile, "lowmid_120_300_db"),
 
+            # Buildup / mud
             lowmid_buildup_200_400_db=_get_metric(profile, "lowmid_buildup_200_400_db"),
             mud_200_500_db=_get_metric(profile, "mud_200_500_db"),
             mud_to_body_db=_get_metric(profile, "mud_to_body_db"),
             lowmid_buildup_ratio_db=_get_metric(profile, "lowmid_buildup_ratio_db"),
 
+            # Bass/body connection
             bass_to_body_db=_get_metric(profile, "bass_to_body_db"),
             low_foundation_ratio_db=_get_metric(profile, "low_foundation_ratio_db"),
             sub_to_body_db=_get_metric(profile, "sub_to_body_db"),
             low_foundation_50_100_db=_get_metric(profile, "low_foundation_50_100_db"),
             bass_60_120_db=_get_metric(profile, "bass_60_120_db"),
 
+            # Mid / projection handoff
             mid_1k_2k_db=_get_metric(profile, "mid_1k_2k_db"),
             presence_2k_5k_db=_get_metric(profile, "presence_2k_5k_db"),
             presence_to_body_db=_get_metric(profile, "presence_to_body_db"),
 
+            # Harsh / sibilance
             harsh_2p5k_6k_db=_get_metric(profile, "harsh_2p5k_6k_db"),
             harshness_index=_get_metric(profile, "harshness_index"),
             harsh_to_mid_db=_get_metric(profile, "harsh_to_mid_db"),
-
             sibilance_5k_9k_db=_get_metric(profile, "sibilance_5k_9k_db"),
             sibilance_index=_get_metric(profile, "sibilance_index"),
 
+            # Air / top contour
+            air_8k_12k_db=_get_metric(profile, "air_8k_12k_db"),
+            air_8k_16k_db=_get_metric(profile, "air_8k_16k_db"),
+            air16_to_body_db=_get_metric(profile, "air16_to_body_db"),
+            air_ratio_db=_get_metric(profile, "air_ratio_db"),
+            tilt_indicator_db=_get_metric(profile, "tilt_indicator_db"),
+
+            # Dynamics / delivery
             crest_db=_get_metric(profile, "crest_db", stage.get("crest_db")),
             punch_proxy=_get_metric(profile, "punch_proxy"),
             plr_proxy_db=_get_metric(profile, "plr_proxy_db", stage.get("plr_proxy_db")),
             integrated_lufs=_get_metric(profile, "integrated_lufs", stage.get("integrated_lufs")),
             true_peak_dbtp=_get_metric(profile, "true_peak_dbtp", stage.get("true_peak_dbtp")),
+
+            # Stress / context
+            near_clip_ratio=_get_metric(profile, "near_clip_ratio"),
+            limiter_stress_proxy=_get_metric(profile, "limiter_stress_proxy"),
+            transient_index=_get_metric(profile, "transient_index"),
+            momentary_to_integrated_gap_db=_get_metric(profile, "momentary_to_integrated_gap_db"),
+            short_term_to_integrated_gap_db=_get_metric(profile, "short_term_to_integrated_gap_db"),
+
+            # Useful extras
+            rms_dbfs=_get_metric(profile, "rms_dbfs", stage.get("rms_dbfs")),
+            sample_peak_dbfs=_get_metric(profile, "sample_peak_dbfs", stage.get("sample_peak_dbfs")),
+            lra_ebu=_get_metric(profile, "lra_ebu", stage.get("lra_ebu")),
         )
