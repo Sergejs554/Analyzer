@@ -14,6 +14,7 @@ import time
 from analyze_mastering import run_analysis
 from auto_analysis import analyze_sections
 from smart_auto import decide_smart_params_with_sections, build_smart_chain
+from dataclasses import asdict
 from sm.entry import render_sm_branch_v1
 
 app = Flask(__name__)
@@ -2497,6 +2498,7 @@ def root():
             "/bakuage_branch",
             "/enhance_branch",
             "/bandlab_diagnostics",
+            "/sm_debug",
         ]
     })
 
@@ -2711,6 +2713,44 @@ def dirty_debug_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.get("/sm_debug")
+def sm_debug_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    use_neutral_preclean = (request.args.get("preclean", "1").strip() == "1")
+    enable_afftdn = (request.args.get("afftdn", "0").strip() == "1")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, dbg = _dl_to_named(td, "file", url)
+
+            sm_bundle = render_sm_branch_v1(
+                input_path=in_path,
+                tone=tone,
+                intensity=intensity,
+                fmt=fmt,
+                td=td,
+                use_neutral_preclean=use_neutral_preclean,
+                enable_afftdn=enable_afftdn,
+            )
+
+            return jsonify({
+                "ok": True,
+                "mode": "sm_debug",
+                "debug": dbg,
+                "sm": asdict(sm_bundle),
+            })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.get("/bandlab_diagnostics")
 def bandlab_diagnostics_route():
