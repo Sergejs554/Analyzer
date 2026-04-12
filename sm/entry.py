@@ -9,6 +9,8 @@ def render_sm_branch_v1(
     intensity: str,
     fmt: str,
     td: str,
+    use_neutral_preclean: bool = True,
+    enable_afftdn: bool = False,
 ):
     return render_sm_core_v1(
         input_path=input_path,
@@ -16,5 +18,6 @@ def render_sm_branch_v1(
         intensity=intensity,
         fmt=fmt,
         td=td,
-        use_neutral_preclean=True,
+        use_neutral_preclean=use_neutral_preclean,
+        enable_afftdn=enable_afftdn,
     )
