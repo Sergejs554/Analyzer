@@ -69,10 +69,17 @@ class AnalysisMetrics:
     momentary_to_integrated_gap_db: Optional[float] = None
     short_term_to_integrated_gap_db: Optional[float] = None
 
-    # Optional useful extras from existing analyzer
+    # Useful extras
     rms_dbfs: Optional[float] = None
     sample_peak_dbfs: Optional[float] = None
     lra_ebu: Optional[float] = None
+
+
+@dataclass
+class DerivedIndicators:
+    center_body_support_proxy: Optional[float] = None
+    body_to_mid_handoff_proxy: Optional[float] = None
+    top_push_safety_proxy: Optional[float] = None
 
 
 @dataclass
@@ -130,6 +137,7 @@ class ProjectionPacket:
 @dataclass
 class SmartMasterAnalysis:
     metrics: AnalysisMetrics
+    derived: DerivedIndicators
     anchor: AnchorPacket
     bridge: BridgePacket
     cleanup: CleanupPacket
