@@ -14,6 +14,7 @@ import time
 from analyze_mastering import run_analysis
 from auto_analysis import analyze_sections
 from smart_auto import decide_smart_params_with_sections, build_smart_chain
+from sm.entry import render_sm_branch_v1
 
 app = Flask(__name__)
 
