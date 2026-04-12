@@ -2,6 +2,7 @@
 
 from .contracts import (
     AnalysisMetrics,
+    DerivedIndicators,
     AnchorPacket,
     BridgePacket,
     CleanupPacket,
@@ -72,6 +73,70 @@ def _risk_from_low_bad(v, medium_at, high_at) -> RiskLevel:
     if v <= medium_at:
         return RiskLevel.MEDIUM
     return RiskLevel.LOW
+
+
+def _clamp01(x: float) -> float:
+    if x < 0.0:
+        return 0.0
+    if x > 1.0:
+        return 1.0
+    return x
+
+
+def _norm(v, lo, hi) -> float:
+    if v is None:
+        return 0.5
+    if hi <= lo:
+        return 0.5
+    return _clamp01((v - lo) / (hi - lo))
+
+
+def build_derived_indicators(metrics: AnalysisMetrics) -> DerivedIndicators:
+    body = metrics.body_150_400_db
+    low_body = metrics.low_body_150_300_db
+    mid = metrics.mid_1k_2k_db
+    presence_to_body = metrics.presence_to_body_db
+    mud_to_body = metrics.mud_to_body_db
+    lowmid = metrics.lowmid_120_300_db
+
+    harshness_index = metrics.harshness_index
+    sibilance_index = metrics.sibilance_index
+    harsh_to_mid = metrics.harsh_to_mid_db
+    air16_to_body = metrics.air16_to_body_db
+    near_clip_ratio = metrics.near_clip_ratio
+    limiter_stress = metrics.limiter_stress_proxy
+    true_peak = metrics.true_peak_dbtp
+
+    center_body_support_proxy = (
+        0.34 * _norm(body, 29.5, 35.0)
+        + 0.24 * _norm(low_body, 29.0, 34.5)
+        + 0.22 * _norm(mid, 17.8, 20.8)
+        + 0.20 * (1.0 - _norm(presence_to_body, -18.5, -13.5))
+    )
+
+    body_to_mid_handoff_proxy = (
+        0.28 * _norm(lowmid, 30.5, 34.5)
+        + 0.24 * _norm(mid, 17.8, 20.8)
+        + 0.24 * (1.0 - _norm(mud_to_body, -0.6, 0.5))
+        + 0.24 * (1.0 - _norm(presence_to_body, -18.5, -13.5))
+    )
+
+    top_push_penalty = (
+        0.22 * _norm(harshness_index, -15.0, -10.5)
+        + 0.18 * _norm(sibilance_index, 0.0, 4.5)
+        + 0.14 * _norm(harsh_to_mid, -3.0, -0.1)
+        + 0.14 * _norm(air16_to_body, -24.0, -15.0)
+        + 0.12 * _norm(near_clip_ratio, 0.0, 0.0010)
+        + 0.12 * _norm(limiter_stress, 1.00, 1.45)
+        + 0.08 * _norm(true_peak, -0.5, 1.0)
+    )
+    top_push_safety_proxy = 1.0 - _clamp01(top_push_penalty)
+
+    return DerivedIndicators(
+        center_body_support_proxy=center_body_support_proxy,
+        body_to_mid_handoff_proxy=body_to_mid_handoff_proxy,
+        top_push_safety_proxy=top_push_safety_proxy,
+    )
 
 
 def _infer_anchor_state(metrics: AnalysisMetrics, notes: list[str]) -> AnchorState:
@@ -154,12 +219,17 @@ def _infer_anchor_fragility(metrics: AnalysisMetrics, state: AnchorState) -> Ris
     return risk
 
 
-def build_anchor_packet(metrics: AnalysisMetrics) -> AnchorPacket:
+def build_anchor_packet(metrics: AnalysisMetrics, derived: DerivedIndicators) -> AnchorPacket:
     notes: list[str] = []
 
     state = _infer_anchor_state(metrics, notes)
     foundation_present = _infer_foundation_present(metrics, notes)
     fragility = _infer_anchor_fragility(metrics, state)
+
+    if derived.center_body_support_proxy is not None and derived.center_body_support_proxy < 0.34:
+        if fragility == RiskLevel.LOW:
+            fragility = RiskLevel.MEDIUM
+        notes.append("anchor fragility raised by weak center-body support proxy")
 
     stop = _count(
         _lt(metrics.body_150_400_db, 29.3),
@@ -185,7 +255,7 @@ def build_anchor_packet(metrics: AnalysisMetrics) -> AnchorPacket:
     )
 
 
-def build_bridge_packet(metrics: AnalysisMetrics) -> BridgePacket:
+def build_bridge_packet(metrics: AnalysisMetrics, derived: DerivedIndicators) -> BridgePacket:
     notes: list[str] = []
 
     bass_to_body = metrics.bass_to_body_db
@@ -209,6 +279,11 @@ def build_bridge_packet(metrics: AnalysisMetrics) -> BridgePacket:
         _risk_from_high_bad(buildup, 33.5, 35.0),
         _risk_from_high_bad(lowmid, 34.0, 35.0),
     )
+
+    if derived.body_to_mid_handoff_proxy is not None and derived.body_to_mid_handoff_proxy < 0.36:
+        if gap_risk == RiskLevel.LOW:
+            gap_risk = RiskLevel.MEDIUM
+        notes.append("bridge gap risk raised by weak handoff proxy")
 
     broken_votes = _count(
         gap_risk == RiskLevel.HIGH,
@@ -254,7 +329,7 @@ def build_bridge_packet(metrics: AnalysisMetrics) -> BridgePacket:
     )
 
 
-def build_cleanup_packet(metrics: AnalysisMetrics) -> CleanupPacket:
+def build_cleanup_packet(metrics: AnalysisMetrics, derived: DerivedIndicators) -> CleanupPacket:
     notes: list[str] = []
 
     body = metrics.body_150_400_db
@@ -275,6 +350,11 @@ def build_cleanup_packet(metrics: AnalysisMetrics) -> CleanupPacket:
         _risk_from_low_bad(body, 31.2, 29.8),
         _risk_from_low_bad(low_body, 31.0, 29.8),
     )
+
+    if derived.center_body_support_proxy is not None and derived.center_body_support_proxy < 0.40:
+        if body_protection_need == RiskLevel.LOW:
+            body_protection_need = RiskLevel.MEDIUM
+        notes.append("cleanup body protection raised by weak center-body support proxy")
 
     deny_votes = _count(
         _lt(body, 29.8),
@@ -317,7 +397,7 @@ def build_cleanup_packet(metrics: AnalysisMetrics) -> CleanupPacket:
     )
 
 
-def build_guard_packet(metrics: AnalysisMetrics) -> GuardPacket:
+def build_guard_packet(metrics: AnalysisMetrics, derived: DerivedIndicators) -> GuardPacket:
     notes: list[str] = []
 
     mud_to_body = metrics.mud_to_body_db
@@ -343,12 +423,14 @@ def build_guard_packet(metrics: AnalysisMetrics) -> GuardPacket:
         _lt(lowmid, 30.8),
         _lt(mid, 18.3),
         _gt(presence_to_body, -14.7),
+        derived.body_to_mid_handoff_proxy is not None and derived.body_to_mid_handoff_proxy < 0.34,
     )
 
     weak_votes = _count(
         _lt(lowmid, 31.8),
         _lt(mid, 18.9),
         _gt(presence_to_body, -15.5),
+        derived.body_to_mid_handoff_proxy is not None and derived.body_to_mid_handoff_proxy < 0.44,
     )
 
     if thinning_votes >= 2:
@@ -367,6 +449,10 @@ def build_guard_packet(metrics: AnalysisMetrics) -> GuardPacket:
         _risk_from_high_bad(presence_to_body, -15.5, -14.6),
     )
 
+    if derived.body_to_mid_handoff_proxy is not None and derived.body_to_mid_handoff_proxy < 0.36:
+        thinning_risk = _max_risk(thinning_risk, RiskLevel.MEDIUM)
+        notes.append("guard thinning risk raised by weak handoff proxy")
+
     stop = transition_state == TransitionState.THINNING and thinning_risk == RiskLevel.HIGH
     warning = shape != UpperBodyShape.NATURAL or transition_state != TransitionState.STABLE
 
@@ -383,7 +469,7 @@ def build_guard_packet(metrics: AnalysisMetrics) -> GuardPacket:
     )
 
 
-def build_projection_packet(metrics: AnalysisMetrics) -> ProjectionPacket:
+def build_projection_packet(metrics: AnalysisMetrics, derived: DerivedIndicators) -> ProjectionPacket:
     notes: list[str] = []
 
     mid = metrics.mid_1k_2k_db
@@ -414,10 +500,20 @@ def build_projection_packet(metrics: AnalysisMetrics) -> ProjectionPacket:
         _risk_from_low_bad(crest, 12.8, 12.1),
     )
 
+    if derived.top_push_safety_proxy is not None:
+        if derived.top_push_safety_proxy < 0.34:
+            harshness_risk = _max_risk(harshness_risk, RiskLevel.HIGH)
+            sibilance_risk = _max_risk(sibilance_risk, RiskLevel.MEDIUM)
+            notes.append("top push safety proxy says unsafe")
+        elif derived.top_push_safety_proxy < 0.48:
+            harshness_risk = _max_risk(harshness_risk, RiskLevel.MEDIUM)
+            notes.append("top push safety proxy says guarded")
+
     underprojected_votes = _count(
         _lt(mid, 18.8),
         _lt(presence, 15.9),
         _lt(presence_to_body, -16.2),
+        derived.body_to_mid_handoff_proxy is not None and derived.body_to_mid_handoff_proxy < 0.46,
     )
 
     overpushed_votes = _count(
@@ -440,6 +536,7 @@ def build_projection_packet(metrics: AnalysisMetrics) -> ProjectionPacket:
     deny_votes = _count(
         harshness_risk == RiskLevel.HIGH and sibilance_risk == RiskLevel.HIGH,
         _lt(body, 30.0) and _gt(presence_to_body, -15.0),
+        derived.top_push_safety_proxy is not None and derived.top_push_safety_proxy < 0.30,
     )
 
     guarded_votes = _count(
@@ -447,6 +544,7 @@ def build_projection_packet(metrics: AnalysisMetrics) -> ProjectionPacket:
         sibilance_risk != RiskLevel.LOW,
         punch_safety != RiskLevel.LOW,
         _lt(body, 31.0),
+        derived.top_push_safety_proxy is not None and derived.top_push_safety_proxy < 0.50,
     )
 
     if deny_votes >= 1:
@@ -479,12 +577,13 @@ def build_projection_packet(metrics: AnalysisMetrics) -> ProjectionPacket:
 
 def analyze_sm_input(input_path: str) -> SmartMasterAnalysis:
     metrics = collect_sm_metrics(input_path)
+    derived = build_derived_indicators(metrics)
 
-    anchor = build_anchor_packet(metrics)
-    bridge = build_bridge_packet(metrics)
-    cleanup = build_cleanup_packet(metrics)
-    guard = build_guard_packet(metrics)
-    projection = build_projection_packet(metrics)
+    anchor = build_anchor_packet(metrics, derived)
+    bridge = build_bridge_packet(metrics, derived)
+    cleanup = build_cleanup_packet(metrics, derived)
+    guard = build_guard_packet(metrics, derived)
+    projection = build_projection_packet(metrics, derived)
 
     dense_behavior = (
         anchor.state != AnchorState.DEFICIENT
@@ -499,17 +598,20 @@ def analyze_sm_input(input_path: str) -> SmartMasterAnalysis:
         or bridge.state == BridgeState.BROKEN
         or anchor.fragility == RiskLevel.HIGH
         or cleanup.readiness in (CleanupReadiness.GUARDED, CleanupReadiness.DENIED)
+        or (derived.center_body_support_proxy is not None and derived.center_body_support_proxy < 0.36)
     )
 
     top_risk = (
         projection.harshness_risk == RiskLevel.HIGH
         or projection.sibilance_risk == RiskLevel.HIGH
+        or (derived.top_push_safety_proxy is not None and derived.top_push_safety_proxy < 0.42)
     )
 
     punch_fragile = projection.punch_safety in (RiskLevel.MEDIUM, RiskLevel.HIGH)
 
     return SmartMasterAnalysis(
         metrics=metrics,
+        derived=derived,
         anchor=anchor,
         bridge=bridge,
         cleanup=cleanup,
