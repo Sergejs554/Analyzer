@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
-
+from .primitive_instances import attach_primitive_instances_to_blueprint
 from ..contracts import SmartMasterAnalysis, SmartMasterExecutionBlueprint
 from ..enums import RoleName
 from .clamps import apply_dsp_clamps
@@ -345,9 +345,10 @@ def assemble_sm_dsp_blueprint(
     2. Apply inter-role DSP clamps
     3. Attach fixed topology graph
     """
-    blueprint = build_dsp_execution_blueprint(router_blueprint)
+        blueprint = build_dsp_execution_blueprint(router_blueprint)
     blueprint = apply_dsp_clamps(blueprint, analysis)
     blueprint = attach_graph_to_blueprint(blueprint)
+    blueprint = attach_primitive_instances_to_blueprint(blueprint, analysis)
 
     return replace(
         blueprint,
@@ -356,6 +357,7 @@ def assemble_sm_dsp_blueprint(
             + [
                 "assembler_completed",
                 "premium_v1_topology_attached",
+                "primitive_instances_ready",
             ]
         ),
     )
