@@ -196,3 +196,79 @@ class SmartMasterDebugBundle:
     analysis: SmartMasterAnalysis
     selection: RoleProfileSelection
     router: SmartMasterRouterSummary
+
+@dataclass
+class RoleExecutionPlan:
+    role: RoleName
+    enabled: bool
+
+    profile_name: str
+    role_rank: str              # primary / support / restrained / off
+    energy_class: str           # off / micro / mild / controlled / dense
+
+    requested_amount: float
+    requested_cap: float
+
+    execution_amount: float
+    execution_cap: float
+    dynamic_scale: float
+
+    target_band_mode: str
+    protection_mode: str
+
+    allowed_primitives: list[str]
+    forbidden_primitives: list[str]
+
+    interaction_tags: list[str]
+    notes: list[str]
+
+
+@dataclass
+class SmartMasterExecutionBlueprint:
+    anchor: RoleExecutionPlan
+    bridge: RoleExecutionPlan
+    cleanup: RoleExecutionPlan
+    guard: RoleExecutionPlan
+    projection: RoleExecutionPlan
+    spark: RoleExecutionPlan
+
+    primary_correction_lane: str
+    secondary_support_lane: str
+    primary_benefit_lane: str
+
+    assembly_order: list[str]
+    global_notes: list[str]
+
+
+@dataclass
+class RouterContext:
+    analysis: "SmartMasterAnalysis"
+    selection: "RoleProfileSelection"
+
+    primary_correction_lane: str
+    secondary_support_lane: str
+    primary_benefit_lane: str
+
+    top_safe: bool
+    top_guarded: bool
+    top_fragile: bool
+
+    body_fragile: bool
+    body_weak: bool
+    foundation_missing: bool
+
+    bridge_broken: bool
+    bridge_gluey: bool
+    bridge_gap_risky: bool
+
+    cleanup_heavy_needed: bool
+    cleanup_guarded: bool
+
+    boxy_active: bool
+    transition_fragile: bool
+    underprojected: bool
+    overpushed: bool
+
+    dirty_dense_candidate: bool
+    dense_good_candidate: bool
+    thin_candidate: bool
