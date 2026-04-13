@@ -9,6 +9,7 @@ from .selector import select_sm_profiles
 from .router import build_sm_router_summary
 from .contracts import SmartMasterDebugBundle
 from .precondition import build_neutral_preclean_chain
+from .dsp.assembler import assemble_sm_dsp_blueprint
 
 
 def _run(cmd: str) -> tuple[str, str]:
@@ -90,7 +91,6 @@ def render_sm_core_v1(
 
     analysis = analyze_sm_input(analysis_input_path)
 
-    # полезно зафиксировать прямо в debug bundle context
     analysis.global_flags["render_input_path"] = input_path
     analysis.global_flags["analysis_input_path"] = analysis_input_path
     analysis.global_flags["neutral_preclean_applied"] = bool(use_neutral_preclean)
@@ -101,11 +101,11 @@ def render_sm_core_v1(
 
     selection = select_sm_profiles(analysis, tone, intensity)
     router = build_sm_router_summary(analysis, selection)
+    dsp = assemble_sm_dsp_blueprint(analysis, router)
 
-    # Пока это debug-only stage.
-    # Реальный DSP render добавим позже после проверки analysis/selector/router.
     return SmartMasterDebugBundle(
         analysis=analysis,
         selection=selection,
         router=router,
+        dsp=dsp,
     )
