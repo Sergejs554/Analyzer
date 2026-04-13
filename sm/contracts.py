@@ -250,3 +250,4 @@ class SmartMasterDebugBundle:
     analysis: SmartMasterAnalysis
     selection: RoleProfileSelection
     router: SmartMasterExecutionBlueprint
+    dsp: Any | None = None
