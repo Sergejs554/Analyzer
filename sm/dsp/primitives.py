@@ -208,15 +208,15 @@ PRIMITIVE_REGISTRY: Dict[str, DSPPrimitiveSpec] = {
             "Harshness restraint, not broad presence removal.",
         ],
     ),
-    "local_desibilance_control": _spec(
+        "local_desibilance_control": _spec(
         primitive_name="local_desibilance_control",
         primitive_class="dynamic_sibilance_control",
-        path_type="inplace",
+        path_type="finish",
         band_scope="top",
         channel_scope="stereo",
         detector_mode="band_envelope",
         phase_policy="minimum",
-        legal_roles=[RoleName.PROJECTION, RoleName.SPARK],
+        legal_roles=[RoleName.SPARK],
         safety_tags=["top_sensitive", "finish_sensitive"],
         min_amount=0.04,
         default_amount=0.16,
@@ -233,8 +233,8 @@ PRIMITIVE_REGISTRY: Dict[str, DSPPrimitiveSpec] = {
         min_release_ms=12.0,
         max_release_ms=180.0,
         notes=[
-            "Top safety restraint.",
-            "Should follow projection/spark local excitement if needed.",
+            "Finish-local top safety restraint.",
+            "Used only inside spark finish layer in V1.",
         ],
     ),
 
