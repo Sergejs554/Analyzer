@@ -100,7 +100,7 @@ def render_sm_core_v1(
     analysis.global_flags["fmt"] = fmt
 
     selection = select_sm_profiles(analysis, tone, intensity)
-    router = build_sm_router_summary(selection)
+    router = build_sm_router_summary(analysis, selection)
 
     # Пока это debug-only stage.
     # Реальный DSP render добавим позже после проверки analysis/selector/router.
