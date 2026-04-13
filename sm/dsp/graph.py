@@ -13,16 +13,11 @@ from .contracts import (
     RoleDSPStack,
 )
 from .role_specs import (
-    NODE_ANCHOR_OUT,
-    NODE_BRIDGE_OUT,
     NODE_CLEANUP_OUT,
     NODE_FINISH_OUT,
     NODE_GUARD_OUT,
     NODE_PREPARED_INPUT,
-    NODE_PROJECTION_ASSIST_OUT,
-    NODE_PROJECTION_CONTOUR_OUT,
     NODE_PROJECTION_OUT,
-    NODE_SPARK_OUT,
     NODE_SUPPORT_BUS,
     NODE_SUPPORT_OUT,
 )
@@ -80,6 +75,14 @@ def _collect_role_stacks(*stacks: Optional[RoleDSPStack]) -> List[RoleDSPStack]:
     return out
 
 
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def _safe_blend(x: float) -> float:
+    return _clamp(x, 0.0, 1.0)
+
+
 def _passthrough_recombine(
     recombine_name: str,
     source_node: str,
@@ -104,6 +107,8 @@ def _single_source_recombine(
     target_node: str,
     recombine_mode: str,
     *,
+    gain_db: float = 0.0,
+    blend: float = 1.0,
     safety_tags: Optional[List[str]] = None,
     active_clamps: Optional[List[str]] = None,
     notes: Optional[List[str]] = None,
@@ -113,8 +118,8 @@ def _single_source_recombine(
         recombine_mode=recombine_mode,
         source_nodes=[source_node],
         target_node=target_node,
-        gain_db=0.0,
-        blend=1.0,
+        gain_db=gain_db,
+        blend=_safe_blend(blend),
         safety_tags=safety_tags or [],
         active_clamps=active_clamps or [],
         notes=notes or [],
@@ -139,7 +144,7 @@ def _multi_source_recombine(
         source_nodes=source_nodes,
         target_node=target_node,
         gain_db=gain_db,
-        blend=blend,
+        blend=_safe_blend(blend),
         safety_tags=safety_tags or [],
         active_clamps=active_clamps or [],
         notes=notes or [],
@@ -249,6 +254,7 @@ def _build_guard_stage(
 def _build_support_stage(
     anchor_stack: Optional[RoleDSPStack],
     bridge_stack: Optional[RoleDSPStack],
+    support_recombine_gain_db: float,
 ) -> DSPStagePlan:
     stacks = _collect_role_stacks(anchor_stack, bridge_stack)
     safety_tags = _collect_safety_tags(anchor_stack, bridge_stack)
@@ -280,9 +286,14 @@ def _build_support_stage(
                 support_sources,
                 NODE_SUPPORT_BUS,
                 "guarded_sum",
+                gain_db=0.0,
+                blend=1.0,
                 safety_tags=safety_tags,
                 active_clamps=active_clamps,
-                notes=["support layers summed into dedicated support bus"],
+                notes=[
+                    "support layers summed into dedicated support bus",
+                    "support bus collects micro-hold layers before guarded reinjection",
+                ],
             )
         )
         recombines.append(
@@ -291,12 +302,18 @@ def _build_support_stage(
                 [NODE_GUARD_OUT, NODE_SUPPORT_BUS],
                 NODE_SUPPORT_OUT,
                 "guarded_sum",
+                gain_db=support_recombine_gain_db,
+                blend=1.0,
                 safety_tags=safety_tags,
                 active_clamps=active_clamps,
-                notes=["support bus recombined under guard-aware constraints"],
+                notes=[
+                    "support bus recombined under guard-aware constraints",
+                    f"support_recombine_gain_db={support_recombine_gain_db}",
+                ],
             )
         )
         notes.append("anchor and bridge run as disciplined parallel support")
+        notes.append(f"support recombine gain applied: {support_recombine_gain_db} dB")
 
     return DSPStagePlan(
         stage_name="support_assembly",
@@ -315,6 +332,7 @@ def _build_support_stage(
 def _build_projection_stage(
     projection_contour_stack: Optional[RoleDSPStack],
     projection_assist_stack: Optional[RoleDSPStack],
+    projection_assist_blend: float,
 ) -> DSPStagePlan:
     stacks = _collect_role_stacks(projection_contour_stack, projection_assist_stack)
     safety_tags = _collect_safety_tags(projection_contour_stack, projection_assist_stack)
@@ -358,12 +376,18 @@ def _build_projection_stage(
                 [projection_contour_stack.output_node, projection_assist_stack.output_node],
                 NODE_PROJECTION_OUT,
                 "assist_sum",
+                gain_db=0.0,
+                blend=projection_assist_blend,
                 safety_tags=safety_tags,
                 active_clamps=active_clamps,
-                notes=["projection contour and assist recombined under protected blend"],
+                notes=[
+                    "projection contour and assist recombined under protected blend",
+                    f"projection_assist_blend={projection_assist_blend}",
+                ],
             )
         )
         notes.append("projection runs as contour + assist split architecture")
+        notes.append(f"projection assist blend applied: {projection_assist_blend}")
     else:
         recombines.append(
             _multi_source_recombine(
@@ -371,9 +395,14 @@ def _build_projection_stage(
                 [NODE_SUPPORT_OUT, projection_assist_stack.output_node],
                 NODE_PROJECTION_OUT,
                 "assist_sum",
+                gain_db=0.0,
+                blend=projection_assist_blend,
                 safety_tags=safety_tags,
                 active_clamps=active_clamps,
-                notes=["assist exists without contour -> fallback uses support output as main carrier"],
+                notes=[
+                    "assist exists without contour -> fallback uses support output as main carrier",
+                    f"projection_assist_blend={projection_assist_blend}",
+                ],
             )
         )
         notes.append("projection assist fallback mode")
@@ -394,6 +423,7 @@ def _build_projection_stage(
 
 def _build_finish_stage(
     spark_stack: Optional[RoleDSPStack],
+    spark_blend: float,
 ) -> DSPStagePlan:
     stacks = _collect_role_stacks(spark_stack)
     safety_tags = _collect_safety_tags(spark_stack)
@@ -419,12 +449,18 @@ def _build_finish_stage(
                 [NODE_PROJECTION_OUT, spark_stack.output_node],
                 NODE_FINISH_OUT,
                 "finish_sum",
+                gain_db=0.0,
+                blend=spark_blend,
                 safety_tags=safety_tags,
                 active_clamps=active_clamps,
-                notes=["spark blends last as protected finish micro-layer"],
+                notes=[
+                    "spark blends last as protected finish micro-layer",
+                    f"spark_blend={spark_blend}",
+                ],
             )
         )
         notes.append("spark runs only after projection is established")
+        notes.append(f"spark blend applied: {spark_blend}")
 
     return DSPStagePlan(
         stage_name="finish_assembly",
@@ -501,14 +537,28 @@ def build_stage_plans(
     projection_assist_stack: Optional[RoleDSPStack],
     spark_stack: Optional[RoleDSPStack],
     delivery_stack: Optional[RoleDSPStack],
+    support_recombine_gain_db: float = 0.0,
+    projection_assist_blend: float = 1.0,
+    spark_blend: float = 1.0,
     final_output_node: str = "final_output",
 ) -> List[DSPStagePlan]:
     stages = [
         _build_cleanup_stage(cleanup_stack),
         _build_guard_stage(guard_stack),
-        _build_support_stage(anchor_parallel_stack, bridge_parallel_stack),
-        _build_projection_stage(projection_contour_stack, projection_assist_stack),
-        _build_finish_stage(spark_stack),
+        _build_support_stage(
+            anchor_parallel_stack,
+            bridge_parallel_stack,
+            support_recombine_gain_db,
+        ),
+        _build_projection_stage(
+            projection_contour_stack,
+            projection_assist_stack,
+            projection_assist_blend,
+        ),
+        _build_finish_stage(
+            spark_stack,
+            spark_blend,
+        ),
         _build_delivery_stage(delivery_stack, final_output_node),
     ]
     return stages
@@ -548,7 +598,7 @@ def validate_graph_topology(blueprint: DSPExecutionBlueprint) -> None:
             raise ValueError("Projection contour stack must tap from support_stage_out")
 
     if blueprint.projection_assist_stack is not None and blueprint.projection_assist_stack.enabled:
-        if blueprint.projection_assist_stack.tap_point != NODE_PROJECTION_CONTOUR_OUT:
+        if blueprint.projection_assist_stack.tap_point != "projection_contour_out":
             raise ValueError("Projection assist stack must tap from projection_contour_out")
 
     if blueprint.spark_stack is not None and blueprint.spark_stack.enabled:
@@ -557,8 +607,6 @@ def validate_graph_topology(blueprint: DSPExecutionBlueprint) -> None:
 
     if blueprint.projection_assist_stack is not None and blueprint.projection_assist_stack.enabled:
         if blueprint.projection_contour_stack is None or not blueprint.projection_contour_stack.enabled:
-            # This is technically supported by graph fallback, but not preferred.
-            # Keep it as a hard guard in premium topology.
             raise ValueError("Projection assist cannot be enabled without projection contour in premium topology")
 
     if blueprint.spark_stack is not None and blueprint.spark_stack.enabled:
@@ -578,6 +626,9 @@ def attach_graph_to_blueprint(
         projection_assist_stack=blueprint.projection_assist_stack,
         spark_stack=blueprint.spark_stack,
         delivery_stack=blueprint.delivery_stack,
+        support_recombine_gain_db=blueprint.support_recombine_gain_db,
+        projection_assist_blend=blueprint.projection_assist_blend,
+        spark_blend=blueprint.spark_blend,
         final_output_node=blueprint.final_output_node,
     )
 
@@ -594,6 +645,7 @@ def attach_graph_to_blueprint(
                 "projection_runs_after_support",
                 "spark_runs_after_projection",
                 "delivery_runs_last",
+                "recombine_gain_blend_attached",
             ]
         ),
     )
