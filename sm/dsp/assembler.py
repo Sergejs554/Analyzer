@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
-from .primitive_instances import attach_primitive_instances_to_blueprint
+
 from ..contracts import SmartMasterAnalysis, SmartMasterExecutionBlueprint
 from ..enums import RoleName
 from .clamps import apply_dsp_clamps
 from .contracts import DSPExecutionBlueprint, RoleDSPStack
 from .graph import attach_graph_to_blueprint
+from .primitive_instances import attach_primitive_instances_to_blueprint
 from .role_specs import RoleModeSpec, RoleStackTemplate, get_role_mode_spec
 
 
@@ -40,15 +41,6 @@ def _effective_mode(plan) -> str:
 
 
 def _default_split_for_mode(role: RoleName, target_band_mode: str) -> Dict[str, Tuple[float, float, float]]:
-    """
-    Returns per-stack scaling:
-    stack_name -> (amount_scale, cap_scale, dynamic_scale_multiplier)
-
-    This is where we keep premium V1 role execution discipline:
-    - single-stack roles generally keep full router execution values
-    - projection splits contour vs assist deliberately
-    - spark remains micro by nature
-    """
     if role == RoleName.PROJECTION:
         if target_band_mode == "projection_dense":
             return {
@@ -155,6 +147,18 @@ def _stack_notes(
     return _uniq(notes)
 
 
+ALL_PRIMITIVE_NAMES: List[str] = []
+
+
+def _set_all_primitive_names_from_mode_spec() -> None:
+    global ALL_PRIMITIVE_NAMES
+    if ALL_PRIMITIVE_NAMES:
+        return
+
+    from .primitives import list_primitive_names
+    ALL_PRIMITIVE_NAMES = list_primitive_names()
+
+
 def _build_role_stack(
     plan,
     mode_spec: RoleModeSpec,
@@ -199,21 +203,7 @@ def _build_role_stack(
     )
 
 
-ALL_PRIMITIVE_NAMES: List[str] = []
-
-
-def _set_all_primitive_names_from_mode_spec() -> None:
-    global ALL_PRIMITIVE_NAMES
-    if ALL_PRIMITIVE_NAMES:
-        return
-
-    from .primitives import list_primitive_names
-    ALL_PRIMITIVE_NAMES = list_primitive_names()
-
-
-def _expand_role_plan_to_stacks(
-    plan,
-) -> List[RoleDSPStack]:
+def _expand_role_plan_to_stacks(plan) -> List[RoleDSPStack]:
     _set_all_primitive_names_from_mode_spec()
 
     mode_spec = get_role_mode_spec(plan.role, _effective_mode(plan))
@@ -240,8 +230,6 @@ def _derive_support_recombine_gain_db(
     if bridge_stack is not None and bridge_stack.enabled:
         total += bridge_stack.execution_amount
 
-    # Conservative premium support recombine.
-    # More support allowed -> less attenuation, but never becomes hype.
     return _clamp(-0.90 + (total * 1.35), -1.00, -0.10)
 
 
@@ -339,13 +327,7 @@ def assemble_sm_dsp_blueprint(
     analysis: SmartMasterAnalysis,
     router_blueprint: SmartMasterExecutionBlueprint,
 ) -> DSPExecutionBlueprint:
-    """
-    Premium V1 assembly order:
-    1. Expand router execution plans into DSP role stacks
-    2. Apply inter-role DSP clamps
-    3. Attach fixed topology graph
-    """
-        blueprint = build_dsp_execution_blueprint(router_blueprint)
+    blueprint = build_dsp_execution_blueprint(router_blueprint)
     blueprint = apply_dsp_clamps(blueprint, analysis)
     blueprint = attach_graph_to_blueprint(blueprint)
     blueprint = attach_primitive_instances_to_blueprint(blueprint, analysis)
