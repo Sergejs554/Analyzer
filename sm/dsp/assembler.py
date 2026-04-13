@@ -329,9 +329,8 @@ def assemble_sm_dsp_blueprint(
 ) -> DSPExecutionBlueprint:
     blueprint = build_dsp_execution_blueprint(router_blueprint)
     blueprint = apply_dsp_clamps(blueprint, analysis)
-    blueprint = attach_graph_to_blueprint(blueprint)
     blueprint = attach_primitive_instances_to_blueprint(blueprint, analysis)
-
+    blueprint = attach_graph_to_blueprint(blueprint)
     return replace(
         blueprint,
         notes=_uniq(
