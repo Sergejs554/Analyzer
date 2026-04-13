@@ -171,40 +171,11 @@ class RoleProfileSelection:
 @dataclass
 class RoleExecutionPlan:
     role: RoleName
-    profile_name: str
-    enabled: bool
-    amount: float
-    cap: float
-    dynamic_scale: float
-    target_band_mode: str
-    protection_mode: str
-    notes: List[str] = field(default_factory=list)
-
-
-@dataclass
-class SmartMasterRouterSummary:
-    anchor: RoleExecutionPlan
-    bridge: RoleExecutionPlan
-    cleanup: RoleExecutionPlan
-    guard: RoleExecutionPlan
-    projection: RoleExecutionPlan
-    spark: RoleExecutionPlan
-
-
-@dataclass
-class SmartMasterDebugBundle:
-    analysis: SmartMasterAnalysis
-    selection: RoleProfileSelection
-    router: SmartMasterRouterSummary
-
-@dataclass
-class RoleExecutionPlan:
-    role: RoleName
     enabled: bool
 
     profile_name: str
-    role_rank: str              # primary / support / restrained / off
-    energy_class: str           # off / micro / mild / controlled / dense
+    role_rank: str
+    energy_class: str
 
     requested_amount: float
     requested_cap: float
@@ -216,11 +187,11 @@ class RoleExecutionPlan:
     target_band_mode: str
     protection_mode: str
 
-    allowed_primitives: list[str]
-    forbidden_primitives: list[str]
+    allowed_primitives: List[str]
+    forbidden_primitives: List[str]
 
-    interaction_tags: list[str]
-    notes: list[str]
+    interaction_tags: List[str]
+    notes: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -236,14 +207,14 @@ class SmartMasterExecutionBlueprint:
     secondary_support_lane: str
     primary_benefit_lane: str
 
-    assembly_order: list[str]
-    global_notes: list[str]
+    assembly_order: List[str]
+    global_notes: List[str] = field(default_factory=list)
 
 
 @dataclass
 class RouterContext:
-    analysis: "SmartMasterAnalysis"
-    selection: "RoleProfileSelection"
+    analysis: SmartMasterAnalysis
+    selection: RoleProfileSelection
 
     primary_correction_lane: str
     secondary_support_lane: str
@@ -272,3 +243,10 @@ class RouterContext:
     dirty_dense_candidate: bool
     dense_good_candidate: bool
     thin_candidate: bool
+
+
+@dataclass
+class SmartMasterDebugBundle:
+    analysis: SmartMasterAnalysis
+    selection: RoleProfileSelection
+    router: SmartMasterExecutionBlueprint
