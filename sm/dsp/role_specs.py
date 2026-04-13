@@ -821,6 +821,13 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
         stack_templates=[],
         notes=["Spark off."],
     ),
+    (RoleName.SPARK, "off"): _mode(
+        role=RoleName.SPARK,
+        target_band_mode="off",
+        role_rank_bias="off",
+        stack_templates=[],
+        notes=["Spark off alias."],
+    ),
 }
 
 
