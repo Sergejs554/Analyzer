@@ -250,4 +250,5 @@ class SmartMasterDebugBundle:
     analysis: SmartMasterAnalysis
     selection: RoleProfileSelection
     router: SmartMasterExecutionBlueprint
-    dsp: Any | None = None
+    dsp: Dict[str, Any]
+    render_plan: Dict[str, Any]
