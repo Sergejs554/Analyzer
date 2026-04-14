@@ -10,7 +10,8 @@ from .router import build_sm_router_summary
 from .contracts import SmartMasterDebugBundle
 from .precondition import build_neutral_preclean_chain
 from .dsp.assembler import assemble_sm_dsp_blueprint
-
+from .dsp.assembler import assemble_sm_dsp_blueprint
+from .dsp.render_builder import build_dsp_render_plan
 
 def _run(cmd: str) -> tuple[str, str]:
     p = subprocess.run(
@@ -102,10 +103,12 @@ def render_sm_core_v1(
     selection = select_sm_profiles(analysis, tone, intensity)
     router = build_sm_router_summary(analysis, selection)
     dsp = assemble_sm_dsp_blueprint(analysis, router)
-
+    render_plan = build_dsp_render_plan(dsp)
+    
     return SmartMasterDebugBundle(
         analysis=analysis,
         selection=selection,
         router=router,
         dsp=dsp,
+        render_plan=render_plan,
     )
