@@ -1,36 +1,20 @@
-# sm/dsp/executor.py
-
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
-from typing import Any, Dict, Iterable, List, Optional, Set
+import os
+import subprocess
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 
-DEFAULT_AVAILABLE_BACKENDS: Set[str] = {"ffmpeg_safe"}
-
-
-def _to_plain(value: Any) -> Any:
-    if is_dataclass(value) and not isinstance(value, type):
-        return _to_plain(asdict(value))
-
+def _obj_get(value: Any, key: str, default: Any = None) -> Any:
+    if value is None:
+        return default
     if isinstance(value, dict):
-        return {str(k): _to_plain(v) for k, v in value.items()}
-
-    if isinstance(value, (list, tuple)):
-        return [_to_plain(v) for v in value]
-
-    return value
+        return value.get(key, default)
+    return getattr(value, key, default)
 
 
-def _as_dict(value: Any) -> Dict[str, Any]:
-    value = _to_plain(value)
-    if isinstance(value, dict):
-        return value
-    return {}
-
-
-def _as_list(value: Any) -> List[Any]:
-    value = _to_plain(value)
+def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []
     if isinstance(value, list):
@@ -40,379 +24,558 @@ def _as_list(value: Any) -> List[Any]:
     return [value]
 
 
-def _as_str(value: Any, default: str = "") -> str:
-    if value is None:
-        return default
-    return str(value)
+def _safe_name(value: str) -> str:
+    text = (value or "item").strip().lower()
+    out = []
+    for ch in text:
+        if ch.isalnum():
+            out.append(ch)
+        else:
+            out.append("_")
+    return "".join(out).strip("_") or "item"
 
 
-def _as_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        x = value.strip().lower()
-        if x in {"1", "true", "yes", "on"}:
-            return True
-        if x in {"0", "false", "no", "off"}:
-            return False
-    return default
+def _run(cmd: list[str]) -> tuple[str, str]:
+    p = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    stdout = p.stdout.decode("utf-8", errors="ignore")
+    stderr = p.stderr.decode("utf-8", errors="ignore")
+    if p.returncode != 0:
+        raise RuntimeError(stderr[:4000] or stdout[:4000] or "ffmpeg/ffprobe failed")
+    return stdout, stderr
 
 
-def _as_float(value: Any, default: float = 0.0) -> float:
+def _probe_duration_sec(path: str) -> float:
+    stdout, _ = _run([
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        path,
+    ])
     try:
-        return float(value)
+        return max(0.0, float(stdout.strip()))
     except Exception:
-        return default
+        return 0.0
 
 
-def _copy_list_of_dicts(value: Any) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for item in _as_list(value):
-        out.append(_as_dict(item))
-    return out
+def _ensure_wav_copy(src_path: str, dst_path: str) -> str:
+    _run([
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i", src_path,
+        "-ar", "48000",
+        "-ac", "2",
+        "-c:a", "pcm_s16le",
+        dst_path,
+    ])
+    return dst_path
 
 
-def _collect_enabled_ops(stacks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    ops: List[Dict[str, Any]] = []
-    for stack in stacks:
-        if not _as_bool(stack.get("enabled"), True):
-            continue
-        for op in _copy_list_of_dicts(stack.get("ops")):
-            if _as_bool(op.get("enabled"), True):
-                ops.append(op)
-    return ops
+def _copy_audio(src_path: str, dst_path: str) -> str:
+    return _ensure_wav_copy(src_path, dst_path)
 
 
-def _build_op_execution(
-    op: Dict[str, Any],
-    available_backends: Set[str],
-) -> Dict[str, Any]:
-    enabled = _as_bool(op.get("enabled"), True)
-    backend_hint = _as_str(op.get("backend_hint"), "custom_dsp_required")
-    backend_ready = enabled and backend_hint in available_backends
+def _make_silence_like(src_path: str, dst_path: str) -> str:
+    duration = max(0.01, _probe_duration_sec(src_path))
+    _run([
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-f", "lavfi",
+        "-i", f"anullsrc=r=48000:cl=stereo:d={duration:.6f}",
+        "-c:a", "pcm_s16le",
+        dst_path,
+    ])
+    return dst_path
 
-    if not enabled:
-        status = "disabled"
-    elif backend_ready:
-        status = "ready_now"
-    else:
-        status = "pending_backend"
 
+def _apply_volume(src_path: str, dst_path: str, gain_db: float) -> str:
+    if abs(gain_db) < 1e-9:
+        return _copy_audio(src_path, dst_path)
+    _run([
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i", src_path,
+        "-af", f"volume={gain_db}dB",
+        "-ar", "48000",
+        "-ac", "2",
+        "-c:a", "pcm_s16le",
+        dst_path,
+    ])
+    return dst_path
+
+
+def _ffmpeg_equalizer_filter(freq_hz: float, gain_db: float, q: float) -> str:
+    freq_hz = max(20.0, float(freq_hz or 1000.0))
+    q = max(0.1, float(q or 1.0))
+    gain_db = float(gain_db or 0.0)
+    return f"equalizer=f={freq_hz}:width_type=q:w={q}:g={gain_db}"
+
+
+def _apply_static_eq(src_path: str, dst_path: str, params: dict[str, Any]) -> str:
+    filt = _ffmpeg_equalizer_filter(
+        params.get("freq_hz"),
+        params.get("gain_db"),
+        params.get("q"),
+    )
+    _run([
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i", src_path,
+        "-af", filt,
+        "-ar", "48000",
+        "-ac", "2",
+        "-c:a", "pcm_s16le",
+        dst_path,
+    ])
+    return dst_path
+
+
+def _apply_parallel_eq_fill(src_path: str, dst_path: str, params: dict[str, Any]) -> str:
+    mix = max(0.0, min(1.0, float(params.get("mix") or 0.0)))
+    filt = _ffmpeg_equalizer_filter(
+        params.get("freq_hz"),
+        params.get("gain_db"),
+        params.get("q"),
+    )
+    chain = f"{filt},volume={mix}"
+    _run([
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i", src_path,
+        "-af", chain,
+        "-ar", "48000",
+        "-ac", "2",
+        "-c:a", "pcm_s16le",
+        dst_path,
+    ])
+    return dst_path
+
+
+def _apply_parallel_compressor(src_path: str, dst_path: str, params: dict[str, Any]) -> str:
+    mix = max(0.0, min(1.0, float(params.get("mix") or 0.0)))
+    ratio = max(1.0, float(params.get("ratio") or 1.2))
+    attack_ms = max(0.1, float(params.get("attack_ms") or 10.0))
+    release_ms = max(1.0, float(params.get("release_ms") or 100.0))
+    threshold_db = float(params.get("threshold_db") or -18.0)
+    filt = (
+        "acompressor="
+        f"threshold={threshold_db}dB:"
+        f"ratio={ratio}:"
+        f"attack={attack_ms}:"
+        f"release={release_ms},"
+        f"volume={mix}"
+    )
+    _run([
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i", src_path,
+        "-af", filt,
+        "-ar", "48000",
+        "-ac", "2",
+        "-c:a", "pcm_s16le",
+        dst_path,
+    ])
+    return dst_path
+
+
+@dataclass
+class UnsupportedRenderOp:
+    stage_name: str
+    stack_name: str
+    instance_name: str
+    primitive_name: str
+    op_kind: str
+    backend_hint: str
+    reason: str
+
+
+@dataclass
+class StackExecutionReport:
+    stage_name: str
+    stack_name: str
+    render_mode: str
+    input_path: str
+    output_path: str
+    applied_ops: list[str] = field(default_factory=list)
+    skipped_ops: list[str] = field(default_factory=list)
+    partial: bool = False
+    requires_custom_dsp: bool = False
+
+
+@dataclass
+class StageExecutionReport:
+    stage_name: str
+    input_node: str
+    output_node: str
+    input_path: str
+    output_path: str
+    stack_reports: list[StackExecutionReport] = field(default_factory=list)
+    recombine_reports: list[dict[str, Any]] = field(default_factory=list)
+    partial: bool = False
+    requires_custom_dsp: bool = False
+
+
+@dataclass
+class RenderExecutionResult:
+    ok: bool
+    status: str
+    final_output_path: str | None
+    node_paths: dict[str, str] = field(default_factory=dict)
+    stage_reports: list[StageExecutionReport] = field(default_factory=list)
+    unsupported_ops: list[UnsupportedRenderOp] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_debug_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "status": self.status,
+            "final_output_path": self.final_output_path,
+            "node_paths": dict(self.node_paths),
+            "stage_reports": [asdict(x) for x in self.stage_reports],
+            "unsupported_ops": [asdict(x) for x in self.unsupported_ops],
+            "notes": list(self.notes),
+        }
+
+
+class RenderExecutionError(RuntimeError):
+    pass
+
+
+def _normalize_op(op: Any) -> dict[str, Any]:
+    params = dict(_obj_get(op, "params", {}) or {})
     return {
-        "instance_name": _as_str(op.get("instance_name")),
-        "primitive_name": _as_str(op.get("primitive_name")),
-        "primitive_class": _as_str(op.get("primitive_class")),
-        "op_kind": _as_str(op.get("op_kind")),
-        "role": _as_str(op.get("role")),
-        "stack_name": _as_str(op.get("stack_name")),
-        "target_band_mode": _as_str(op.get("target_band_mode")),
-        "enabled": enabled,
-        "status": status,
-        "backend_hint": backend_hint,
-        "backend_ready": backend_ready,
-        "path_type": _as_str(op.get("path_type")),
-        "phase_policy": _as_str(op.get("phase_policy")),
-        "band_scope": _as_str(op.get("band_scope")),
-        "channel_mode": _as_str(op.get("channel_mode")),
-        "detector_mode": _as_str(op.get("detector_mode")),
-        "activity": _as_float(op.get("activity"), 0.0),
-        "amount_norm": _as_float(op.get("amount_norm"), 0.0),
-        "params": _as_dict(op.get("params")),
-        "notes": _as_list(op.get("notes")),
-        "safety_tags": _as_list(op.get("safety_tags")),
+        "instance_name": _obj_get(op, "instance_name", "op"),
+        "primitive_name": _obj_get(op, "primitive_name", "unknown_primitive"),
+        "op_kind": _obj_get(op, "op_kind", "unknown"),
+        "backend_hint": _obj_get(op, "backend_hint", "custom_dsp_required"),
+        "channel_mode": (_obj_get(op, "channel_mode", "stereo") or "stereo"),
+        "params": params,
+        "enabled": bool(_obj_get(op, "enabled", True)),
     }
 
 
-def _build_stack_execution(
-    stack: Dict[str, Any],
-    available_backends: Set[str],
-    stage_input_ready: bool,
-) -> Dict[str, Any]:
-    enabled = _as_bool(stack.get("enabled"), True)
-    ops = [_build_op_execution(op, available_backends) for op in _copy_list_of_dicts(stack.get("ops"))]
+def _supported_op_executor(op: dict[str, Any]):
+    op_kind = op["op_kind"]
+    channel_mode = (op.get("channel_mode") or "stereo").lower().strip()
 
-    ready_now_count = sum(1 for op in ops if op["status"] == "ready_now")
-    pending_backend_count = sum(1 for op in ops if op["status"] == "pending_backend")
-    disabled_count = sum(1 for op in ops if op["status"] == "disabled")
+    if op_kind in {"static_eq", "broad_eq"} and channel_mode == "stereo":
+        return _apply_static_eq, None
+    if op_kind == "parallel_eq_fill" and channel_mode == "stereo":
+        return _apply_parallel_eq_fill, None
+    if op_kind == "parallel_compressor" and channel_mode == "stereo":
+        return _apply_parallel_compressor, None
 
-    active_ops = sum(1 for op in ops if op["enabled"])
+    if op_kind in {"static_eq", "broad_eq"} and channel_mode != "stereo":
+        return None, f"channel_mode={channel_mode} is not implemented safely for ffmpeg eq"
+    return None, "custom dsp backend required"
 
-    requires_custom_dsp = pending_backend_count > 0
-    fully_ready_now = (
-        enabled
-        and stage_input_ready
-        and active_ops > 0
-        and pending_backend_count == 0
+
+def _stack_input_path(node_paths: dict[str, str], stage_input_path: str, stack: Any) -> str:
+    tap_point = _obj_get(stack, "tap_point")
+    if tap_point and tap_point in node_paths:
+        return node_paths[tap_point]
+    output_node = _obj_get(stack, "output_node")
+    if output_node and output_node in node_paths:
+        return node_paths[output_node]
+    return stage_input_path
+
+
+def _temp_wav(td: str, prefix: str, suffix: str) -> str:
+    name = f"{_safe_name(prefix)}__{_safe_name(suffix)}.wav"
+    return os.path.join(td, name)
+
+
+def _execute_stack(
+    *,
+    stage_name: str,
+    stack: Any,
+    node_paths: dict[str, str],
+    stage_input_path: str,
+    td: str,
+    unsupported_ops: list[UnsupportedRenderOp],
+    allow_partial_custom_dsp: bool,
+) -> tuple[str, StackExecutionReport, bool]:
+    stack_name = _obj_get(stack, "stack_name", "stack")
+    render_mode = _obj_get(stack, "render_mode", "serial_inplace")
+    output_node = _obj_get(stack, "output_node", f"{stack_name}_out")
+    input_path = _stack_input_path(node_paths, stage_input_path, stack)
+    ops = [_normalize_op(op) for op in _as_list(_obj_get(stack, "ops")) if bool(_obj_get(op, "enabled", True))]
+
+    report = StackExecutionReport(
+        stage_name=stage_name,
+        stack_name=stack_name,
+        render_mode=render_mode,
+        input_path=input_path,
+        output_path="",
+        applied_ops=[],
+        skipped_ops=[],
+        partial=False,
+        requires_custom_dsp=False,
     )
 
-    if not enabled:
-        execution_state = "disabled"
-    elif not stage_input_ready:
-        execution_state = "blocked_no_stage_input"
-    elif active_ops == 0:
-        execution_state = "empty_stack"
-    elif pending_backend_count == 0:
-        execution_state = "ready_now"
+    if render_mode in {"parallel_return", "parallel_assist_return"}:
+        current_path = _temp_wav(td, stack_name, "branch_input")
+        _copy_audio(input_path, current_path)
     else:
-        execution_state = "pending_custom_backend"
+        current_path = _temp_wav(td, stack_name, "serial_input")
+        _copy_audio(input_path, current_path)
 
-    output_node_materialized = fully_ready_now
+    any_supported = False
+    partial = False
 
-    if active_ops == 0 and enabled and stage_input_ready:
-        output_node_materialized = True
+    for index, op in enumerate(ops):
+        op_exec, unsupported_reason = _supported_op_executor(op)
+        if op_exec is None:
+            report.requires_custom_dsp = True
+            report.skipped_ops.append(op["primitive_name"])
+            unsupported_ops.append(
+                UnsupportedRenderOp(
+                    stage_name=stage_name,
+                    stack_name=stack_name,
+                    instance_name=op["instance_name"],
+                    primitive_name=op["primitive_name"],
+                    op_kind=op["op_kind"],
+                    backend_hint=op["backend_hint"],
+                    reason=unsupported_reason or "unsupported op",
+                )
+            )
+            if not allow_partial_custom_dsp:
+                raise RenderExecutionError(
+                    f"{stage_name}/{stack_name}: unsupported op {op['primitive_name']} ({unsupported_reason})"
+                )
+            partial = True
+            continue
 
-    return {
-        "stack_name": _as_str(stack.get("stack_name")),
-        "role": _as_str(stack.get("role")),
-        "role_rank": _as_str(stack.get("role_rank")),
-        "stack_kind": _as_str(stack.get("stack_kind")),
-        "render_mode": _as_str(stack.get("render_mode")),
-        "path_type": _as_str(stack.get("path_type")),
-        "tap_point": _as_str(stack.get("tap_point")),
-        "output_node": _as_str(stack.get("output_node")),
-        "recombine_target": _as_str(stack.get("recombine_target")),
-        "target_band_mode": _as_str(stack.get("target_band_mode")),
-        "protection_mode": _as_str(stack.get("protection_mode")),
-        "enabled": enabled,
-        "stage_input_ready": stage_input_ready,
-        "execution_state": execution_state,
-        "requires_custom_dsp": requires_custom_dsp,
-        "fully_ready_now": fully_ready_now,
-        "output_node_materialized": output_node_materialized,
-        "requested_amount": _as_float(stack.get("requested_amount"), 0.0),
-        "requested_cap": _as_float(stack.get("requested_cap"), 0.0),
-        "execution_amount": _as_float(stack.get("execution_amount"), 0.0),
-        "execution_cap": _as_float(stack.get("execution_cap"), 0.0),
-        "dynamic_scale": _as_float(stack.get("dynamic_scale"), 0.0),
-        "active_op_count": active_ops,
-        "ready_now_op_count": ready_now_count,
-        "pending_backend_op_count": pending_backend_count,
-        "disabled_op_count": disabled_count,
-        "notes": _as_list(stack.get("notes")),
-        "active_clamps": _as_list(stack.get("active_clamps")),
-        "ops": ops,
-    }
+        next_path = _temp_wav(td, stack_name, f"op_{index:02d}_{op['primitive_name']}")
+        op_exec(current_path, next_path, dict(op["params"]))
+        current_path = next_path
+        any_supported = True
+        report.applied_ops.append(op["primitive_name"])
+
+    if render_mode in {"parallel_return", "parallel_assist_return"} and not any_supported:
+        current_path = _temp_wav(td, stack_name, "silent_branch")
+        _make_silence_like(input_path, current_path)
+        partial = partial or bool(ops)
+
+    final_path = _temp_wav(td, stack_name, "out")
+    _copy_audio(current_path, final_path)
+
+    report.output_path = final_path
+    report.partial = partial
+    node_paths[output_node] = final_path
+    return final_path, report, partial
 
 
-def _build_recombine_execution(
-    recombine: Dict[str, Any],
-    materialized_nodes: Set[str],
-) -> Dict[str, Any]:
-    source_nodes = [_as_str(x) for x in _as_list(recombine.get("source_nodes")) if _as_str(x)]
-    target_node = _as_str(recombine.get("target_node"))
-    missing_sources = [src for src in source_nodes if src not in materialized_nodes]
-    source_ready = len(missing_sources) == 0
+def _mix_many(
+    *,
+    source_paths: list[str],
+    target_path: str,
+    gain_db: float = 0.0,
+    second_input_blend: float | None = None,
+) -> str:
+    if not source_paths:
+        raise RenderExecutionError("mix_many called without sources")
 
-    if source_ready:
-        status = "ready_now"
+    if len(source_paths) == 1:
+        return _apply_volume(source_paths[0], target_path, gain_db)
+
+    cmd = ["ffmpeg", "-y", "-hide_banner"]
+    for src in source_paths:
+        cmd.extend(["-i", src])
+
+    if second_input_blend is not None and len(source_paths) >= 2:
+        weights = ["1.0", str(float(second_input_blend))]
+        for _ in range(len(source_paths) - 2):
+            weights.append("1.0")
+        amix = f"amix=inputs={len(source_paths)}:normalize=0:weights={' '.join(weights)}"
     else:
-        status = "blocked_missing_sources"
+        amix = f"amix=inputs={len(source_paths)}:normalize=0"
 
-    return {
-        "recombine_name": _as_str(recombine.get("recombine_name")),
-        "recombine_mode": _as_str(recombine.get("recombine_mode")),
-        "render_recombine_kind": _as_str(recombine.get("render_recombine_kind")),
-        "source_nodes": source_nodes,
+    if abs(gain_db) > 1e-9:
+        amix = f"{amix},volume={gain_db}dB"
+
+    cmd.extend([
+        "-filter_complex", amix,
+        "-ar", "48000",
+        "-ac", "2",
+        "-c:a", "pcm_s16le",
+        target_path,
+    ])
+    _run(cmd)
+    return target_path
+
+
+def _execute_recombine(
+    *,
+    recombine: Any,
+    node_paths: dict[str, str],
+    td: str,
+) -> tuple[str, dict[str, Any]]:
+    recombine_name = _obj_get(recombine, "recombine_name", "recombine")
+    target_node = _obj_get(recombine, "target_node", "recombine_out")
+    source_nodes = list(_as_list(_obj_get(recombine, "source_nodes")))
+    gain_db = float(_obj_get(recombine, "gain_db", 0.0) or 0.0)
+    render_kind = _obj_get(recombine, "render_recombine_kind", "passthrough_or_sum")
+    blend = _obj_get(recombine, "blend", None)
+
+    source_paths = []
+    for node in source_nodes:
+        if node not in node_paths:
+            raise RenderExecutionError(f"recombine {recombine_name}: missing source node {node}")
+        source_paths.append(node_paths[node])
+
+    out_path = _temp_wav(td, recombine_name, "out")
+
+    if render_kind == "assist_blend_sum":
+        _mix_many(
+            source_paths=source_paths,
+            target_path=out_path,
+            gain_db=gain_db,
+            second_input_blend=float(blend or 0.0),
+        )
+    else:
+        _mix_many(
+            source_paths=source_paths,
+            target_path=out_path,
+            gain_db=gain_db,
+            second_input_blend=None,
+        )
+
+    node_paths[target_node] = out_path
+    info = {
+        "recombine_name": recombine_name,
         "target_node": target_node,
-        "blend": _as_float(recombine.get("blend"), 1.0),
-        "gain_db": _as_float(recombine.get("gain_db"), 0.0),
-        "status": status,
-        "source_ready": source_ready,
-        "missing_sources": missing_sources,
-        "notes": _as_list(recombine.get("notes")),
-        "active_clamps": _as_list(recombine.get("active_clamps")),
-        "safety_tags": _as_list(recombine.get("safety_tags")),
+        "source_nodes": source_nodes,
+        "source_paths": source_paths,
+        "output_path": out_path,
+        "render_recombine_kind": render_kind,
+        "gain_db": gain_db,
+        "blend": blend,
     }
+    return out_path, info
 
 
-def _materialize_stack_outputs(
-    stack_records: List[Dict[str, Any]],
-    materialized_nodes: Set[str],
-) -> None:
-    for stack in stack_records:
-        output_node = _as_str(stack.get("output_node"))
-        if output_node and _as_bool(stack.get("output_node_materialized"), False):
-            materialized_nodes.add(output_node)
+def execute_dsp_render_plan(
+    *,
+    input_path: str,
+    render_plan: Any,
+    td: str,
+    allow_partial_custom_dsp: bool = True,
+) -> RenderExecutionResult:
+    os.makedirs(td, exist_ok=True)
 
+    node_paths: dict[str, str] = {}
+    prepared_input_node = _obj_get(render_plan, "prepared_input_node", "prepared_input")
+    prepared_input_path = _temp_wav(td, prepared_input_node, "source")
+    _copy_audio(input_path, prepared_input_path)
+    node_paths[prepared_input_node] = prepared_input_path
 
-def _materialize_recombine_outputs(
-    recombine_records: List[Dict[str, Any]],
-    materialized_nodes: Set[str],
-) -> None:
-    for item in recombine_records:
-        target_node = _as_str(item.get("target_node"))
-        if target_node and _as_bool(item.get("source_ready"), False):
-            materialized_nodes.add(target_node)
+    stage_reports: list[StageExecutionReport] = []
+    unsupported_ops: list[UnsupportedRenderOp] = []
+    notes = list(_as_list(_obj_get(render_plan, "notes")))
+
+    for stage in _as_list(_obj_get(render_plan, "stages")):
+        stage_name = _obj_get(stage, "stage_name", "stage")
+        input_node = _obj_get(stage, "input_node", prepared_input_node)
+        output_node = _obj_get(stage, "output_node", f"{stage_name}_out")
+
+        if input_node not in node_paths:
+            raise RenderExecutionError(f"{stage_name}: missing input node {input_node}")
+
+        stage_input_path = node_paths[input_node]
+        stack_reports: list[StackExecutionReport] = []
+        recombine_reports: list[dict[str, Any]] = []
+        stage_partial = False
+        stage_requires_custom = bool(_obj_get(stage, "requires_custom_dsp", False))
+
+        for stack in _as_list(_obj_get(stage, "stacks")):
+            _, stack_report, partial = _execute_stack(
+                stage_name=stage_name,
+                stack=stack,
+                node_paths=node_paths,
+                stage_input_path=stage_input_path,
+                td=td,
+                unsupported_ops=unsupported_ops,
+                allow_partial_custom_dsp=allow_partial_custom_dsp,
+            )
+            stage_partial = stage_partial or partial
+            stage_requires_custom = stage_requires_custom or stack_report.requires_custom_dsp
+            stack_reports.append(stack_report)
+
+        for recombine in _as_list(_obj_get(stage, "recombine")):
+            out_path, info = _execute_recombine(
+                recombine=recombine,
+                node_paths=node_paths,
+                td=td,
+            )
+            recombine_reports.append(info)
+            if info.get("target_node") == output_node:
+                node_paths[output_node] = out_path
+
+        if output_node not in node_paths:
+            if stack_reports:
+                node_paths[output_node] = stack_reports[-1].output_path
+            else:
+                passthrough_path = _temp_wav(td, stage_name, "passthrough")
+                _copy_audio(stage_input_path, passthrough_path)
+                node_paths[output_node] = passthrough_path
+
+        stage_reports.append(
+            StageExecutionReport(
+                stage_name=stage_name,
+                input_node=input_node,
+                output_node=output_node,
+                input_path=stage_input_path,
+                output_path=node_paths[output_node],
+                stack_reports=stack_reports,
+                recombine_reports=recombine_reports,
+                partial=stage_partial,
+                requires_custom_dsp=stage_requires_custom,
+            )
+        )
+
+    final_output_node = _obj_get(render_plan, "final_output_node", "final_output")
+    if final_output_node not in node_paths:
+        raise RenderExecutionError(f"missing final output node {final_output_node}")
+
+    final_output_path = node_paths[final_output_node]
+    status = "ok"
+    if unsupported_ops:
+        status = "partial_custom_dsp_pending"
+
+    return RenderExecutionResult(
+        ok=True,
+        status=status,
+        final_output_path=final_output_path,
+        node_paths=node_paths,
+        stage_reports=stage_reports,
+        unsupported_ops=unsupported_ops,
+        notes=notes,
+    )
 
 
 def build_render_execution_report(
+    *,
+    input_path: str,
     render_plan: Any,
-    available_backends: Optional[Iterable[str]] = None,
-) -> Dict[str, Any]:
-    plan = _as_dict(render_plan)
-    if not plan:
-        raise TypeError("render_plan must be a dict-like object or dataclass")
-
-    available_backend_set: Set[str] = set(available_backends or DEFAULT_AVAILABLE_BACKENDS)
-
-    prepared_input_node = _as_str(plan.get("prepared_input_node"), "prepared_input")
-    final_output_node = _as_str(plan.get("final_output_node"), "final_output")
-    stages = _copy_list_of_dicts(plan.get("stages"))
-
-    materialized_nodes: Set[str] = {prepared_input_node}
-    stage_reports: List[Dict[str, Any]] = []
-
-    total_stack_count = 0
-    total_op_count = 0
-    total_ready_now_ops = 0
-    total_pending_backend_ops = 0
-    total_recombine_count = 0
-    total_ready_recombine = 0
-
-    for stage in stages:
-        input_node = _as_str(stage.get("input_node"))
-        output_node = _as_str(stage.get("output_node"))
-        stage_input_ready = input_node in materialized_nodes
-
-        stack_records: List[Dict[str, Any]] = []
-        for stack in _copy_list_of_dicts(stage.get("stacks")):
-            stack_record = _build_stack_execution(
-                stack=stack,
-                available_backends=available_backend_set,
-                stage_input_ready=stage_input_ready,
-            )
-            stack_records.append(stack_record)
-
-        _materialize_stack_outputs(stack_records, materialized_nodes)
-
-        recombine_records: List[Dict[str, Any]] = []
-        for recombine in _copy_list_of_dicts(stage.get("recombine")):
-            recombine_record = _build_recombine_execution(
-                recombine=recombine,
-                materialized_nodes=materialized_nodes,
-            )
-            recombine_records.append(recombine_record)
-
-        _materialize_recombine_outputs(recombine_records, materialized_nodes)
-
-        if output_node and not recombine_records:
-            if stage_input_ready and not stack_records:
-                materialized_nodes.add(output_node)
-
-            if len(stack_records) == 1 and _as_bool(stack_records[0].get("output_node_materialized"), False):
-                materialized_nodes.add(output_node)
-
-        stage_output_ready = output_node in materialized_nodes
-
-        enabled_stack_count = sum(1 for x in stack_records if _as_bool(x.get("enabled"), True))
-        stage_op_count = sum(int(x.get("active_op_count", 0)) for x in stack_records)
-        stage_ready_now_op_count = sum(int(x.get("ready_now_op_count", 0)) for x in stack_records)
-        stage_pending_backend_op_count = sum(int(x.get("pending_backend_op_count", 0)) for x in stack_records)
-
-        stage_requires_custom_dsp = stage_pending_backend_op_count > 0
-        stage_ready_recombine_count = sum(1 for x in recombine_records if _as_bool(x.get("source_ready"), False))
-
-        if stage_requires_custom_dsp:
-            stage_execution_state = "pending_custom_backend"
-        elif stage_input_ready and stage_output_ready:
-            stage_execution_state = "ready_now"
-        elif not stage_input_ready:
-            stage_execution_state = "blocked_no_input"
-        else:
-            stage_execution_state = "graph_incomplete"
-
-        stage_report = {
-            "stage_name": _as_str(stage.get("stage_name")),
-            "stage_kind": _as_str(stage.get("stage_kind")),
-            "input_node": input_node,
-            "output_node": output_node,
-            "role_order": _as_list(stage.get("role_order")),
-            "notes": _as_list(stage.get("notes")),
-            "safety_tags": _as_list(stage.get("safety_tags")),
-            "active_clamps": _as_list(stage.get("active_clamps")),
-            "requires_custom_dsp": stage_requires_custom_dsp,
-            "stage_input_ready": stage_input_ready,
-            "stage_output_ready": stage_output_ready,
-            "stage_execution_state": stage_execution_state,
-            "enabled_stack_count": enabled_stack_count,
-            "active_op_count": stage_op_count,
-            "ready_now_op_count": stage_ready_now_op_count,
-            "pending_backend_op_count": stage_pending_backend_op_count,
-            "recombine_count": len(recombine_records),
-            "ready_recombine_count": stage_ready_recombine_count,
-            "stacks": stack_records,
-            "recombine": recombine_records,
-        }
-        stage_reports.append(stage_report)
-
-        total_stack_count += len(stack_records)
-        total_op_count += stage_op_count
-        total_ready_now_ops += stage_ready_now_op_count
-        total_pending_backend_ops += stage_pending_backend_op_count
-        total_recombine_count += len(recombine_records)
-        total_ready_recombine += stage_ready_recombine_count
-
-    final_output_ready = final_output_node in materialized_nodes
-    executable_now = final_output_ready and total_pending_backend_ops == 0
-
-    if executable_now:
-        overall_state = "ready_now"
-    elif total_pending_backend_ops > 0:
-        overall_state = "pending_custom_backend"
-    elif not final_output_ready:
-        overall_state = "graph_incomplete"
-    else:
-        overall_state = "blocked"
-
-    return {
-        "executor_name": "sm_executor_v1",
-        "plan_name": _as_str(plan.get("plan_name")),
-        "prepared_input_node": prepared_input_node,
-        "final_output_node": final_output_node,
-        "node_order": _as_list(plan.get("node_order")),
-        "available_backends": sorted(available_backend_set),
-        "overall_state": overall_state,
-        "executable_now": executable_now,
-        "requires_custom_dsp": total_pending_backend_ops > 0,
-        "final_output_ready": final_output_ready,
-        "materialized_nodes": sorted(materialized_nodes),
-        "support_recombine_gain_db": _as_float(plan.get("support_recombine_gain_db"), 0.0),
-        "projection_assist_blend": _as_float(plan.get("projection_assist_blend"), 0.0),
-        "spark_blend": _as_float(plan.get("spark_blend"), 0.0),
-        "active_clamps": _as_list(plan.get("active_clamps")),
-        "safety_notes": _as_list(plan.get("safety_notes")),
-        "notes": _as_list(plan.get("notes")),
-        "counts": {
-            "stage_count": len(stage_reports),
-            "stack_count": total_stack_count,
-            "op_count": total_op_count,
-            "ready_now_op_count": total_ready_now_ops,
-            "pending_backend_op_count": total_pending_backend_ops,
-            "recombine_count": total_recombine_count,
-            "ready_recombine_count": total_ready_recombine,
-        },
-        "stages": stage_reports,
-    }
-
-
-def render_plan_requires_custom_dsp(render_plan: Any) -> bool:
-    report = build_render_execution_report(render_plan)
-    return _as_bool(report.get("requires_custom_dsp"), True)
-
-
-def summarize_render_execution(render_plan: Any) -> Dict[str, Any]:
-    report = build_render_execution_report(render_plan)
-
-    return {
-        "executor_name": report["executor_name"],
-        "overall_state": report["overall_state"],
-        "executable_now": report["executable_now"],
-        "requires_custom_dsp": report["requires_custom_dsp"],
-        "final_output_ready": report["final_output_ready"],
-        "counts": report["counts"],
-        "materialized_nodes": report["materialized_nodes"],
-    }
+    td: str,
+    allow_partial_custom_dsp: bool = True,
+) -> dict[str, Any]:
+    result = execute_dsp_render_plan(
+        input_path=input_path,
+        render_plan=render_plan,
+        td=td,
+        allow_partial_custom_dsp=allow_partial_custom_dsp,
+    )
+    return result.to_debug_dict()
