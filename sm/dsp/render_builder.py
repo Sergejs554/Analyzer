@@ -17,6 +17,14 @@ def _uniq(values: List[str]) -> List[str]:
     return out
 
 
+def _read(obj: Any, key: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _clean_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in (params or {}).items() if v is not None}
 
@@ -45,8 +53,8 @@ def _backend_hint(primitive_class: str, path_type: str) -> str:
     return "custom_dsp_required"
 
 
-def _op_kind_from_instance(instance: Dict[str, Any]) -> str:
-    primitive_class = instance.get("primitive_class", "")
+def _op_kind_from_instance(instance: Any) -> str:
+    primitive_class = _read(instance, "primitive_class", "")
 
     mapping = {
         "dynamic_eq_cut": "dynamic_eq",
@@ -68,43 +76,43 @@ def _op_kind_from_instance(instance: Dict[str, Any]) -> str:
     return mapping.get(primitive_class, primitive_class or "unknown")
 
 
-def _normalize_instance(instance: Dict[str, Any]) -> Dict[str, Any]:
-    primitive_class = instance.get("primitive_class", "")
-    path_type = instance.get("path_type", "")
-    params = _clean_params(instance.get("params", {}))
+def _normalize_instance(instance: Any) -> Dict[str, Any]:
+    primitive_class = _read(instance, "primitive_class", "")
+    path_type = _read(instance, "path_type", "")
+    params = _clean_params(_read(instance, "params", {}) or {})
 
     return {
-        "instance_name": instance.get("instance_name"),
-        "primitive_name": instance.get("primitive_name"),
+        "instance_name": _read(instance, "instance_name"),
+        "primitive_name": _read(instance, "primitive_name"),
         "primitive_class": primitive_class,
         "op_kind": _op_kind_from_instance(instance),
         "backend_hint": _backend_hint(primitive_class, path_type),
-        "enabled": bool(instance.get("enabled", True)),
-        "role": instance.get("role"),
-        "stack_name": instance.get("stack_name"),
-        "stack_kind": instance.get("stack_kind"),
+        "enabled": bool(_read(instance, "enabled", True)),
+        "role": _read(instance, "role"),
+        "stack_name": _read(instance, "stack_name"),
+        "stack_kind": _read(instance, "stack_kind"),
         "path_type": path_type,
-        "target_band_mode": instance.get("target_band_mode"),
-        "protection_mode": instance.get("protection_mode"),
-        "channel_scope": instance.get("channel_scope"),
-        "channel_mode": instance.get("channel_mode"),
-        "band_scope": instance.get("band_scope"),
-        "detector_mode": instance.get("detector_mode"),
-        "phase_policy": instance.get("phase_policy"),
-        "amount_norm": instance.get("amount_norm"),
-        "activity": instance.get("activity"),
-        "dynamic_scale": instance.get("dynamic_scale"),
+        "target_band_mode": _read(instance, "target_band_mode"),
+        "protection_mode": _read(instance, "protection_mode"),
+        "channel_scope": _read(instance, "channel_scope"),
+        "channel_mode": _read(instance, "channel_mode"),
+        "band_scope": _read(instance, "band_scope"),
+        "detector_mode": _read(instance, "detector_mode"),
+        "phase_policy": _read(instance, "phase_policy"),
+        "amount_norm": _read(instance, "amount_norm"),
+        "activity": _read(instance, "activity"),
+        "dynamic_scale": _read(instance, "dynamic_scale"),
         "params": params,
-        "safety_tags": list(instance.get("safety_tags", [])),
-        "notes": list(instance.get("notes", [])),
+        "safety_tags": list(_read(instance, "safety_tags", []) or []),
+        "notes": list(_read(instance, "notes", []) or []),
     }
 
 
-def _stack_execution_mode(stack: Dict[str, Any]) -> str:
-    path_type = stack.get("path_type")
-    stack_kind = stack.get("stack_kind")
+def _stack_execution_mode(stack: Any) -> str:
+    path_type = _read(stack, "path_type")
+    stack_kind = _read(stack, "stack_kind")
 
-    if not stack.get("enabled", False):
+    if not _read(stack, "enabled", False):
         return "disabled"
 
     if path_type == "inplace":
@@ -120,8 +128,8 @@ def _stack_execution_mode(stack: Dict[str, Any]) -> str:
     return "unknown"
 
 
-def _normalize_stack(stack: Dict[str, Any]) -> Dict[str, Any]:
-    instances = [_normalize_instance(x) for x in stack.get("primitive_instances", [])]
+def _normalize_stack(stack: Any) -> Dict[str, Any]:
+    instances = [_normalize_instance(x) for x in (_read(stack, "primitive_instances", []) or [])]
 
     requires_custom_dsp = any(
         op.get("backend_hint") == "custom_dsp_required"
@@ -129,36 +137,36 @@ def _normalize_stack(stack: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     return {
-        "role": stack.get("role"),
-        "role_rank": stack.get("role_rank"),
-        "enabled": bool(stack.get("enabled", False)),
-        "stack_name": stack.get("stack_name"),
-        "stack_kind": stack.get("stack_kind"),
-        "path_type": stack.get("path_type"),
-        "tap_point": stack.get("tap_point"),
-        "output_node": stack.get("output_node"),
-        "recombine_target": stack.get("recombine_target"),
-        "target_band_mode": stack.get("target_band_mode"),
-        "protection_mode": stack.get("protection_mode"),
-        "requested_amount": stack.get("requested_amount"),
-        "requested_cap": stack.get("requested_cap"),
-        "execution_amount": stack.get("execution_amount"),
-        "execution_cap": stack.get("execution_cap"),
-        "dynamic_scale": stack.get("dynamic_scale"),
-        "safety_tags": list(stack.get("safety_tags", [])),
-        "active_clamps": list(stack.get("active_clamps", [])),
-        "blocked_actions": list(stack.get("blocked_actions", [])),
+        "role": _read(stack, "role"),
+        "role_rank": _read(stack, "role_rank"),
+        "enabled": bool(_read(stack, "enabled", False)),
+        "stack_name": _read(stack, "stack_name"),
+        "stack_kind": _read(stack, "stack_kind"),
+        "path_type": _read(stack, "path_type"),
+        "tap_point": _read(stack, "tap_point"),
+        "output_node": _read(stack, "output_node"),
+        "recombine_target": _read(stack, "recombine_target"),
+        "target_band_mode": _read(stack, "target_band_mode"),
+        "protection_mode": _read(stack, "protection_mode"),
+        "requested_amount": _read(stack, "requested_amount"),
+        "requested_cap": _read(stack, "requested_cap"),
+        "execution_amount": _read(stack, "execution_amount"),
+        "execution_cap": _read(stack, "execution_cap"),
+        "dynamic_scale": _read(stack, "dynamic_scale"),
+        "safety_tags": list(_read(stack, "safety_tags", []) or []),
+        "active_clamps": list(_read(stack, "active_clamps", []) or []),
+        "blocked_actions": list(_read(stack, "blocked_actions", []) or []),
         "render_mode": _stack_execution_mode(stack),
         "requires_custom_dsp": requires_custom_dsp,
         "ops": instances,
-        "notes": list(stack.get("notes", [])),
+        "notes": list(_read(stack, "notes", []) or []),
     }
 
 
-def _normalize_recombine_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
-    recombine_mode = plan.get("recombine_mode", "sum")
-    blend = float(plan.get("blend", 1.0))
-    gain_db = float(plan.get("gain_db", 0.0))
+def _normalize_recombine_plan(plan: Any) -> Dict[str, Any]:
+    recombine_mode = _read(plan, "recombine_mode", "sum")
+    blend = float(_read(plan, "blend", 1.0))
+    gain_db = float(_read(plan, "gain_db", 0.0))
 
     render_recombine_kind = {
         "sum": "passthrough_or_sum",
@@ -168,37 +176,37 @@ def _normalize_recombine_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     }.get(recombine_mode, recombine_mode)
 
     return {
-        "recombine_name": plan.get("recombine_name"),
+        "recombine_name": _read(plan, "recombine_name"),
         "recombine_mode": recombine_mode,
         "render_recombine_kind": render_recombine_kind,
-        "source_nodes": list(plan.get("source_nodes", [])),
-        "target_node": plan.get("target_node"),
+        "source_nodes": list(_read(plan, "source_nodes", []) or []),
+        "target_node": _read(plan, "target_node"),
         "gain_db": gain_db,
         "blend": blend,
-        "active_clamps": list(plan.get("active_clamps", [])),
-        "safety_tags": list(plan.get("safety_tags", [])),
-        "notes": list(plan.get("notes", [])),
+        "active_clamps": list(_read(plan, "active_clamps", []) or []),
+        "safety_tags": list(_read(plan, "safety_tags", []) or []),
+        "notes": list(_read(plan, "notes", []) or []),
     }
 
 
-def _normalize_stage(stage: Dict[str, Any]) -> Dict[str, Any]:
-    role_stacks = [_normalize_stack(x) for x in stage.get("role_stacks", [])]
-    recombine_plans = [_normalize_recombine_plan(x) for x in stage.get("recombine_plans", [])]
+def _normalize_stage(stage: Any) -> Dict[str, Any]:
+    role_stacks = [_normalize_stack(x) for x in (_read(stage, "role_stacks", []) or [])]
+    recombine_plans = [_normalize_recombine_plan(x) for x in (_read(stage, "recombine_plans", []) or [])]
 
     requires_custom_dsp = any(x.get("requires_custom_dsp", False) for x in role_stacks)
 
     return {
-        "stage_name": stage.get("stage_name"),
-        "stage_kind": stage.get("stage_kind"),
-        "input_node": stage.get("input_node"),
-        "output_node": stage.get("output_node"),
-        "role_order": list(stage.get("role_order", [])),
-        "active_clamps": list(stage.get("active_clamps", [])),
-        "safety_tags": list(stage.get("safety_tags", [])),
+        "stage_name": _read(stage, "stage_name"),
+        "stage_kind": _read(stage, "stage_kind"),
+        "input_node": _read(stage, "input_node"),
+        "output_node": _read(stage, "output_node"),
+        "role_order": list(_read(stage, "role_order", []) or []),
+        "active_clamps": list(_read(stage, "active_clamps", []) or []),
+        "safety_tags": list(_read(stage, "safety_tags", []) or []),
         "requires_custom_dsp": requires_custom_dsp,
         "stacks": role_stacks,
         "recombine": recombine_plans,
-        "notes": list(stage.get("notes", [])),
+        "notes": list(_read(stage, "notes", []) or []),
     }
 
 
@@ -248,25 +256,25 @@ def validate_render_plan(render_plan: Dict[str, Any]) -> None:
         )
 
 
-def build_dsp_render_plan(blueprint) -> Dict[str, Any]:
-    stage_plans = [_normalize_stage(x) for x in getattr(blueprint, "stage_plans", [])]
+def build_dsp_render_plan(blueprint: Any) -> Dict[str, Any]:
+    stage_plans = [_normalize_stage(x) for x in (_read(blueprint, "stage_plans", []) or [])]
 
     render_plan = {
         "plan_name": "sm_render_plan_v1",
-        "prepared_input_node": getattr(blueprint, "prepared_input_node", "prepared_input"),
-        "final_output_node": getattr(blueprint, "final_output_node", "final_output"),
-        "support_recombine_gain_db": getattr(blueprint, "support_recombine_gain_db", 0.0),
-        "projection_assist_blend": getattr(blueprint, "projection_assist_blend", 0.0),
-        "spark_blend": getattr(blueprint, "spark_blend", 0.0),
-        "active_clamps": list(getattr(blueprint, "active_clamps", [])),
-        "safety_notes": list(getattr(blueprint, "safety_notes", [])),
+        "prepared_input_node": _read(blueprint, "prepared_input_node", "prepared_input"),
+        "final_output_node": _read(blueprint, "final_output_node", "final_output"),
+        "support_recombine_gain_db": _read(blueprint, "support_recombine_gain_db", 0.0),
+        "projection_assist_blend": _read(blueprint, "projection_assist_blend", 0.0),
+        "spark_blend": _read(blueprint, "spark_blend", 0.0),
+        "active_clamps": list(_read(blueprint, "active_clamps", []) or []),
+        "safety_notes": list(_read(blueprint, "safety_notes", []) or []),
         "stages": stage_plans,
         "node_order": _collect_node_order(
             stage_plans,
-            getattr(blueprint, "final_output_node", "final_output"),
+            _read(blueprint, "final_output_node", "final_output"),
         ),
         "notes": _uniq(
-            list(getattr(blueprint, "notes", []))
+            list(_read(blueprint, "notes", []) or [])
             + [
                 "render_builder_attached",
                 "stage_order_locked_from_graph",
