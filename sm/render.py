@@ -14,7 +14,7 @@ from .contracts import SmartMasterDebugBundle
 from .precondition import build_neutral_preclean_chain
 from .dsp.assembler import assemble_sm_dsp_blueprint
 from .dsp.render_builder import build_dsp_render_plan
-
+from .dsp.executor import execute_dsp_render_plan
 
 def _run(cmd: str) -> tuple[str, str]:
     p = subprocess.run(
@@ -251,7 +251,13 @@ def render_sm_core_v1(
     router = build_sm_router_summary(analysis, selection)
     dsp = assemble_sm_dsp_blueprint(analysis, router)
     render_plan = build_dsp_render_plan(dsp)
+    render_execution_report = execute_dsp_render_plan(
+    render_plan=render_plan,
+    input_path=analysis_input_path,
+)
 
+analysis.global_flags["render_execution_backend"] = "execute_dsp_render_plan"
+analysis.global_flags["render_execution_status"] = render_execution_report.get("status", "unknown")
     render_execution = _execute_render_plan_debug(
         render_plan=render_plan,
         prepared_input_path=analysis_input_path,
@@ -263,11 +269,11 @@ def render_sm_core_v1(
         analysis.global_flags["render_execution_status"] = render_execution.get("executor_status")
         analysis.global_flags["render_execution_backend"] = render_execution.get("executor_backend")
 
-    return _build_debug_bundle(
+    return SmartMasterDebugBundle(
         analysis=analysis,
         selection=selection,
         router=router,
         dsp=dsp,
         render_plan=render_plan,
-        render_execution=render_execution,
+        render_execution_report=render_execution_report,
     )
