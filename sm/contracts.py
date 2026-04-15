@@ -247,8 +247,9 @@ class RouterContext:
 
 @dataclass
 class SmartMasterDebugBundle:
-    analysis: SmartMasterAnalysis
-    selection: RoleProfileSelection
-    router: SmartMasterExecutionBlueprint
-    dsp: Dict[str, Any]
-    render_plan: Dict[str, Any]
+    analysis: Any
+    selection: Any
+    router: Any
+    dsp: Optional[Any] = None
+    render_plan: Optional[Any] = None
+    render_execution_report: Optional[Any] = None
