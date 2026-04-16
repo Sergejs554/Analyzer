@@ -1,5 +1,3 @@
-# sm/render.py
-
 import inspect
 import os
 import shlex
@@ -15,6 +13,7 @@ from .precondition import build_neutral_preclean_chain
 from .dsp.assembler import assemble_sm_dsp_blueprint
 from .dsp.render_builder import build_dsp_render_plan
 from .dsp.executor import execute_dsp_render_plan
+from .post_render import run_post_render_from_execution_report
 
 
 def _run(cmd: str) -> tuple[str, str]:
@@ -80,6 +79,7 @@ def _build_debug_bundle(
     dsp: Any,
     render_plan: Any,
     render_execution_report: Any,
+    post_render_report: Any,
 ):
     payload = {
         "analysis": analysis,
@@ -88,6 +88,7 @@ def _build_debug_bundle(
         "dsp": dsp,
         "render_plan": render_plan,
         "render_execution_report": render_execution_report,
+        "post_render_report": post_render_report,
     }
 
     if is_dataclass(SmartMasterDebugBundle):
@@ -155,6 +156,26 @@ def render_sm_core_v1(
     else:
         analysis.global_flags["render_execution_status"] = "unknown"
 
+    try:
+        post_render_report = run_post_render_from_execution_report(
+            render_execution_report=render_execution_report,
+            td=td,
+            requested_format=fmt,
+        )
+    except Exception as exc:
+        post_render_report = {
+            "status": "error",
+            "verdict": "fail",
+            "error": str(exc)[:2000],
+        }
+
+    if isinstance(post_render_report, dict):
+        analysis.global_flags["post_render_status"] = post_render_report.get("status")
+        analysis.global_flags["post_render_verdict"] = post_render_report.get("verdict")
+    else:
+        analysis.global_flags["post_render_status"] = "unknown"
+        analysis.global_flags["post_render_verdict"] = "unknown"
+
     return _build_debug_bundle(
         analysis=analysis,
         selection=selection,
@@ -162,4 +183,5 @@ def render_sm_core_v1(
         dsp=dsp,
         render_plan=render_plan,
         render_execution_report=render_execution_report,
+        post_render_report=post_render_report,
     )
