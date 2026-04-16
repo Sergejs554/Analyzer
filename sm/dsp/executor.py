@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+import math
+import os
+import re
+import tempfile
 from typing import Any
+
+import librosa
+import numpy as np
+import soundfile as sf
 
 
 def _read(obj: Any, key: str, default=None):
@@ -9,11 +17,675 @@ def _read(obj: Any, key: str, default=None):
     return getattr(obj, key, default)
 
 
-def build_render_execution_report(render_plan: Any, input_path: str | None = None) -> dict:
+def _safe_name(x: str | None) -> str:
+    x = (x or "x").strip().lower()
+    x = re.sub(r"[^a-z0-9_]+", "_", x)
+    x = re.sub(r"_+", "_", x).strip("_")
+    return x or "x"
+
+
+def _db_to_lin(x_db: float) -> float:
+    return float(10.0 ** (float(x_db) / 20.0))
+
+
+def _ensure_2d_audio(audio: np.ndarray) -> np.ndarray:
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim == 1:
+        return audio[:, None]
+    return audio.astype(np.float32, copy=False)
+
+
+def _match_length(x: np.ndarray, target_len: int) -> np.ndarray:
+    if len(x) == target_len:
+        return x
+    if len(x) > target_len:
+        return x[:target_len]
+    pad = np.zeros(target_len - len(x), dtype=x.dtype)
+    return np.concatenate([x, pad], axis=0)
+
+
+def _write_wav(path: str, audio: np.ndarray, sr: int) -> None:
+    sf.write(path, np.asarray(audio, dtype=np.float32), sr, format="WAV", subtype="PCM_16")
+
+
+def _load_audio(path: str) -> tuple[np.ndarray, int]:
+    audio, sr = sf.read(path, always_2d=True)
+    return _ensure_2d_audio(audio), int(sr)
+
+
+def _make_tmp_wav(td: str, stage_name: str, stack_name: str, instance_name: str) -> str:
+    fname = f"{_safe_name(stage_name)}__{_safe_name(stack_name)}__{_safe_name(instance_name)}.wav"
+    return os.path.join(td, fname)
+
+
+def _log_gaussian_band(freqs_hz: np.ndarray, center_hz: float, q: float) -> np.ndarray:
+    center_hz = max(float(center_hz), 20.0)
+    q = max(float(q), 0.35)
+
+    safe_freqs = np.maximum(freqs_hz, 1.0)
+    sigma_oct = 0.50 / q
+    distance_oct = np.log2(safe_freqs / center_hz)
+    weights = np.exp(-0.5 * (distance_oct / max(sigma_oct, 1e-6)) ** 2)
+
+    if len(weights) > 0:
+        weights[0] = 0.0
+    return weights.astype(np.float32)
+
+
+def _soft_band_weights(freqs_hz: np.ndarray, low_hz: float, high_hz: float) -> np.ndarray:
+    low_hz = max(float(low_hz), 20.0)
+    high_hz = max(float(high_hz), low_hz + 10.0)
+
+    safe_freqs = np.maximum(freqs_hz, 1.0)
+    log_f = np.log2(safe_freqs)
+    log_low = math.log2(low_hz)
+    log_high = math.log2(high_hz)
+
+    slope = 0.08
+    rise = 1.0 / (1.0 + np.exp(-(log_f - log_low) / slope))
+    fall = 1.0 / (1.0 + np.exp((log_f - log_high) / slope))
+    weights = rise * fall
+
+    if len(weights) > 0:
+        weights[0] = 0.0
+    return weights.astype(np.float32)
+
+
+def _smooth_envelope_frames(
+    x: np.ndarray,
+    attack_ms: float,
+    release_ms: float,
+    hop_samples: int,
+    sr: int,
+) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float32)
+    if x.size == 0:
+        return x
+
+    attack_ms = max(float(attack_ms), 1.0)
+    release_ms = max(float(release_ms), attack_ms)
+
+    attack_coeff = math.exp(-hop_samples / (sr * attack_ms * 0.001))
+    release_coeff = math.exp(-hop_samples / (sr * release_ms * 0.001))
+
+    out = np.zeros_like(x, dtype=np.float32)
+    prev = float(x[0])
+
+    for i, v in enumerate(x):
+        v = float(v)
+        coeff = attack_coeff if v > prev else release_coeff
+        prev = coeff * prev + (1.0 - coeff) * v
+        out[i] = prev
+
+    return out
+
+
+def _stft_params(sr: int) -> tuple[int, int]:
+    n_fft = 2048 if sr >= 44100 else 1024
+    hop = n_fft // 8
+    return n_fft, hop
+
+
+def _apply_framewise_spectral_gain(
+    x: np.ndarray,
+    sr: int,
+    shape_weights: np.ndarray,
+    gain_frames_db: np.ndarray,
+) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float32)
+    n_fft, hop = _stft_params(sr)
+
+    Z = librosa.stft(
+        x,
+        n_fft=n_fft,
+        hop_length=hop,
+        win_length=n_fft,
+        window="hann",
+        center=True,
+    )
+
+    if Z.size == 0:
+        return x.copy()
+
+    frame_count = Z.shape[1]
+    gain_frames_db = np.asarray(gain_frames_db, dtype=np.float32)
+
+    if gain_frames_db.size == 0:
+        gain_frames_db = np.zeros(frame_count, dtype=np.float32)
+    elif len(gain_frames_db) < frame_count:
+        pad = np.full(frame_count - len(gain_frames_db), float(gain_frames_db[-1]), dtype=np.float32)
+        gain_frames_db = np.concatenate([gain_frames_db, pad], axis=0)
+    elif len(gain_frames_db) > frame_count:
+        gain_frames_db = gain_frames_db[:frame_count]
+
+    gain_matrix_db = shape_weights[:, None] * gain_frames_db[None, :]
+    gain_matrix_lin = np.power(10.0, gain_matrix_db / 20.0).astype(np.complex64)
+
+    Zp = Z * gain_matrix_lin
+    y = librosa.istft(
+        Zp,
+        hop_length=hop,
+        win_length=n_fft,
+        window="hann",
+        center=True,
+        length=len(x),
+    )
+
+    return _match_length(np.asarray(y, dtype=np.float32), len(x))
+
+
+def _build_dynamic_gain_frames(
+    detector_signal: np.ndarray,
+    sr: int,
+    center_hz: float,
+    q: float,
+    gain_db: float,
+    attack_ms: float,
+    release_ms: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    detector_signal = np.asarray(detector_signal, dtype=np.float32)
+    n_fft, hop = _stft_params(sr)
+
+    Z = librosa.stft(
+        detector_signal,
+        n_fft=n_fft,
+        hop_length=hop,
+        win_length=n_fft,
+        window="hann",
+        center=True,
+    )
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+
+    if Z.size == 0:
+        return np.zeros(0, dtype=np.float32), np.zeros(len(freqs), dtype=np.float32)
+
+    det_weights = _log_gaussian_band(freqs, center_hz=center_hz, q=max(q * 0.9, 0.35))
+    shape_weights = _log_gaussian_band(freqs, center_hz=center_hz, q=q)
+
+    band_power = (np.abs(Z) ** 2 * det_weights[:, None]).sum(axis=0) / (det_weights.sum() + 1e-12)
+    band_rms = np.sqrt(np.maximum(band_power, 1e-18)).astype(np.float32)
+
+    detector_env = _smooth_envelope_frames(
+        band_rms,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+        hop_samples=hop,
+        sr=sr,
+    )
+
+    if float(np.max(detector_env)) <= 1e-9:
+        gain_frames_db = np.zeros_like(detector_env, dtype=np.float32)
+    else:
+        low_thr = float(np.quantile(detector_env, 0.60))
+        high_thr = float(np.quantile(detector_env, 0.95))
+
+        if high_thr <= low_thr + 1e-9:
+            activity = np.ones_like(detector_env, dtype=np.float32)
+        else:
+            activity = np.clip((detector_env - low_thr) / (high_thr - low_thr), 0.0, 1.0).astype(np.float32)
+
+        raw_gain_frames_db = (float(gain_db) * activity).astype(np.float32)
+        gain_frames_db = _smooth_envelope_frames(
+            raw_gain_frames_db,
+            attack_ms=max(attack_ms, 3.0),
+            release_ms=max(release_ms, attack_ms),
+            hop_samples=hop,
+            sr=sr,
+        )
+
+    return gain_frames_db, shape_weights.astype(np.float32)
+
+
+def _apply_fixed_bell_eq_audio(audio: np.ndarray, sr: int, center_hz: float, q: float, gain_db: float) -> np.ndarray:
+    audio = _ensure_2d_audio(audio)
+    n_fft, _ = _stft_params(sr)
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    shape_weights = _log_gaussian_band(freqs, center_hz=center_hz, q=q)
+
+    out = []
+    gain_frames_db = np.array([float(gain_db)], dtype=np.float32)
+
+    for ch in range(audio.shape[1]):
+        y = _apply_framewise_spectral_gain(
+            x=audio[:, ch],
+            sr=sr,
+            shape_weights=shape_weights,
+            gain_frames_db=gain_frames_db,
+        )
+        out.append(y)
+
+    return np.stack(out, axis=1).astype(np.float32)
+
+
+def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
+    audio = _ensure_2d_audio(audio)
+
+    params = dict(_read(op, "params", {}) or {})
+    center_hz = float(params.get("freq_hz", 1000.0))
+    q = float(params.get("q", 1.0))
+    gain_db = float(params.get("gain_db", 0.0))
+    attack_ms = float(params.get("attack_ms", 10.0))
+    release_ms = float(params.get("release_ms", 100.0))
+    channel_mode = str(_read(op, "channel_mode", "stereo") or "stereo").lower()
+
+    if audio.shape[1] == 1:
+        detector = audio[:, 0]
+        gain_frames_db, shape_weights = _build_dynamic_gain_frames(
+            detector_signal=detector,
+            sr=sr,
+            center_hz=center_hz,
+            q=q,
+            gain_db=gain_db,
+            attack_ms=attack_ms,
+            release_ms=release_ms,
+        )
+        y = _apply_framewise_spectral_gain(
+            x=audio[:, 0],
+            sr=sr,
+            shape_weights=shape_weights,
+            gain_frames_db=gain_frames_db,
+        )
+        return y[:, None]
+
+    left = audio[:, 0]
+    right = audio[:, 1]
+
+    if channel_mode == "mid":
+        mid = 0.5 * (left + right)
+        side = 0.5 * (left - right)
+
+        gain_frames_db, shape_weights = _build_dynamic_gain_frames(
+            detector_signal=mid,
+            sr=sr,
+            center_hz=center_hz,
+            q=q,
+            gain_db=gain_db,
+            attack_ms=attack_ms,
+            release_ms=release_ms,
+        )
+
+        mid_processed = _apply_framewise_spectral_gain(
+            x=mid,
+            sr=sr,
+            shape_weights=shape_weights,
+            gain_frames_db=gain_frames_db,
+        )
+
+        out_left = mid_processed + side
+        out_right = mid_processed - side
+        return np.stack([out_left, out_right], axis=1).astype(np.float32)
+
+    detector = 0.5 * (left + right)
+    gain_frames_db, shape_weights = _build_dynamic_gain_frames(
+        detector_signal=detector,
+        sr=sr,
+        center_hz=center_hz,
+        q=q,
+        gain_db=gain_db,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+    )
+
+    out_left = _apply_framewise_spectral_gain(
+        x=left,
+        sr=sr,
+        shape_weights=shape_weights,
+        gain_frames_db=gain_frames_db,
+    )
+    out_right = _apply_framewise_spectral_gain(
+        x=right,
+        sr=sr,
+        shape_weights=shape_weights,
+        gain_frames_db=gain_frames_db,
+    )
+
+    return np.stack([out_left, out_right], axis=1).astype(np.float32)
+
+
+def _apply_band_component_audio(audio: np.ndarray, sr: int, low_hz: float, high_hz: float) -> np.ndarray:
+    audio = _ensure_2d_audio(audio)
+    n_fft, hop = _stft_params(sr)
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    band_weights = _soft_band_weights(freqs, low_hz=low_hz, high_hz=high_hz)
+
+    out = []
+    zero_frames = np.array([0.0], dtype=np.float32)
+
+    for ch in range(audio.shape[1]):
+        x = audio[:, ch]
+        Z = librosa.stft(
+            x,
+            n_fft=n_fft,
+            hop_length=hop,
+            win_length=n_fft,
+            window="hann",
+            center=True,
+        )
+        if Z.size == 0:
+            out.append(x.copy())
+            continue
+        Zp = Z * band_weights[:, None]
+        y = librosa.istft(
+            Zp,
+            hop_length=hop,
+            win_length=n_fft,
+            window="hann",
+            center=True,
+            length=len(x),
+        )
+        y = _match_length(np.asarray(y, dtype=np.float32), len(x))
+        out.append(y)
+
+    return np.stack(out, axis=1).astype(np.float32)
+
+
+def _build_parallel_compressor_gain(
+    detector_signal: np.ndarray,
+    sr: int,
+    threshold_db: float,
+    ratio: float,
+    attack_ms: float,
+    release_ms: float,
+) -> np.ndarray:
+    detector_signal = np.asarray(detector_signal, dtype=np.float32)
+
+    frame_length = 1024 if sr >= 44100 else 512
+    hop_length = frame_length // 4
+
+    rms = librosa.feature.rms(
+        y=detector_signal,
+        frame_length=frame_length,
+        hop_length=hop_length,
+        center=True,
+    )[0].astype(np.float32)
+
+    rms_db = 20.0 * np.log10(np.maximum(rms, 1e-8))
+    ratio = max(float(ratio), 1.0)
+
+    over_db = np.maximum(rms_db - float(threshold_db), 0.0)
+    target_reduction_db = over_db * (1.0 - 1.0 / ratio)
+
+    reduction_db = _smooth_envelope_frames(
+        target_reduction_db.astype(np.float32),
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+        hop_samples=hop_length,
+        sr=sr,
+    )
+
+    frame_times = librosa.frames_to_time(
+        np.arange(len(reduction_db)),
+        sr=sr,
+        hop_length=hop_length,
+    )
+    sample_times = np.arange(len(detector_signal), dtype=np.float32) / float(sr)
+
+    if len(frame_times) == 0:
+        return np.ones(len(detector_signal), dtype=np.float32)
+
+    reduction_sample_db = np.interp(
+        sample_times,
+        frame_times,
+        reduction_db,
+        left=float(reduction_db[0]),
+        right=float(reduction_db[-1]),
+    ).astype(np.float32)
+
+    gain_lin = np.power(10.0, -reduction_sample_db / 20.0).astype(np.float32)
+    return gain_lin
+
+
+def _execute_static_eq_file(input_path: str, output_path: str, op: Any) -> None:
+    audio, sr = _load_audio(input_path)
+    params = dict(_read(op, "params", {}) or {})
+    center_hz = float(params.get("freq_hz", 1000.0))
+    q = float(params.get("q", 1.0))
+    gain_db = float(params.get("gain_db", 0.0))
+
+    processed = _apply_fixed_bell_eq_audio(
+        audio=audio,
+        sr=sr,
+        center_hz=center_hz,
+        q=q,
+        gain_db=gain_db,
+    )
+    _write_wav(output_path, processed, sr)
+
+
+def _execute_dynamic_eq_file(input_path: str, output_path: str, op: Any) -> None:
+    audio, sr = _load_audio(input_path)
+    processed = _apply_dynamic_eq_audio(audio=audio, sr=sr, op=op)
+    _write_wav(output_path, processed, sr)
+
+
+def _execute_parallel_eq_fill_file(input_path: str, output_path: str, op: Any) -> None:
+    audio, sr = _load_audio(input_path)
+    params = dict(_read(op, "params", {}) or {})
+
+    center_hz = float(params.get("freq_hz", 170.0))
+    q = float(params.get("q", 0.9))
+    gain_db = float(params.get("gain_db", 0.0))
+    mix = float(params.get("mix", 0.1))
+
+    boosted = _apply_fixed_bell_eq_audio(
+        audio=audio,
+        sr=sr,
+        center_hz=center_hz,
+        q=q,
+        gain_db=gain_db,
+    )
+
+    wet = (boosted - audio) * mix
+    _write_wav(output_path, wet, sr)
+
+
+def _execute_parallel_compressor_file(input_path: str, output_path: str, op: Any) -> None:
+    audio, sr = _load_audio(input_path)
+    params = dict(_read(op, "params", {}) or {})
+
+    threshold_db = float(params.get("threshold_db", -18.0))
+    ratio = float(params.get("ratio", 1.5))
+    attack_ms = float(params.get("attack_ms", 20.0))
+    release_ms = float(params.get("release_ms", 120.0))
+    mix = float(params.get("mix", 0.15))
+    channel_mode = str(_read(op, "channel_mode", "stereo") or "stereo").lower()
+
+    if audio.shape[1] == 1:
+        detector = audio[:, 0]
+    elif channel_mode == "mid":
+        detector = 0.5 * (audio[:, 0] + audio[:, 1])
+    else:
+        detector = 0.5 * (audio[:, 0] + audio[:, 1])
+
+    gain_lin = _build_parallel_compressor_gain(
+        detector_signal=detector,
+        sr=sr,
+        threshold_db=threshold_db,
+        ratio=ratio,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+    )
+
+    compressed = audio * gain_lin[:, None]
+    wet = compressed * mix
+    _write_wav(output_path, wet, sr)
+
+
+def _execute_band_limited_saturation_file(input_path: str, output_path: str, op: Any) -> None:
+    audio, sr = _load_audio(input_path)
+    params = dict(_read(op, "params", {}) or {})
+
+    low_cut_hz = float(params.get("low_cut_hz", 1900.0))
+    high_cut_hz = float(params.get("high_cut_hz", 5200.0))
+    drive_db = float(params.get("drive_db", 1.0))
+    mix = float(params.get("mix", 0.05))
+
+    band = _apply_band_component_audio(
+        audio=audio,
+        sr=sr,
+        low_hz=low_cut_hz,
+        high_hz=high_cut_hz,
+    )
+
+    drive_lin = _db_to_lin(drive_db)
+    saturated = np.tanh(band * drive_lin) / max(drive_lin, 1.0)
+
+    wet = (saturated - band) * mix
+    _write_wav(output_path, wet, sr)
+
+
+def _execute_op_file(
+    input_path: str,
+    td: str,
+    stage_name: str,
+    stack_name: str,
+    op: Any,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    backend_hint = str(_read(op, "backend_hint", "unknown") or "unknown").lower()
+    op_kind = str(_read(op, "op_kind", "") or "").lower()
+    instance_name = str(_read(op, "instance_name", "op") or "op")
+
+    op_report = {
+        "instance_name": _read(op, "instance_name"),
+        "primitive_name": _read(op, "primitive_name"),
+        "op_kind": _read(op, "op_kind"),
+        "backend_hint": backend_hint,
+        "executed": False,
+        "pending_reason": None,
+        "params": dict(_read(op, "params", {}) or {}),
+        "output_path": input_path,
+    }
+
+    supported = {
+        "static_eq",
+        "broad_eq",
+        "dynamic_eq",
+        "parallel_eq_fill",
+        "parallel_compressor",
+        "band_limited_saturation",
+    }
+
+    if op_kind not in supported:
+        op_report["pending_reason"] = "unsupported_op_kind"
+        return op_report
+
+    if dry_run:
+        op_report["executed"] = True
+        op_report["output_path"] = input_path
+        return op_report
+
+    output_path = _make_tmp_wav(td, stage_name, stack_name, instance_name)
+
+    if op_kind in {"static_eq", "broad_eq"}:
+        _execute_static_eq_file(input_path=input_path, output_path=output_path, op=op)
+    elif op_kind == "dynamic_eq":
+        _execute_dynamic_eq_file(input_path=input_path, output_path=output_path, op=op)
+    elif op_kind == "parallel_eq_fill":
+        _execute_parallel_eq_fill_file(input_path=input_path, output_path=output_path, op=op)
+    elif op_kind == "parallel_compressor":
+        _execute_parallel_compressor_file(input_path=input_path, output_path=output_path, op=op)
+    elif op_kind == "band_limited_saturation":
+        _execute_band_limited_saturation_file(input_path=input_path, output_path=output_path, op=op)
+    else:
+        op_report["pending_reason"] = "unsupported_op_kind"
+        return op_report
+
+    op_report["executed"] = True
+    op_report["output_path"] = output_path
+    return op_report
+
+
+def _mix_audio_files(source_paths: list[str], output_path: str, gain_db: float = 0.0, weights: list[float] | None = None) -> str:
+    if not source_paths:
+        raise RuntimeError("No source paths for recombine.")
+
+    first_audio, sr = _load_audio(source_paths[0])
+    out = np.zeros_like(first_audio, dtype=np.float32)
+
+    if weights is None:
+        weights = [1.0] * len(source_paths)
+
+    for src, w in zip(source_paths, weights):
+        audio, src_sr = _load_audio(src)
+        if src_sr != sr:
+            raise RuntimeError("Sample rate mismatch inside recombine.")
+        if audio.shape != out.shape:
+            raise RuntimeError("Shape mismatch inside recombine.")
+        out += audio * float(w)
+
+    out *= _db_to_lin(gain_db)
+    _write_wav(output_path, out, sr)
+    return output_path
+
+
+def _execute_recombine(
+    rec: Any,
+    node_paths: dict[str, str | None],
+    td: str,
+    stage_name: str,
+    dry_run: bool = False,
+) -> tuple[dict[str, Any], str | None]:
+    rec_name = str(_read(rec, "recombine_name", "recombine") or "recombine")
+    kind = str(_read(rec, "render_recombine_kind", "passthrough_or_sum") or "passthrough_or_sum")
+    source_nodes = list(_read(rec, "source_nodes", []) or [])
+    target_node = _read(rec, "target_node")
+    blend = float(_read(rec, "blend", 1.0) or 1.0)
+    gain_db = float(_read(rec, "gain_db", 0.0) or 0.0)
+
+    rec_report = {
+        "recombine_name": _read(rec, "recombine_name"),
+        "render_recombine_kind": kind,
+        "source_nodes": source_nodes,
+        "target_node": target_node,
+        "blend": blend,
+        "gain_db": gain_db,
+    }
+
+    source_paths = [node_paths.get(node) for node in source_nodes]
+    if not source_paths or any(p is None for p in source_paths):
+        return rec_report, None
+
+    if dry_run:
+        return rec_report, source_paths[0]
+
+    out_path = os.path.join(td, f"{_safe_name(stage_name)}__{_safe_name(rec_name)}.wav")
+
+    if kind == "assist_blend_sum" and len(source_paths) == 2:
+        target_path = _mix_audio_files(
+            source_paths=source_paths,
+            output_path=out_path,
+            gain_db=gain_db,
+            weights=[1.0, blend],
+        )
+        return rec_report, target_path
+
+    if kind in {"guarded_parallel_sum", "passthrough_or_sum"}:
+        target_path = _mix_audio_files(
+            source_paths=source_paths,
+            output_path=out_path,
+            gain_db=gain_db,
+            weights=[1.0] * len(source_paths),
+        )
+        return rec_report, target_path
+
+    target_path = _mix_audio_files(
+        source_paths=source_paths,
+        output_path=out_path,
+        gain_db=gain_db,
+        weights=[1.0] * len(source_paths),
+    )
+    return rec_report, target_path
+
+
+def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool = False) -> dict:
     node_order = list(_read(render_plan, "node_order", []) or [])
     stages = list(_read(render_plan, "stages", []) or [])
     prepared_input_node = _read(render_plan, "prepared_input_node", "prepared_input")
     final_output_node = _read(render_plan, "final_output_node", "final_output")
+
+    td = os.path.dirname(input_path) if input_path else tempfile.mkdtemp(prefix="sm_executor_")
+    td = td or tempfile.mkdtemp(prefix="sm_executor_")
 
     node_paths: dict[str, str | None] = {name: None for name in node_order}
     if input_path:
@@ -43,6 +715,9 @@ def build_render_execution_report(render_plan: Any, input_path: str | None = Non
         stacks = list(_read(stage, "stacks", []) or [])
         recombine = list(_read(stage, "recombine", []) or [])
 
+        stage_input_path = node_paths.get(input_node) or current_path
+        stage_current_path = stage_input_path
+
         stage_report: dict[str, Any] = {
             "stage_name": stage_name,
             "stage_kind": _read(stage, "stage_kind"),
@@ -53,69 +728,105 @@ def build_render_execution_report(render_plan: Any, input_path: str | None = Non
             "safety_tags": list(_read(stage, "safety_tags", []) or []),
             "stack_reports": [],
             "recombine_reports": [],
-            "resolved_input_path": node_paths.get(input_node),
+            "resolved_input_path": stage_input_path,
             "resolved_output_path": None,
         }
 
         for stack in stacks:
+            stack_name = _read(stack, "stack_name", "unknown_stack")
+            render_mode = str(_read(stack, "render_mode", "serial_inplace") or "serial_inplace")
+            tap_point = _read(stack, "tap_point")
+            output_node_for_stack = _read(stack, "output_node")
+            ops = list(_read(stack, "ops", []) or [])
+
+            stack_input_path = node_paths.get(tap_point) or stage_current_path or stage_input_path
+            op_current_path = stack_input_path
+
             stack_report: dict[str, Any] = {
-                "stack_name": _read(stack, "stack_name"),
+                "stack_name": stack_name,
                 "role": _read(stack, "role"),
-                "render_mode": _read(stack, "render_mode"),
+                "render_mode": render_mode,
                 "requires_custom_dsp": bool(_read(stack, "requires_custom_dsp", False)),
                 "ops": [],
             }
 
-            ops = list(_read(stack, "ops", []) or [])
             for op in ops:
-                backend_hint = _read(op, "backend_hint", "unknown")
-                executed = backend_hint == "ffmpeg_safe"
+                op_result = _execute_op_file(
+                    input_path=op_current_path,
+                    td=td,
+                    stage_name=stage_name,
+                    stack_name=stack_name,
+                    op=op,
+                    dry_run=dry_run,
+                )
 
-                op_report = {
-                    "instance_name": _read(op, "instance_name"),
-                    "primitive_name": _read(op, "primitive_name"),
-                    "op_kind": _read(op, "op_kind"),
-                    "backend_hint": backend_hint,
-                    "executed": executed,
-                    "pending_reason": None if executed else "custom_dsp_pending",
-                    "params": dict(_read(op, "params", {}) or {}),
-                }
-                stack_report["ops"].append(op_report)
+                stack_report["ops"].append(
+                    {
+                        "instance_name": op_result["instance_name"],
+                        "primitive_name": op_result["primitive_name"],
+                        "op_kind": op_result["op_kind"],
+                        "backend_hint": op_result["backend_hint"],
+                        "executed": op_result["executed"],
+                        "pending_reason": op_result["pending_reason"],
+                        "params": op_result["params"],
+                    }
+                )
 
-                if executed:
+                if op_result["executed"]:
                     report["executed_op_count"] += 1
+                    op_current_path = op_result["output_path"]
                 else:
                     report["pending_custom_op_count"] += 1
                     report["unsupported_ops"].append(
                         {
                             "stage_name": stage_name,
-                            "stack_name": _read(stack, "stack_name"),
-                            "instance_name": _read(op, "instance_name"),
-                            "primitive_name": _read(op, "primitive_name"),
-                            "op_kind": _read(op, "op_kind"),
-                            "backend_hint": backend_hint,
+                            "stack_name": stack_name,
+                            "instance_name": op_result["instance_name"],
+                            "primitive_name": op_result["primitive_name"],
+                            "op_kind": op_result["op_kind"],
+                            "backend_hint": op_result["backend_hint"],
                         }
                     )
 
+            if render_mode == "serial_inplace":
+                if output_node_for_stack:
+                    node_paths[output_node_for_stack] = op_current_path
+                stage_current_path = op_current_path
+            elif render_mode in {"parallel_return", "parallel_assist_return"}:
+                if output_node_for_stack:
+                    node_paths[output_node_for_stack] = op_current_path
+            else:
+                if output_node_for_stack:
+                    node_paths[output_node_for_stack] = op_current_path
+
             stage_report["stack_reports"].append(stack_report)
 
-        for rec in recombine:
-            stage_report["recombine_reports"].append(
-                {
-                    "recombine_name": _read(rec, "recombine_name"),
-                    "render_recombine_kind": _read(rec, "render_recombine_kind"),
-                    "source_nodes": list(_read(rec, "source_nodes", []) or []),
-                    "target_node": _read(rec, "target_node"),
-                    "blend": _read(rec, "blend"),
-                    "gain_db": _read(rec, "gain_db"),
-                }
-            )
+        if recombine:
+            last_target_path = None
+            for rec in recombine:
+                rec_report, target_path = _execute_recombine(
+                    rec=rec,
+                    node_paths=node_paths,
+                    td=td,
+                    stage_name=stage_name,
+                    dry_run=dry_run,
+                )
+                stage_report["recombine_reports"].append(rec_report)
 
-        if output_node:
-            stage_report["resolved_output_path"] = current_path
-            node_paths[output_node] = current_path
+                target_node = rec_report["target_node"]
+                if target_node and target_path:
+                    node_paths[target_node] = target_path
+                    last_target_path = target_path
 
+            if output_node and node_paths.get(output_node) is None:
+                node_paths[output_node] = last_target_path or stage_current_path
+        else:
+            if output_node and node_paths.get(output_node) is None:
+                node_paths[output_node] = stage_current_path
+
+        stage_report["resolved_output_path"] = node_paths.get(output_node)
         report["stage_reports"].append(stage_report)
+        current_path = node_paths.get(output_node) or current_path
 
     if report["pending_custom_op_count"] > 0:
         report["status"] = "partial_custom_dsp_pending"
@@ -124,8 +835,17 @@ def build_render_execution_report(render_plan: Any, input_path: str | None = Non
     return report
 
 
-def execute_dsp_render_plan(render_plan: Any, input_path: str | None = None) -> dict:
-    return build_render_execution_report(
+def build_render_execution_report(render_plan: Any, input_path: str | None = None) -> dict:
+    return _execute_plan(
         render_plan=render_plan,
         input_path=input_path,
+        dry_run=True,
+    )
+
+
+def execute_dsp_render_plan(render_plan: Any, input_path: str | None = None) -> dict:
+    return _execute_plan(
+        render_plan=render_plan,
+        input_path=input_path,
+        dry_run=False,
     )
