@@ -633,6 +633,7 @@ PRIMITIVE_REGISTRY: Dict[str, DSPPrimitiveSpec] = {
     ),
 
     # ---------------------------------------------------------
+        # ---------------------------------------------------------
     # Delivery primitives
     # ---------------------------------------------------------
     "output_gain_trim": _spec(
@@ -643,7 +644,7 @@ PRIMITIVE_REGISTRY: Dict[str, DSPPrimitiveSpec] = {
         channel_scope="stereo",
         detector_mode="none",
         phase_policy="mixed",
-        legal_roles=[],
+        legal_roles=[RoleName.DELIVERY],
         safety_tags=["delivery_sensitive"],
         min_amount=0.01,
         default_amount=0.10,
@@ -663,7 +664,7 @@ PRIMITIVE_REGISTRY: Dict[str, DSPPrimitiveSpec] = {
         channel_scope="stereo",
         detector_mode="peak",
         phase_policy="mixed",
-        legal_roles=[],
+        legal_roles=[RoleName.DELIVERY],
         safety_tags=["delivery_sensitive", "top_sensitive"],
         min_amount=0.05,
         default_amount=0.18,
@@ -691,7 +692,7 @@ PRIMITIVE_REGISTRY: Dict[str, DSPPrimitiveSpec] = {
         channel_scope="stereo",
         detector_mode="none",
         phase_policy="mixed",
-        legal_roles=[],
+        legal_roles=[RoleName.DELIVERY],
         safety_tags=["delivery_sensitive"],
         min_amount=0.01,
         default_amount=0.08,
@@ -711,7 +712,7 @@ PRIMITIVE_REGISTRY: Dict[str, DSPPrimitiveSpec] = {
         channel_scope="stereo",
         detector_mode="envelope",
         phase_policy="mixed",
-        legal_roles=[],
+        legal_roles=[RoleName.DELIVERY],
         safety_tags=["delivery_sensitive", "body_sensitive", "top_sensitive"],
         min_amount=0.01,
         default_amount=0.05,
