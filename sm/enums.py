@@ -1,5 +1,3 @@
-# sm/enums.py
-
 from enum import Enum
 
 
@@ -69,3 +67,4 @@ class RoleName(str, Enum):
     GUARD = "guard"
     PROJECTION = "projection"
     SPARK = "spark"
+    DELIVERY = "delivery"
