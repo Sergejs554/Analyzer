@@ -30,26 +30,41 @@ def _clean_params(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _backend_hint(primitive_class: str, path_type: str) -> str:
+    if path_type == "delivery":
+        return "delivery_backend"
+
     if primitive_class in {
         "static_eq_cut",
         "presence_contour",
+        "air_shelf",
     }:
         return "ffmpeg_safe"
+
     if primitive_class in {
         "dynamic_eq_cut",
+        "dynamic_eq_wide_cut",
         "dynamic_harsh_control",
+        "dynamic_sibilance_control",
+        "dynamic_tilt",
+        "support_eq_boost",
+        "dynamic_support_boost",
+        "parallel_fill",
+        "parallel_handoff_support",
+        "support_compression",
         "dynamic_presence_boost",
         "projection_safety_control",
-        "parallel_fill",
-        "support_compression",
+        "band_limited_saturation",
         "harmonic_density",
         "top_texture",
-        "side_polish",
-        "width_high_only",
+        "side_top_polish",
+        "high_only_width",
+        "true_peak_limiter",
+        "output_trim",
+        "ceiling_trim",
+        "final_balance_guard",
     }:
         return "custom_dsp_required"
-    if path_type == "delivery":
-        return "delivery_backend"
+
     return "custom_dsp_required"
 
 
@@ -58,20 +73,29 @@ def _op_kind_from_instance(instance: Any) -> str:
 
     mapping = {
         "dynamic_eq_cut": "dynamic_eq",
+        "dynamic_eq_wide_cut": "dynamic_eq",
         "static_eq_cut": "static_eq",
         "dynamic_harsh_control": "dynamic_eq",
+        "dynamic_sibilance_control": "dynamic_eq",
+        "dynamic_tilt": "dynamic_tilt",
+        "support_eq_boost": "parallel_eq_boost",
+        "dynamic_support_boost": "dynamic_eq_boost",
+        "parallel_fill": "parallel_eq_fill",
+        "parallel_handoff_support": "parallel_eq_fill",
+        "support_compression": "parallel_compressor",
         "presence_contour": "broad_eq",
         "dynamic_presence_boost": "dynamic_eq",
         "projection_safety_control": "dynamic_eq",
-        "parallel_fill": "parallel_eq_fill",
-        "support_compression": "parallel_compressor",
+        "band_limited_saturation": "band_limited_saturation",
         "harmonic_density": "band_limited_saturation",
+        "air_shelf": "high_shelf",
         "top_texture": "band_limited_texture",
-        "side_polish": "high_side_polish",
-        "width_high_only": "high_only_width",
+        "side_top_polish": "high_side_polish",
+        "high_only_width": "high_only_width",
         "true_peak_limiter": "true_peak_limiter",
         "output_trim": "output_trim",
-        "final_balance": "final_balance_guard",
+        "ceiling_trim": "ceiling_trim",
+        "final_balance_guard": "final_balance_guard",
     }
     return mapping.get(primitive_class, primitive_class or "unknown")
 
@@ -80,13 +104,14 @@ def _normalize_instance(instance: Any) -> Dict[str, Any]:
     primitive_class = _read(instance, "primitive_class", "")
     path_type = _read(instance, "path_type", "")
     params = _clean_params(_read(instance, "params", {}) or {})
+    backend_hint = _backend_hint(primitive_class, path_type)
 
     return {
         "instance_name": _read(instance, "instance_name"),
         "primitive_name": _read(instance, "primitive_name"),
         "primitive_class": primitive_class,
         "op_kind": _op_kind_from_instance(instance),
-        "backend_hint": _backend_hint(primitive_class, path_type),
+        "backend_hint": backend_hint,
         "enabled": bool(_read(instance, "enabled", True)),
         "role": _read(instance, "role"),
         "stack_name": _read(instance, "stack_name"),
@@ -132,7 +157,7 @@ def _normalize_stack(stack: Any) -> Dict[str, Any]:
     instances = [_normalize_instance(x) for x in (_read(stack, "primitive_instances", []) or [])]
 
     requires_custom_dsp = any(
-        op.get("backend_hint") == "custom_dsp_required"
+        op.get("backend_hint") in {"custom_dsp_required", "delivery_backend"}
         for op in instances
     )
 
