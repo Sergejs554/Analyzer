@@ -250,6 +250,7 @@ class SmartMasterDebugBundle:
     analysis: Any
     selection: Any
     router: Any
-    dsp: Optional[Any] = None
-    render_plan: Optional[Any] = None
-    render_execution_report: Optional[Any] = None
+    dsp: Any = None
+    render_plan: Any = None
+    render_execution_report: Any = None
+    post_render_report: Any = None
