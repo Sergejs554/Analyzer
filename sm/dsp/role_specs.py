@@ -17,13 +17,13 @@ ALL_PRIMITIVE_NAMES = set(PRIMITIVE_REGISTRY.keys())
 @dataclass
 class RoleStackTemplate:
     stack_name: str
-    stack_kind: str                  # corrective_core / support_parallel / projection_contour / projection_assist / finish / delivery
-    path_type: str                   # inplace / parallel / finish / delivery
+    stack_kind: str
+    path_type: str
 
     default_tap_point: str
     output_node: str
     recombine_target: Optional[str] = None
-    recombine_mode: str = "none"     # none / guarded_sum / assist_sum / finish_sum / sum
+    recombine_mode: str = "none"
 
     preferred_order: int = 0
 
@@ -37,7 +37,7 @@ class RoleModeSpec:
     role: RoleName
     target_band_mode: str
 
-    role_rank_bias: str              # primary / support / restrained / off
+    role_rank_bias: str
     stack_templates: List[RoleStackTemplate] = field(default_factory=list)
 
     forbidden_primitive_names: List[str] = field(default_factory=list)
@@ -125,7 +125,7 @@ NODE_PROJECTION_OUT = "projection_stage_out"
 
 NODE_SPARK_OUT = "spark_finish_out"
 NODE_FINISH_OUT = "finish_stage_out"
-NODE_DELIVERY_OUT = "delivery_stage_out"
+NODE_DELIVERY_OUT = "final_output"
 
 
 # ------------------------------------------------------------
@@ -837,26 +837,23 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
         role_rank_bias="primary",
         stack_templates=[
             _stack(
-                stack_name="delivery_final_stack",
-                stack_kind="delivery",
+                stack_name="delivery_protect_stack",
+                stack_kind="delivery_core",
                 path_type="delivery",
                 default_tap_point=NODE_FINISH_OUT,
                 output_node=NODE_DELIVERY_OUT,
-                recombine_target="final_output",
-                recombine_mode="sum",
                 preferred_order=60,
                 allowed_primitive_names=[
                     "output_gain_trim",
-                    "safety_ceiling_trim",
                     "true_peak_limiter",
                 ],
                 required_safety_tags=[
                     "delivery_sensitive",
                 ],
                 notes=[
-                    "Delivery is last-mile protection only.",
-                    "It trims level and true peak without repainting polish voicing.",
-                    "Its job is safe release, not new tone.",
+                    "Delivery is terminal protection only.",
+                    "Headroom first, limiter second.",
+                    "Delivery must not repaint polish tone.",
                 ],
             ),
         ],
@@ -866,7 +863,7 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
         blocked_by_default_clamps=[],
         notes=[
             "Fullband delivery is the final protection lane of the polish main branch.",
-            "It must solve true-peak and release safety without buying safety through tonal damage.",
+            "It solves release safety and true peak without creative re-voicing.",
         ],
     ),
     (RoleName.DELIVERY, "off"): _mode(
@@ -931,6 +928,8 @@ def get_primary_stack_template(role: RoleName, target_band_mode: str) -> Optiona
 
 
 def validate_role_specs() -> None:
+    delivery_role = getattr(RoleName, "DELIVERY", None)
+
     for (role, mode), spec in ROLE_MODE_SPECS.items():
         if spec.role != role:
             raise ValueError(f"RoleModeSpec role mismatch for key {(role, mode)}")
@@ -946,7 +945,15 @@ def validate_role_specs() -> None:
                     )
 
                 primitive_spec = PRIMITIVE_REGISTRY[primitive_name]
-                if role not in primitive_spec.legal_roles:
+
+                role_is_legal = role in primitive_spec.legal_roles
+                delivery_fallback_legal = bool(
+                    delivery_role is not None
+                    and role == delivery_role
+                    and primitive_spec.path_type == "delivery"
+                )
+
+                if not role_is_legal and not delivery_fallback_legal:
                     raise ValueError(
                         f"Primitive '{primitive_name}' is not legal for role={role} "
                         f"(role mode={mode}, stack={template.stack_name})"
