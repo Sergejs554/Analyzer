@@ -9,6 +9,10 @@ import shlex
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+import librosa
+import numpy as np
+import soundfile as sf
+
 
 CustomBackend = Callable[[List[Dict[str, Any]], str, str, Dict[str, Any]], str]
 
@@ -48,6 +52,85 @@ def _tmp_wav_path(td: str, name: str) -> str:
 
 def _quote(path: str) -> str:
     return shlex.quote(path)
+
+
+def _ensure_2d_audio(audio: np.ndarray) -> np.ndarray:
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim == 1:
+        return audio[:, None]
+    return audio.astype(np.float32, copy=False)
+
+
+def _match_length(x: np.ndarray, target_len: int) -> np.ndarray:
+    if len(x) == target_len:
+        return x
+    if len(x) > target_len:
+        return x[:target_len]
+    pad = np.zeros((target_len - len(x),) + x.shape[1:], dtype=x.dtype)
+    return np.concatenate([x, pad], axis=0)
+
+
+def _load_audio(path: str) -> tuple[np.ndarray, int]:
+    audio, sr = sf.read(path, always_2d=True)
+    return _ensure_2d_audio(audio), int(sr)
+
+
+def _write_wav(path: str, audio: np.ndarray, sr: int) -> None:
+    sf.write(path, np.asarray(audio, dtype=np.float32), sr, format="WAV", subtype="PCM_24")
+
+
+def _resample_audio(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+    audio = _ensure_2d_audio(audio)
+    if orig_sr == target_sr:
+        return audio.copy()
+
+    channels = []
+    for ch in range(audio.shape[1]):
+        y = librosa.resample(
+            audio[:, ch],
+            orig_sr=orig_sr,
+            target_sr=target_sr,
+            res_type="soxr_hq",
+        )
+        channels.append(np.asarray(y, dtype=np.float32))
+
+    min_len = min(len(ch) for ch in channels)
+    return np.stack([ch[:min_len] for ch in channels], axis=1).astype(np.float32)
+
+
+def _smooth_gain_samples(
+    gain: np.ndarray,
+    attack_ms: float,
+    release_ms: float,
+    sr: int,
+) -> np.ndarray:
+    gain = np.asarray(gain, dtype=np.float32)
+    if gain.size == 0:
+        return gain
+
+    attack_ms = max(float(attack_ms), 0.05)
+    release_ms = max(float(release_ms), attack_ms)
+
+    attack_coeff = math.exp(-1.0 / max(sr * attack_ms * 0.001, 1e-9))
+    release_coeff = math.exp(-1.0 / max(sr * release_ms * 0.001, 1e-9))
+
+    out = np.zeros_like(gain, dtype=np.float32)
+    prev = float(gain[0])
+
+    for i, v in enumerate(gain):
+        v = float(gain[i])
+
+        if v < prev:
+            if attack_ms <= 0.5:
+                prev = v
+            else:
+                prev = attack_coeff * prev + (1.0 - attack_coeff) * v
+        else:
+            prev = release_coeff * prev + (1.0 - release_coeff) * v
+
+        out[i] = prev
+
+    return out
 
 
 def _probe_audio(path: str) -> Dict[str, Any]:
@@ -163,6 +246,104 @@ def _apply_ffmpeg_ops(input_path: str, output_path: str, ops: Sequence[Dict[str,
     return output_path
 
 
+def _execute_output_trim_file(input_path: str, output_path: str, op: Dict[str, Any]) -> str:
+    audio, sr = _load_audio(input_path)
+    params = dict(op.get("params") or {})
+    gain_db = float(params.get("gain_db", 0.0))
+
+    processed = audio * _db_to_linear(gain_db)
+    processed = np.clip(processed, -1.0, 1.0)
+    _write_wav(output_path, processed, sr)
+    return output_path
+
+
+def _execute_true_peak_limiter_file(input_path: str, output_path: str, op: Dict[str, Any]) -> str:
+    audio, sr = _load_audio(input_path)
+    params = dict(op.get("params") or {})
+
+    ceiling_db = float(params.get("gain_db", -1.0))
+    threshold_db = float(params.get("threshold_db", -4.5))
+    attack_ms = float(params.get("attack_ms", 0.25))
+    release_ms = float(params.get("release_ms", 45.0))
+
+    ceiling_lin = _db_to_linear(ceiling_db)
+    threshold_lin = _db_to_linear(threshold_db)
+
+    oversample_factor = 4
+    os_sr = sr * oversample_factor
+    audio_os = _resample_audio(audio, sr, os_sr)
+
+    linked_peak = np.max(np.abs(audio_os), axis=1)
+    engage_level = min(threshold_lin, ceiling_lin)
+
+    desired_gain = np.ones_like(linked_peak, dtype=np.float32)
+    active = linked_peak > engage_level
+    if np.any(active):
+        desired_gain[active] = np.minimum(
+            1.0,
+            ceiling_lin / np.maximum(linked_peak[active], 1e-8),
+        ).astype(np.float32)
+
+    smoothed_gain = _smooth_gain_samples(
+        desired_gain,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+        sr=os_sr,
+    )
+
+    limited_os = audio_os * smoothed_gain[:, None]
+    limited_os = np.clip(limited_os, -ceiling_lin, ceiling_lin)
+
+    limited = _resample_audio(limited_os, os_sr, sr)
+    limited = _match_length(limited, len(audio))
+    limited = np.clip(limited, -ceiling_lin, ceiling_lin)
+    limited = np.clip(limited, -1.0, 1.0)
+
+    _write_wav(output_path, limited, sr)
+    return output_path
+
+
+def _execute_delivery_backend_group(
+    input_path: str,
+    output_path: str,
+    ops: Sequence[Dict[str, Any]],
+    td: str,
+    stack_name: str,
+) -> Tuple[str, List[Dict[str, Any]], bool]:
+    working_path = input_path
+    unresolved: List[Dict[str, Any]] = []
+    any_audio_change = False
+
+    for idx, op in enumerate(ops):
+        op_kind = str(op.get("op_kind") or "").lower()
+        is_last = idx == len(ops) - 1
+        step_output = output_path if is_last else _tmp_wav_path(
+            td,
+            f"{stack_name}__delivery_grp_{idx}",
+        )
+
+        if op_kind == "output_trim":
+            working_path = _execute_output_trim_file(working_path, step_output, op)
+            any_audio_change = True
+            continue
+
+        if op_kind == "true_peak_limiter":
+            working_path = _execute_true_peak_limiter_file(working_path, step_output, op)
+            any_audio_change = True
+            continue
+
+        unresolved.append(
+            {
+                "primitive_name": op.get("primitive_name"),
+                "instance_name": op.get("instance_name"),
+                "backend_hint": op.get("backend_hint") or "delivery_backend",
+                "stack_name": stack_name,
+            }
+        )
+
+    return working_path, unresolved, any_audio_change
+
+
 def _group_ops_by_backend(ops: Sequence[Dict[str, Any]]) -> List[Tuple[str, List[Dict[str, Any]]]]:
     groups: List[Tuple[str, List[Dict[str, Any]]]] = []
     current_backend: Optional[str] = None
@@ -265,29 +446,65 @@ def _execute_stack(
             continue
 
         if backend_hint == "delivery_backend":
-            unresolved = [
-                {
-                    "primitive_name": op.get("primitive_name"),
-                    "instance_name": op.get("instance_name"),
-                    "backend_hint": backend_hint,
-                    "stack_name": stack.get("stack_name"),
-                }
-                for op in group_ops
-            ]
-            unresolved_custom_ops.extend(unresolved)
-            executed_groups.append(
-                {
-                    "backend": backend_hint,
-                    "status": "unresolved",
-                    "op_names": [op.get("primitive_name") for op in group_ops],
-                }
+            delivery_output = step_output
+            working_path, unresolved, delivery_changed = _execute_delivery_backend_group(
+                input_path=working_path,
+                output_path=delivery_output,
+                ops=group_ops,
+                td=td,
+                stack_name=str(stack.get("stack_name") or "delivery"),
             )
-            if fail_on_custom:
-                names = ", ".join(op["primitive_name"] for op in unresolved)
-                raise RuntimeError(
-                    f"Delivery backend required for stack={stack.get('stack_name')} ops={names}"
+
+            if delivery_changed:
+                any_audio_change = True
+                executed_groups.append(
+                    {
+                        "backend": backend_hint,
+                        "status": "executed" if not unresolved else "partial",
+                        "op_names": [op.get("primitive_name") for op in group_ops],
+                        "output_path": working_path,
+                    }
                 )
+            else:
+                executed_groups.append(
+                    {
+                        "backend": backend_hint,
+                        "status": "unresolved",
+                        "op_names": [op.get("primitive_name") for op in group_ops],
+                    }
+                )
+
+            if unresolved:
+                unresolved_custom_ops.extend(unresolved)
+                if fail_on_custom:
+                    names = ", ".join(op["primitive_name"] for op in unresolved)
+                    raise RuntimeError(
+                        f"Delivery backend required for stack={stack.get('stack_name')} ops={names}"
+                    )
             continue
+
+        unresolved = [
+            {
+                "primitive_name": op.get("primitive_name"),
+                "instance_name": op.get("instance_name"),
+                "backend_hint": backend_hint,
+                "stack_name": stack.get("stack_name"),
+            }
+            for op in group_ops
+        ]
+        unresolved_custom_ops.extend(unresolved)
+        executed_groups.append(
+            {
+                "backend": backend_hint,
+                "status": "unresolved",
+                "op_names": [op.get("primitive_name") for op in group_ops],
+            }
+        )
+        if fail_on_custom:
+            names = ", ".join(op["primitive_name"] for op in unresolved)
+            raise RuntimeError(
+                f"Unknown backend required for stack={stack.get('stack_name')} ops={names}"
+            )
 
     if not ops:
         if _stack_is_parallel(stack):
@@ -483,5 +700,6 @@ def execute_sm_render_plan(
             "stage_by_stage_execution_completed",
             "ffmpeg_safe_ops_executed",
             "custom_dsp_ops_routed_or_marked_unresolved",
+            "delivery_backend_supported",
         ],
     }
