@@ -349,7 +349,6 @@ def _apply_band_component_audio(audio: np.ndarray, sr: int, low_hz: float, high_
     band_weights = _soft_band_weights(freqs, low_hz=low_hz, high_hz=high_hz)
 
     out = []
-    zero_frames = np.array([0.0], dtype=np.float32)
 
     for ch in range(audio.shape[1]):
         x = audio[:, ch]
@@ -433,6 +432,62 @@ def _build_parallel_compressor_gain(
 
     gain_lin = np.power(10.0, -reduction_sample_db / 20.0).astype(np.float32)
     return gain_lin
+
+
+def _estimate_approx_true_peak_dbtp(audio: np.ndarray, sr: int, oversample: int = 2) -> float:
+    audio = _ensure_2d_audio(audio)
+
+    oversample = max(int(oversample), 1)
+    if oversample == 1:
+        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+        if peak <= 1e-12:
+            return -120.0
+        return 20.0 * math.log10(peak)
+
+    target_sr = int(sr * oversample)
+    peak = 0.0
+
+    for ch in range(audio.shape[1]):
+        x = np.asarray(audio[:, ch], dtype=np.float32)
+        if x.size == 0:
+            continue
+        y = librosa.resample(x, orig_sr=sr, target_sr=target_sr)
+        ch_peak = float(np.max(np.abs(y))) if y.size else 0.0
+        peak = max(peak, ch_peak)
+
+    if peak <= 1e-12:
+        return -120.0
+    return 20.0 * math.log10(peak)
+
+
+def _apply_output_trim_audio(audio: np.ndarray, gain_db: float) -> np.ndarray:
+    audio = _ensure_2d_audio(audio)
+    return (audio * _db_to_lin(gain_db)).astype(np.float32)
+
+
+def _apply_true_peak_limiter_audio(
+    audio: np.ndarray,
+    sr: int,
+    ceiling_db: float,
+    *,
+    oversample: int = 2,
+    safety_margin_db: float = 0.20,
+    max_passes: int = 2,
+) -> np.ndarray:
+    audio = _ensure_2d_audio(audio).copy()
+
+    effective_ceiling_db = float(ceiling_db) - abs(float(safety_margin_db))
+
+    for _ in range(max_passes):
+        current_tp_db = _estimate_approx_true_peak_dbtp(audio, sr, oversample=oversample)
+        needed_trim_db = effective_ceiling_db - current_tp_db
+
+        if needed_trim_db >= -0.01:
+            break
+
+        audio *= _db_to_lin(needed_trim_db)
+
+    return audio.astype(np.float32)
 
 
 def _execute_static_eq_file(input_path: str, output_path: str, op: Any) -> None:
@@ -534,6 +589,31 @@ def _execute_band_limited_saturation_file(input_path: str, output_path: str, op:
     _write_wav(output_path, wet, sr)
 
 
+def _execute_output_trim_file(input_path: str, output_path: str, op: Any) -> None:
+    audio, sr = _load_audio(input_path)
+    params = dict(_read(op, "params", {}) or {})
+    gain_db = float(params.get("gain_db", 0.0))
+
+    processed = _apply_output_trim_audio(audio=audio, gain_db=gain_db)
+    _write_wav(output_path, processed, sr)
+
+
+def _execute_true_peak_limiter_file(input_path: str, output_path: str, op: Any) -> None:
+    audio, sr = _load_audio(input_path)
+    params = dict(_read(op, "params", {}) or {})
+
+    ceiling_db = float(params.get("gain_db", -1.0))
+    processed = _apply_true_peak_limiter_audio(
+        audio=audio,
+        sr=sr,
+        ceiling_db=ceiling_db,
+        oversample=2,
+        safety_margin_db=0.20,
+        max_passes=2,
+    )
+    _write_wav(output_path, processed, sr)
+
+
 def _execute_op_file(
     input_path: str,
     td: str,
@@ -564,6 +644,8 @@ def _execute_op_file(
         "parallel_eq_fill",
         "parallel_compressor",
         "band_limited_saturation",
+        "output_trim",
+        "true_peak_limiter",
     }
 
     if op_kind not in supported:
@@ -587,6 +669,10 @@ def _execute_op_file(
         _execute_parallel_compressor_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind == "band_limited_saturation":
         _execute_band_limited_saturation_file(input_path=input_path, output_path=output_path, op=op)
+    elif op_kind == "output_trim":
+        _execute_output_trim_file(input_path=input_path, output_path=output_path, op=op)
+    elif op_kind == "true_peak_limiter":
+        _execute_true_peak_limiter_file(input_path=input_path, output_path=output_path, op=op)
     else:
         op_report["pending_reason"] = "unsupported_op_kind"
         return op_report
@@ -798,6 +884,7 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
             else:
                 if output_node_for_stack:
                     node_paths[output_node_for_stack] = op_current_path
+                stage_current_path = op_current_path
 
             stage_report["stack_reports"].append(stack_report)
 
