@@ -1,5 +1,3 @@
-# sm/dsp/primitive_instances.py
-
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -189,6 +187,10 @@ class _PrimitiveBuildContext:
     @property
     def is_spark(self) -> bool:
         return self.role_key == "spark"
+
+    @property
+    def is_delivery(self) -> bool:
+        return self.role_key == "delivery"
 
 
 def _base_instance(
@@ -607,6 +609,77 @@ def _build_local_desibilance_control(ctx: _PrimitiveBuildContext) -> Dict[str, A
     )
 
 
+def _build_output_gain_trim(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
+    m = ctx.analysis.metrics
+
+    true_peak_dbtp = _safe(m.true_peak_dbtp, -1.0)
+    integrated_lufs = _safe(m.integrated_lufs, -14.0)
+    limiter_stress_proxy = _safe(m.limiter_stress_proxy, 0.0)
+    near_clip_ratio = _safe(m.near_clip_ratio, 0.0)
+
+    tp_hot = max(0.0, true_peak_dbtp + 1.0)
+    loud_hot = max(0.0, integrated_lufs + 9.5)
+    stress_hot = max(0.0, limiter_stress_proxy - 0.82)
+    clip_hot = min(1.0, near_clip_ratio * 120.0)
+
+    gain_trim = -(
+        0.20
+        + (tp_hot * 0.55)
+        + (loud_hot * 0.12)
+        + (stress_hot * 0.65)
+        + (clip_hot * 0.40)
+    )
+    gain_trim = _clamp(gain_trim, -2.50, -0.20)
+
+    return _base_instance(
+        ctx,
+        "output_gain_trim",
+        gain_db=round(gain_trim, 4),
+        notes=[
+            "Terminal output trim before true-peak limiting.",
+            "Headroom comes first.",
+        ],
+    )
+
+
+def _build_true_peak_limiter(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
+    m = ctx.analysis.metrics
+
+    true_peak_dbtp = _safe(m.true_peak_dbtp, -1.0)
+    limiter_stress_proxy = _safe(m.limiter_stress_proxy, 0.0)
+    near_clip_ratio = _safe(m.near_clip_ratio, 0.0)
+
+    tp_hot = max(0.0, true_peak_dbtp + 1.0)
+    stress_hot = max(0.0, limiter_stress_proxy - 0.82)
+    clip_hot = min(1.0, near_clip_ratio * 120.0)
+
+    ceiling_db = -1.00
+    threshold_db = -(
+        0.80
+        + (tp_hot * 1.60)
+        + (stress_hot * 1.20)
+        + (clip_hot * 0.80)
+    )
+    threshold_db = _clamp(threshold_db, -4.50, -0.80)
+
+    attack_ms = _lerp(1.5, 0.25, ctx.activity)
+    release_ms = _lerp(120.0, 45.0, ctx.activity)
+
+    return _base_instance(
+        ctx,
+        "true_peak_limiter",
+        gain_db=round(ceiling_db, 4),
+        threshold_db=round(threshold_db, 4),
+        attack_ms=round(attack_ms, 3),
+        release_ms=round(release_ms, 3),
+        mix=1.0,
+        notes=[
+            "Terminal true-peak limiter.",
+            "Protects release safety without re-voicing the polish chain.",
+        ],
+    )
+
+
 def _generic_instance(ctx: _PrimitiveBuildContext, primitive_name: str) -> Dict[str, Any]:
     min_gain = _spec_attr(primitive_name, "min_gain_db", -0.5)
     default_gain = _spec_attr(primitive_name, "default_gain_db", 0.0)
@@ -667,6 +740,8 @@ _PRIMITIVE_BUILDERS = {
     "protected_high_side_polish": _build_protected_high_side_polish,
     "micro_width_high_only": _build_micro_width_high_only,
     "local_desibilance_control": _build_local_desibilance_control,
+    "output_gain_trim": _build_output_gain_trim,
+    "true_peak_limiter": _build_true_peak_limiter,
 }
 
 
@@ -682,7 +757,6 @@ def build_stack_primitive_instances(
 
     instances: List[Dict[str, Any]] = []
     for idx, primitive_name in enumerate(stack.allowed_primitive_names or []):
-        builder = _PRIMITIVE_BUILDERS.get(primitive_name, _generic_instance)
         ctx = _PrimitiveBuildContext(
             analysis=analysis,
             stack=stack,
@@ -690,7 +764,11 @@ def build_stack_primitive_instances(
             amount_norm=amount_norm,
             activity=activity,
         )
-        instances.append(builder(ctx))
+        builder = _PRIMITIVE_BUILDERS.get(primitive_name)
+        if builder is None:
+            instances.append(_generic_instance(ctx, primitive_name))
+        else:
+            instances.append(builder(ctx))
     return instances
 
 
