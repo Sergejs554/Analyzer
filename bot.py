@@ -58,6 +58,7 @@ def label_format(fmt_key: str) -> str:
 def label_process(process_key: str) -> str:
     return {
         "master": "Smart Master",
+        "sm_master": "SM Master",
         "enhance_branch": "Polish branch",
         "bakuage_branch": "Low Support branch",
         "bandlab_branch": "Reveal branch",
@@ -87,6 +88,7 @@ def kb_home() -> InlineKeyboardMarkup:
 
 def kb_process() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧠 SM Master", callback_data="set_process_sm_master")],
         [InlineKeyboardButton(text="✨ Smart Master", callback_data="set_process_master")],
         [InlineKeyboardButton(text="🪞 Polish branch", callback_data="set_process_enhance_branch")],
         [InlineKeyboardButton(text="🧱 Low Support branch", callback_data="set_process_bakuage_branch")],
@@ -288,6 +290,7 @@ def _norm_process(x: str) -> str:
     x = (x or "master").lower().strip()
     allowed = {
         "master",
+        "sm_master",
         "enhance_branch",
         "bakuage_branch",
         "bandlab_branch",
@@ -303,6 +306,8 @@ def _api_process_url(file_url: str, process_mode: str, tone: str, intensity: str
     fu = quote(file_url, safe="")
     if process_mode == "master":
         return f"{MASTER_API_BASE}/master?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
+    if process_mode == "sm_master":
+        return f"{MASTER_API_BASE}/blend?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
     if process_mode == "enhance_branch":
         return f"{MASTER_API_BASE}/enhance_branch?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
     if process_mode == "bakuage_branch":
@@ -370,6 +375,7 @@ async def _telegram_file_direct_url(file_id: str) -> str:
 def _action_text(process_mode: str) -> str:
     return {
         "master": "🎧 Файл получен. Делаю Smart Master через API…",
+        "sm_master": "🎧 Файл получен. Делаю SM Master через API…",
         "enhance_branch": "🎧 Файл получен. Рендерю Polish branch…",
         "bakuage_branch": "🎧 Файл получен. Рендерю Low Support branch…",
         "bandlab_branch": "🎧 Файл получен. Рендерю Reveal branch…",
@@ -383,6 +389,7 @@ def _action_text(process_mode: str) -> str:
 def _action_text_link(process_mode: str) -> str:
     return {
         "master": "⏬ Скачиваю по ссылке и делаю Smart Master через API…",
+        "sm_master": "⏬ Скачиваю по ссылке и делаю SM Master через API…",
         "enhance_branch": "⏬ Скачиваю по ссылке и рендерю Polish branch…",
         "bakuage_branch": "⏬ Скачиваю по ссылке и рендерю Low Support branch…",
         "bandlab_branch": "⏬ Скачиваю по ссылке и рендерю Reveal branch…",
