@@ -2118,6 +2118,42 @@ def _render_full_product_staged(in_path: str, tone: str, intensity: str, fmt: st
     staged_path = os.path.join(td, staged_name)
     os.replace(out_path, staged_path)
     return staged_path, staged_name
+
+
+def _render_sm_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
+    tone = _normalize_tone(tone)
+    intensity = _normalize_intensity(intensity)
+    fmt = _normalize_format(fmt)
+
+    sm_bundle = render_sm_branch_v1(
+        input_path=in_path,
+        tone=tone,
+        intensity=intensity,
+        fmt=fmt,
+        td=td,
+        use_neutral_preclean=True,
+        enable_afftdn=False,
+    )
+
+    sm_data = asdict(sm_bundle)
+    post_render = sm_data.get("post_render_report") or {}
+    derivatives = post_render.get("derivatives_report") or {}
+    manifest = post_render.get("manifest") or {}
+    inspect_report = post_render.get("inspect_report") or {}
+
+    out_path = (
+        derivatives.get("master_download_path")
+        or manifest.get("master_download_path")
+        or inspect_report.get("final_output_path")
+        or manifest.get("final_output_path")
+    )
+
+    if not out_path or not os.path.exists(out_path):
+        raise RuntimeError("SM master output path missing")
+
+    return out_path, os.path.basename(out_path)
+
+
 def _render_single_branch_preview(
     in_path: str,
     tone: str,
@@ -2499,6 +2535,7 @@ def root():
             "/enhance_branch",
             "/bandlab_diagnostics",
             "/sm_debug",
+            "/sm_master",
         ]
     })
 
@@ -2751,6 +2788,39 @@ def sm_debug_route():
             })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.get("/sm_master")
+def sm_master_route():
+    url = request.args.get("file")
+    if not url:
+        return jsonify({"error": "provide ?file=<url>"}), 400
+
+    tone = _normalize_tone(request.args.get("tone") or "balanced")
+    intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
+    fmt = _normalize_format(request.args.get("format") or "wav16")
+
+    if is_gdrive(url):
+        url = gdrive_direct(url)
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            in_path, _dbg = _dl_to_named(td, "file", url)
+            out_path, out_name = _render_sm_master(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
+
+            if out_name.lower().endswith(".mp3"):
+                mime = "audio/mpeg"
+            elif out_name.lower().endswith(".flac"):
+                mime = "audio/flac"
+            elif out_name.lower().endswith(".aiff") or out_name.lower().endswith(".aif"):
+                mime = "audio/aiff"
+            else:
+                mime = "audio/wav"
+
+            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @app.get("/bandlab_diagnostics")
 def bandlab_diagnostics_route():
