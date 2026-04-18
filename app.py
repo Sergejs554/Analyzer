@@ -546,6 +546,7 @@ def _is_dirty_dense_input(profile: dict) -> bool:
         and hot_edge_flags >= 1
     )
 
+
 def _dirty_dense_debug_payload(in_path: str, td: str) -> dict:
     profile = _analyze_input_profile(in_path, td)
 
@@ -629,6 +630,8 @@ def _dirty_dense_debug_payload(in_path: str, td: str) -> dict:
         },
         "dirty_pre_clean_chain": _DIRTY_PRE_CLEAN_CHAIN,
     }
+
+
 # ---------------------------
 # NORMALIZERS
 # ---------------------------
@@ -892,6 +895,7 @@ def _render_low_support_branch(in_path: str, tone: str, intensity: str, fmt: str
     )
     _run(cmd)
     return out_path, out_name
+
 
 # ---------------------------
 # REVEAL / PRESENCE / MID-AIR BRANCH
@@ -1203,6 +1207,7 @@ def _render_reveal_branch(in_path: str, tone: str, intensity: str, fmt: str, td:
     )
     _run(cmd)
     return out_path, out_name
+
 
 # ---------------------------
 # POLISH / ENHANCE BRANCH
@@ -2120,40 +2125,6 @@ def _render_full_product_staged(in_path: str, tone: str, intensity: str, fmt: st
     return staged_path, staged_name
 
 
-def _render_sm_master(in_path: str, tone: str, intensity: str, fmt: str, td: str) -> tuple[str, str]:
-    tone = _normalize_tone(tone)
-    intensity = _normalize_intensity(intensity)
-    fmt = _normalize_format(fmt)
-
-    sm_bundle = render_sm_branch_v1(
-        input_path=in_path,
-        tone=tone,
-        intensity=intensity,
-        fmt=fmt,
-        td=td,
-        use_neutral_preclean=True,
-        enable_afftdn=False,
-    )
-
-    sm_data = asdict(sm_bundle)
-    post_render = sm_data.get("post_render_report") or {}
-    derivatives = post_render.get("derivatives_report") or {}
-    manifest = post_render.get("manifest") or {}
-    inspect_report = post_render.get("inspect_report") or {}
-
-    out_path = (
-        derivatives.get("master_download_path")
-        or manifest.get("master_download_path")
-        or inspect_report.get("final_output_path")
-        or manifest.get("final_output_path")
-    )
-
-    if not out_path or not os.path.exists(out_path):
-        raise RuntimeError("SM master output path missing")
-
-    return out_path, os.path.basename(out_path)
-
-
 def _render_single_branch_preview(
     in_path: str,
     tone: str,
@@ -2505,6 +2476,49 @@ def _collect_bandlab_diagnostic_report(stage_paths: dict) -> dict:
     return stages
 
 
+def _sm_result_meta(fmt: str) -> tuple[str, str]:
+    fmt = _normalize_format(fmt)
+    if fmt == "wav24":
+        return "sm_master_uhd.wav", "audio/wav"
+    if fmt == "flac":
+        return "sm_master.flac", "audio/flac"
+    if fmt == "mp3_320":
+        return "sm_master_320.mp3", "audio/mpeg"
+    if fmt == "aiff":
+        return "sm_master.aiff", "audio/aiff"
+    return "sm_master.wav", "audio/wav"
+
+
+def _extract_sm_master_file(sm_payload: dict, requested_fmt: str) -> tuple[str, str, str]:
+    post = sm_payload.get("post_render_report") or {}
+    derivatives = post.get("derivatives_report") or {}
+    manifest = post.get("manifest") or {}
+    render_report = sm_payload.get("render_execution_report") or {}
+
+    returned_fmt = (
+        derivatives.get("requested_format")
+        or manifest.get("requested_format")
+        or requested_fmt
+    )
+
+    master_path = (
+        derivatives.get("master_download_path")
+        or manifest.get("master_download_path")
+        or render_report.get("final_output_path")
+    )
+
+    if not master_path or not os.path.exists(master_path):
+        render_status = render_report.get("status") or "unknown"
+        post_status = post.get("status") or "unknown"
+        raise RuntimeError(
+            f"SM render did not produce a downloadable master file "
+            f"(render_status={render_status}, post_status={post_status})"
+        )
+
+    download_name, mime = _sm_result_meta(returned_fmt)
+    return master_path, download_name, mime
+
+
 # --- routes ---
 
 @app.get("/")
@@ -2539,7 +2553,7 @@ def root():
         ]
     })
 
-    
+
 @app.get("/health")
 def health():
     return jsonify({
@@ -2613,6 +2627,7 @@ def health():
         "ART_POLISH_GAIN_DB": os.getenv("ART_POLISH_GAIN_DB"),
     })
 
+
 @app.get("/prepared_input")
 def prepared_input_route():
     url = request.args.get("file")
@@ -2646,6 +2661,7 @@ def prepared_input_route():
             )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 @app.get("/analyze")
 def analyze():
@@ -2750,6 +2766,7 @@ def dirty_debug_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @app.get("/sm_debug")
 def sm_debug_route():
     url = request.args.get("file")
@@ -2800,24 +2817,35 @@ def sm_master_route():
     intensity = _normalize_intensity(request.args.get("intensity") or "balanced")
     fmt = _normalize_format(request.args.get("format") or "wav16")
 
+    use_neutral_preclean = (request.args.get("preclean", "1").strip() == "1")
+    enable_afftdn = (request.args.get("afftdn", "0").strip() == "1")
+
     if is_gdrive(url):
         url = gdrive_direct(url)
 
     try:
         with tempfile.TemporaryDirectory() as td:
             in_path, _dbg = _dl_to_named(td, "file", url)
-            out_path, out_name = _render_sm_master(in_path, tone=tone, intensity=intensity, fmt=fmt, td=td)
 
-            if out_name.lower().endswith(".mp3"):
-                mime = "audio/mpeg"
-            elif out_name.lower().endswith(".flac"):
-                mime = "audio/flac"
-            elif out_name.lower().endswith(".aiff") or out_name.lower().endswith(".aif"):
-                mime = "audio/aiff"
-            else:
-                mime = "audio/wav"
+            sm_bundle = render_sm_branch_v1(
+                input_path=in_path,
+                tone=tone,
+                intensity=intensity,
+                fmt=fmt,
+                td=td,
+                use_neutral_preclean=use_neutral_preclean,
+                enable_afftdn=enable_afftdn,
+            )
 
-            return send_file(out_path, mimetype=mime, as_attachment=True, download_name=out_name)
+            sm_payload = asdict(sm_bundle)
+            out_path, out_name, mime = _extract_sm_master_file(sm_payload, fmt)
+
+            return send_file(
+                out_path,
+                mimetype=mime,
+                as_attachment=True,
+                download_name=out_name,
+            )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
