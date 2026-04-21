@@ -9,6 +9,7 @@ from typing import Any
 import librosa
 import numpy as np
 import soundfile as sf
+from scipy.ndimage import maximum_filter1d, uniform_filter1d
 
 
 def _read(obj: Any, key: str, default=None):
@@ -26,6 +27,11 @@ def _safe_name(x: str | None) -> str:
 
 def _db_to_lin(x_db: float) -> float:
     return float(10.0 ** (float(x_db) / 20.0))
+
+
+def _lin_to_db(x_lin: float) -> float:
+    x_lin = max(float(x_lin), 1e-12)
+    return 20.0 * math.log10(x_lin)
 
 
 def _ensure_2d_audio(audio: np.ndarray) -> np.ndarray:
@@ -85,6 +91,32 @@ def _soft_band_weights(freqs_hz: np.ndarray, low_hz: float, high_hz: float) -> n
     rise = 1.0 / (1.0 + np.exp(-(log_f - log_low) / slope))
     fall = 1.0 / (1.0 + np.exp((log_f - log_high) / slope))
     weights = rise * fall
+
+    if len(weights) > 0:
+        weights[0] = 0.0
+    return weights.astype(np.float32)
+
+
+def _high_shelf_weights(freqs_hz: np.ndarray, center_hz: float, softness_oct: float = 0.45) -> np.ndarray:
+    center_hz = max(float(center_hz), 20.0)
+    softness_oct = max(float(softness_oct), 0.10)
+
+    safe_freqs = np.maximum(freqs_hz, 1.0)
+    distance_oct = np.log2(safe_freqs / center_hz)
+    weights = 1.0 / (1.0 + np.exp(-(distance_oct / softness_oct)))
+
+    if len(weights) > 0:
+        weights[0] = 0.0
+    return weights.astype(np.float32)
+
+
+def _upper_tilt_weights(freqs_hz: np.ndarray, pivot_hz: float, softness_oct: float = 0.35) -> np.ndarray:
+    pivot_hz = max(float(pivot_hz), 100.0)
+    softness_oct = max(float(softness_oct), 0.10)
+
+    safe_freqs = np.maximum(freqs_hz, 1.0)
+    distance_oct = np.log2(safe_freqs / pivot_hz)
+    weights = 1.0 / (1.0 + np.exp(-(distance_oct / softness_oct)))
 
     if len(weights) > 0:
         weights[0] = 0.0
@@ -174,15 +206,14 @@ def _apply_framewise_spectral_gain(
     return _match_length(np.asarray(y, dtype=np.float32), len(x))
 
 
-def _build_dynamic_gain_frames(
+def _build_band_activity_frames(
     detector_signal: np.ndarray,
     sr: int,
     center_hz: float,
     q: float,
-    gain_db: float,
     attack_ms: float,
     release_ms: float,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> np.ndarray:
     detector_signal = np.asarray(detector_signal, dtype=np.float32)
     n_fft, hop = _stft_params(sr)
 
@@ -197,11 +228,9 @@ def _build_dynamic_gain_frames(
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
 
     if Z.size == 0:
-        return np.zeros(0, dtype=np.float32), np.zeros(len(freqs), dtype=np.float32)
+        return np.zeros(0, dtype=np.float32)
 
     det_weights = _log_gaussian_band(freqs, center_hz=center_hz, q=max(q * 0.9, 0.35))
-    shape_weights = _log_gaussian_band(freqs, center_hz=center_hz, q=q)
-
     band_power = (np.abs(Z) ** 2 * det_weights[:, None]).sum(axis=0) / (det_weights.sum() + 1e-12)
     band_rms = np.sqrt(np.maximum(band_power, 1e-18)).astype(np.float32)
 
@@ -214,26 +243,53 @@ def _build_dynamic_gain_frames(
     )
 
     if float(np.max(detector_env)) <= 1e-9:
-        gain_frames_db = np.zeros_like(detector_env, dtype=np.float32)
-    else:
-        low_thr = float(np.quantile(detector_env, 0.60))
-        high_thr = float(np.quantile(detector_env, 0.95))
+        return np.zeros_like(detector_env, dtype=np.float32)
 
-        if high_thr <= low_thr + 1e-9:
-            activity = np.ones_like(detector_env, dtype=np.float32)
-        else:
-            activity = np.clip((detector_env - low_thr) / (high_thr - low_thr), 0.0, 1.0).astype(np.float32)
+    low_thr = float(np.quantile(detector_env, 0.60))
+    high_thr = float(np.quantile(detector_env, 0.95))
 
-        raw_gain_frames_db = (float(gain_db) * activity).astype(np.float32)
-        gain_frames_db = _smooth_envelope_frames(
-            raw_gain_frames_db,
-            attack_ms=max(attack_ms, 3.0),
-            release_ms=max(release_ms, attack_ms),
-            hop_samples=hop,
-            sr=sr,
-        )
+    if high_thr <= low_thr + 1e-9:
+        return np.ones_like(detector_env, dtype=np.float32)
 
-    return gain_frames_db, shape_weights.astype(np.float32)
+    activity = np.clip((detector_env - low_thr) / (high_thr - low_thr), 0.0, 1.0).astype(np.float32)
+    return activity
+
+
+def _build_wideband_activity_frames(
+    detector_signal: np.ndarray,
+    sr: int,
+    attack_ms: float,
+    release_ms: float,
+) -> np.ndarray:
+    detector_signal = np.asarray(detector_signal, dtype=np.float32)
+    frame_length = 2048 if sr >= 44100 else 1024
+    hop_length = frame_length // 8
+
+    rms = librosa.feature.rms(
+        y=detector_signal,
+        frame_length=frame_length,
+        hop_length=hop_length,
+        center=True,
+    )[0].astype(np.float32)
+
+    env = _smooth_envelope_frames(
+        rms,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+        hop_samples=hop_length,
+        sr=sr,
+    )
+
+    if float(np.max(env)) <= 1e-9:
+        return np.zeros_like(env, dtype=np.float32)
+
+    low_thr = float(np.quantile(env, 0.55))
+    high_thr = float(np.quantile(env, 0.95))
+
+    if high_thr <= low_thr + 1e-9:
+        return np.ones_like(env, dtype=np.float32)
+
+    return np.clip((env - low_thr) / (high_thr - low_thr), 0.0, 1.0).astype(np.float32)
 
 
 def _apply_fixed_bell_eq_audio(audio: np.ndarray, sr: int, center_hz: float, q: float, gain_db: float) -> np.ndarray:
@@ -241,6 +297,27 @@ def _apply_fixed_bell_eq_audio(audio: np.ndarray, sr: int, center_hz: float, q: 
     n_fft, _ = _stft_params(sr)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     shape_weights = _log_gaussian_band(freqs, center_hz=center_hz, q=q)
+
+    out = []
+    gain_frames_db = np.array([float(gain_db)], dtype=np.float32)
+
+    for ch in range(audio.shape[1]):
+        y = _apply_framewise_spectral_gain(
+            x=audio[:, ch],
+            sr=sr,
+            shape_weights=shape_weights,
+            gain_frames_db=gain_frames_db,
+        )
+        out.append(y)
+
+    return np.stack(out, axis=1).astype(np.float32)
+
+
+def _apply_fixed_high_shelf_audio(audio: np.ndarray, sr: int, center_hz: float, gain_db: float) -> np.ndarray:
+    audio = _ensure_2d_audio(audio)
+    n_fft, _ = _stft_params(sr)
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    shape_weights = _high_shelf_weights(freqs, center_hz=center_hz, softness_oct=0.45)
 
     out = []
     gain_frames_db = np.array([float(gain_db)], dtype=np.float32)
@@ -270,15 +347,18 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
 
     if audio.shape[1] == 1:
         detector = audio[:, 0]
-        gain_frames_db, shape_weights = _build_dynamic_gain_frames(
+        activity_frames = _build_band_activity_frames(
             detector_signal=detector,
             sr=sr,
             center_hz=center_hz,
             q=q,
-            gain_db=gain_db,
             attack_ms=attack_ms,
             release_ms=release_ms,
         )
+        n_fft, hop = _stft_params(sr)
+        frame_count = librosa.stft(detector, n_fft=n_fft, hop_length=hop, win_length=n_fft, window="hann", center=True).shape[1]
+        gain_frames_db = (activity_frames[:frame_count] * float(gain_db)).astype(np.float32)
+        shape_weights = _log_gaussian_band(librosa.fft_frequencies(sr=sr, n_fft=n_fft), center_hz=center_hz, q=q)
         y = _apply_framewise_spectral_gain(
             x=audio[:, 0],
             sr=sr,
@@ -294,15 +374,18 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
         mid = 0.5 * (left + right)
         side = 0.5 * (left - right)
 
-        gain_frames_db, shape_weights = _build_dynamic_gain_frames(
+        activity_frames = _build_band_activity_frames(
             detector_signal=mid,
             sr=sr,
             center_hz=center_hz,
             q=q,
-            gain_db=gain_db,
             attack_ms=attack_ms,
             release_ms=release_ms,
         )
+        n_fft, hop = _stft_params(sr)
+        frame_count = librosa.stft(mid, n_fft=n_fft, hop_length=hop, win_length=n_fft, window="hann", center=True).shape[1]
+        gain_frames_db = (activity_frames[:frame_count] * float(gain_db)).astype(np.float32)
+        shape_weights = _log_gaussian_band(librosa.fft_frequencies(sr=sr, n_fft=n_fft), center_hz=center_hz, q=q)
 
         mid_processed = _apply_framewise_spectral_gain(
             x=mid,
@@ -316,15 +399,18 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
         return np.stack([out_left, out_right], axis=1).astype(np.float32)
 
     detector = 0.5 * (left + right)
-    gain_frames_db, shape_weights = _build_dynamic_gain_frames(
+    activity_frames = _build_band_activity_frames(
         detector_signal=detector,
         sr=sr,
         center_hz=center_hz,
         q=q,
-        gain_db=gain_db,
         attack_ms=attack_ms,
         release_ms=release_ms,
     )
+    n_fft, hop = _stft_params(sr)
+    frame_count = librosa.stft(detector, n_fft=n_fft, hop_length=hop, win_length=n_fft, window="hann", center=True).shape[1]
+    gain_frames_db = (activity_frames[:frame_count] * float(gain_db)).astype(np.float32)
+    shape_weights = _log_gaussian_band(librosa.fft_frequencies(sr=sr, n_fft=n_fft), center_hz=center_hz, q=q)
 
     out_left = _apply_framewise_spectral_gain(
         x=left,
@@ -340,6 +426,62 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
     )
 
     return np.stack([out_left, out_right], axis=1).astype(np.float32)
+
+
+def _apply_dynamic_tilt_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
+    audio = _ensure_2d_audio(audio)
+    params = dict(_read(op, "params", {}) or {})
+
+    pivot_hz = float(params.get("pivot_hz", 1500.0))
+    tilt_db = float(params.get("tilt_db", 0.0))
+    attack_ms = float(params.get("attack_ms", 12.0))
+    release_ms = float(params.get("release_ms", 150.0))
+    channel_mode = str(_read(op, "channel_mode", "stereo") or "stereo").lower()
+
+    if abs(tilt_db) <= 1e-9:
+        return audio.copy()
+
+    if audio.shape[1] == 1:
+        detector = audio[:, 0]
+    elif channel_mode == "mid":
+        detector = 0.5 * (audio[:, 0] + audio[:, 1])
+    else:
+        detector = np.mean(audio, axis=1)
+
+    activity_frames = _build_wideband_activity_frames(
+        detector_signal=detector,
+        sr=sr,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+    )
+
+    n_fft, hop = _stft_params(sr)
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    shape_weights = _upper_tilt_weights(freqs, pivot_hz=pivot_hz, softness_oct=0.35)
+
+    frame_count = librosa.stft(detector, n_fft=n_fft, hop_length=hop, win_length=n_fft, window="hann", center=True).shape[1]
+    activity_frames = _match_length(activity_frames, frame_count)
+    gain_frames_db = (activity_frames * tilt_db).astype(np.float32)
+
+    if audio.shape[1] == 1:
+        y = _apply_framewise_spectral_gain(
+            x=audio[:, 0],
+            sr=sr,
+            shape_weights=shape_weights,
+            gain_frames_db=gain_frames_db,
+        )
+        return y[:, None]
+
+    out = []
+    for ch in range(audio.shape[1]):
+        y = _apply_framewise_spectral_gain(
+            x=audio[:, ch],
+            sr=sr,
+            shape_weights=shape_weights,
+            gain_frames_db=gain_frames_db,
+        )
+        out.append(y)
+    return np.stack(out, axis=1).astype(np.float32)
 
 
 def _apply_band_component_audio(audio: np.ndarray, sr: int, low_hz: float, high_hz: float) -> np.ndarray:
@@ -465,29 +607,92 @@ def _apply_output_trim_audio(audio: np.ndarray, gain_db: float) -> np.ndarray:
     return (audio * _db_to_lin(gain_db)).astype(np.float32)
 
 
+def _build_fast_limiter_gain(
+    detector: np.ndarray,
+    ceiling_lin: float,
+    lookahead_samples: int,
+    release_samples: int,
+) -> np.ndarray:
+    detector = np.asarray(detector, dtype=np.float32)
+    if detector.size == 0:
+        return np.ones(0, dtype=np.float32)
+
+    lookahead_samples = max(int(lookahead_samples), 1)
+    release_samples = max(int(release_samples), 1)
+
+    future_peak = maximum_filter1d(detector[::-1], size=lookahead_samples + 1, mode="nearest")[::-1]
+    desired_gain = np.minimum(1.0, ceiling_lin / np.maximum(future_peak, 1e-9)).astype(np.float32)
+
+    reduction = 1.0 - desired_gain
+    hold_size = min(release_samples, max(lookahead_samples * 8, 32))
+    reduction = maximum_filter1d(reduction, size=hold_size, mode="nearest")
+
+    smooth_size = min(max(release_samples // 8, 8), 512)
+    if smooth_size > 1:
+        reduction = uniform_filter1d(reduction, size=smooth_size, mode="nearest")
+
+    gain = 1.0 - np.clip(reduction, 0.0, 1.0)
+    return gain.astype(np.float32)
+
+
 def _apply_true_peak_limiter_audio(
     audio: np.ndarray,
     sr: int,
     ceiling_db: float,
+    threshold_db: float | None = None,
+    attack_ms: float = 0.25,
+    release_ms: float = 45.0,
+    mix: float = 1.0,
     *,
     oversample: int = 2,
     safety_margin_db: float = 0.20,
     max_passes: int = 2,
 ) -> np.ndarray:
-    audio = _ensure_2d_audio(audio).copy()
+    dry = _ensure_2d_audio(audio)
+    wet = dry.copy()
 
-    effective_ceiling_db = float(ceiling_db) - abs(float(safety_margin_db))
+    ceiling_db = float(ceiling_db)
+    ceiling_lin = _db_to_lin(ceiling_db)
+    mix = float(np.clip(mix, 0.0, 1.0))
+
+    input_drive_db = 0.0
+    if threshold_db is not None:
+        input_drive_db = max(0.0, ceiling_db - float(threshold_db))
+
+    if input_drive_db > 1e-9:
+        wet *= _db_to_lin(input_drive_db)
+
+    lookahead_samples = max(int(sr * max(float(attack_ms), 0.05) * 0.001), 1)
+    release_samples = max(int(sr * max(float(release_ms), 5.0) * 0.001), 1)
+
+    detector = np.max(np.abs(wet), axis=1).astype(np.float32)
+    gain = _build_fast_limiter_gain(
+        detector=detector,
+        ceiling_lin=ceiling_lin,
+        lookahead_samples=lookahead_samples,
+        release_samples=release_samples,
+    )
+
+    wet = wet * gain[:, None]
+
+    if mix < 0.999:
+        wet = dry * (1.0 - mix) + wet * mix
+
+    current_tp_db = _estimate_approx_true_peak_dbtp(wet, sr, oversample=oversample)
+    target_pre_catch_db = ceiling_db - 0.05
+    if current_tp_db < target_pre_catch_db - 0.05:
+        wet *= _db_to_lin(target_pre_catch_db - current_tp_db)
+
+    effective_ceiling_db = ceiling_db - abs(float(safety_margin_db))
 
     for _ in range(max_passes):
-        current_tp_db = _estimate_approx_true_peak_dbtp(audio, sr, oversample=oversample)
+        current_tp_db = _estimate_approx_true_peak_dbtp(wet, sr, oversample=oversample)
         needed_trim_db = effective_ceiling_db - current_tp_db
-
         if needed_trim_db >= -0.01:
             break
+        wet *= _db_to_lin(needed_trim_db)
 
-        audio *= _db_to_lin(needed_trim_db)
-
-    return audio.astype(np.float32)
+    return wet.astype(np.float32)
 
 
 def _execute_static_eq_file(input_path: str, output_path: str, op: Any) -> None:
@@ -507,9 +712,30 @@ def _execute_static_eq_file(input_path: str, output_path: str, op: Any) -> None:
     _write_wav(output_path, processed, sr)
 
 
+def _execute_high_shelf_file(input_path: str, output_path: str, op: Any) -> None:
+    audio, sr = _load_audio(input_path)
+    params = dict(_read(op, "params", {}) or {})
+    center_hz = float(params.get("freq_hz", 9000.0))
+    gain_db = float(params.get("gain_db", 0.0))
+
+    processed = _apply_fixed_high_shelf_audio(
+        audio=audio,
+        sr=sr,
+        center_hz=center_hz,
+        gain_db=gain_db,
+    )
+    _write_wav(output_path, processed, sr)
+
+
 def _execute_dynamic_eq_file(input_path: str, output_path: str, op: Any) -> None:
     audio, sr = _load_audio(input_path)
     processed = _apply_dynamic_eq_audio(audio=audio, sr=sr, op=op)
+    _write_wav(output_path, processed, sr)
+
+
+def _execute_dynamic_tilt_file(input_path: str, output_path: str, op: Any) -> None:
+    audio, sr = _load_audio(input_path)
+    processed = _apply_dynamic_tilt_audio(audio=audio, sr=sr, op=op)
     _write_wav(output_path, processed, sr)
 
 
@@ -603,10 +829,19 @@ def _execute_true_peak_limiter_file(input_path: str, output_path: str, op: Any) 
     params = dict(_read(op, "params", {}) or {})
 
     ceiling_db = float(params.get("gain_db", -1.0))
+    threshold_db = params.get("threshold_db")
+    attack_ms = float(params.get("attack_ms", 0.25))
+    release_ms = float(params.get("release_ms", 45.0))
+    mix = float(params.get("mix", 1.0))
+
     processed = _apply_true_peak_limiter_audio(
         audio=audio,
         sr=sr,
         ceiling_db=ceiling_db,
+        threshold_db=threshold_db,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+        mix=mix,
         oversample=2,
         safety_margin_db=0.20,
         max_passes=2,
@@ -640,11 +875,18 @@ def _execute_op_file(
     supported = {
         "static_eq",
         "broad_eq",
+        "high_shelf",
         "dynamic_eq",
+        "dynamic_tilt",
+        "dynamic_eq_boost",
         "parallel_eq_fill",
+        "parallel_eq_boost",
         "parallel_compressor",
         "band_limited_saturation",
+        "band_limited_texture",
         "output_trim",
+        "ceiling_trim",
+        "final_balance_guard",
         "true_peak_limiter",
     }
 
@@ -661,15 +903,19 @@ def _execute_op_file(
 
     if op_kind in {"static_eq", "broad_eq"}:
         _execute_static_eq_file(input_path=input_path, output_path=output_path, op=op)
-    elif op_kind == "dynamic_eq":
+    elif op_kind == "high_shelf":
+        _execute_high_shelf_file(input_path=input_path, output_path=output_path, op=op)
+    elif op_kind in {"dynamic_eq", "dynamic_eq_boost"}:
         _execute_dynamic_eq_file(input_path=input_path, output_path=output_path, op=op)
-    elif op_kind == "parallel_eq_fill":
+    elif op_kind == "dynamic_tilt":
+        _execute_dynamic_tilt_file(input_path=input_path, output_path=output_path, op=op)
+    elif op_kind in {"parallel_eq_fill", "parallel_eq_boost"}:
         _execute_parallel_eq_fill_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind == "parallel_compressor":
         _execute_parallel_compressor_file(input_path=input_path, output_path=output_path, op=op)
-    elif op_kind == "band_limited_saturation":
+    elif op_kind in {"band_limited_saturation", "band_limited_texture"}:
         _execute_band_limited_saturation_file(input_path=input_path, output_path=output_path, op=op)
-    elif op_kind == "output_trim":
+    elif op_kind in {"output_trim", "ceiling_trim", "final_balance_guard"}:
         _execute_output_trim_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind == "true_peak_limiter":
         _execute_true_peak_limiter_file(input_path=input_path, output_path=output_path, op=op)
