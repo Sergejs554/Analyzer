@@ -72,7 +72,7 @@ def label_process(process_key: str) -> str:
 # -------- KEYBOARDS --------
 def kb_main(uid: int) -> InlineKeyboardMarkup:
     st = USER_STATE.get(uid, PRESETS["defaults"])
-    process = st.get("process", "master")
+    process = st.get("process", "sm_master")
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✨ Mode: {label_process(process)}", callback_data="menu_process")],
         [InlineKeyboardButton(text=f"🎚 Intensity: {st['intensity']}", callback_data="menu_intensity")],
@@ -149,12 +149,12 @@ async def start(m: Message):
         "intensity": PRESETS["defaults"]["intensity"],
         "tone": PRESETS["defaults"]["tone"],
         "format": PRESETS["defaults"]["format"],
-        "process": "master",
+        "process": "sm_master",
     }
     await m.answer(
         "👋 Привет! Я — Mr. Mastering.\n"
         "Пришли аудио-файл (.mp3/.m4a/.wav/.flac/.aiff) до ~19 MB или ссылку.\n"
-        "Новый режим слушается через кнопку SM Master (new core).",
+        "По умолчанию стоит новый режим: SM Master (new core).",
         reply_markup=kb_main(m.from_user.id)
     )
 
@@ -168,7 +168,7 @@ async def settings_cmd(m: Message):
         "intensity": PRESETS["defaults"]["intensity"],
         "tone": PRESETS["defaults"]["tone"],
         "format": PRESETS["defaults"]["format"],
-        "process": "master",
+        "process": "sm_master",
     }
     await m.answer("⚙️ Настройки сброшены.", reply_markup=kb_main(m.from_user.id))
 
@@ -211,6 +211,7 @@ async def callbacks(c):
     if data.startswith("set_process_"):
         process = data.split("set_process_")[1]
         st["process"] = process
+        USER_STATE[uid] = st
         await c.message.edit_text(
             f"Режим обработки: {label_process(process)}",
             reply_markup=kb_main(uid)
@@ -221,6 +222,7 @@ async def callbacks(c):
     if data.startswith("set_intensity_"):
         intensity = data.split("set_intensity_")[1]
         st["intensity"] = intensity
+        USER_STATE[uid] = st
         await c.message.edit_text(f"Интенсивность: {intensity}", reply_markup=kb_main(uid))
         await c.answer()
         return
@@ -228,6 +230,7 @@ async def callbacks(c):
     if data.startswith("set_tone_"):
         tone = data.split("set_tone_")[1]
         st["tone"] = tone
+        USER_STATE[uid] = st
         await c.message.edit_text(f"Тон: {tone}", reply_markup=kb_main(uid))
         await c.answer()
         return
@@ -235,6 +238,7 @@ async def callbacks(c):
     if data.startswith("set_fmt_"):
         fmt = data.split("set_fmt_")[1]
         st["format"] = fmt
+        USER_STATE[uid] = st
         await c.message.edit_text(f"Формат результата: {label_format(fmt)}", reply_markup=kb_main(uid))
         await c.answer()
         return
@@ -287,7 +291,7 @@ def _norm_format(x: str) -> str:
     return "wav16"
 
 def _norm_process(x: str) -> str:
-    x = (x or "master").lower().strip()
+    x = (x or "sm_master").lower().strip()
     allowed = {
         "sm_master",
         "master",
@@ -300,7 +304,7 @@ def _norm_process(x: str) -> str:
         "bakuage_reveal",
         "bakuage_reveal_polish",
     }
-    return x if x in allowed else "master"
+    return x if x in allowed else "sm_master"
 
 def _api_process_url(file_url: str, process_mode: str, tone: str, intensity: str, fmt: str) -> str:
     fu = quote(file_url, safe="")
@@ -324,7 +328,7 @@ def _api_process_url(file_url: str, process_mode: str, tone: str, intensity: str
         return f"{MASTER_API_BASE}/bakuage_reveal?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
     if process_mode == "bakuage_reveal_polish":
         return f"{MASTER_API_BASE}/bakuage_reveal_polish?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
-    return f"{MASTER_API_BASE}/master?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
+    return f"{MASTER_API_BASE}/sm_master?file={fu}&tone={tone}&intensity={intensity}&format={fmt}"
 
 async def _download_to_file(session: aiohttp.ClientSession, url: str, dst_path: str, max_mb: int = 256):
     total = 0
@@ -425,7 +429,7 @@ async def on_audio(m: Message):
     tone = _norm_tone(st.get("tone", "balanced"))
     intensity = _norm_intensity(st.get("intensity", "balanced"))
     fmt = _norm_format(st.get("format", "wav16"))
-    process_mode = _norm_process(st.get("process", "master"))
+    process_mode = _norm_process(st.get("process", "sm_master"))
 
     await m.reply(_action_text(process_mode), reply_markup=kb_home())
 
@@ -482,7 +486,7 @@ async def on_text(m: Message):
     tone = _norm_tone(st.get("tone", "balanced"))
     intensity = _norm_intensity(st.get("intensity", "balanced"))
     fmt = _norm_format(st.get("format", "wav16"))
-    process_mode = _norm_process(st.get("process", "master"))
+    process_mode = _norm_process(st.get("process", "sm_master"))
 
     await m.reply(_action_text_link(process_mode), reply_markup=kb_home())
 
