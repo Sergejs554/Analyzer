@@ -147,6 +147,72 @@ def _metric_air_center(analysis: SmartMasterAnalysis) -> float:
     return 9600.0
 
 
+def _delivery_hot_score(analysis: SmartMasterAnalysis) -> float:
+    m = analysis.metrics
+
+    true_peak_dbtp = _safe(m.true_peak_dbtp, -1.0)
+    integrated_lufs = _safe(m.integrated_lufs, -12.0)
+    limiter_stress_proxy = _safe(m.limiter_stress_proxy, 0.0)
+    near_clip_ratio = _safe(m.near_clip_ratio, 0.0)
+
+    tp_hot = _clamp((true_peak_dbtp + 0.15) / 1.60, 0.0, 1.0)
+    loud_hot = _clamp((integrated_lufs + 8.40) / 2.20, 0.0, 1.0)
+    stress_hot = _clamp((limiter_stress_proxy - 0.88) / 0.18, 0.0, 1.0)
+    clip_hot = _clamp(near_clip_ratio / 0.0040, 0.0, 1.0)
+
+    return _clamp(
+        (tp_hot * 0.42)
+        + (loud_hot * 0.20)
+        + (stress_hot * 0.23)
+        + (clip_hot * 0.15),
+        0.0,
+        1.0,
+    )
+
+
+def _delivery_quiet_score(analysis: SmartMasterAnalysis) -> float:
+    m = analysis.metrics
+
+    true_peak_dbtp = _safe(m.true_peak_dbtp, -1.0)
+    integrated_lufs = _safe(m.integrated_lufs, -12.0)
+    limiter_stress_proxy = _safe(m.limiter_stress_proxy, 0.0)
+    near_clip_ratio = _safe(m.near_clip_ratio, 0.0)
+
+    quiet_lufs = _clamp((-10.60 - integrated_lufs) / 3.40, 0.0, 1.0)
+    tp_room = _clamp((-1.40 - true_peak_dbtp) / 1.80, 0.0, 1.0)
+    stress_room = _clamp((0.90 - limiter_stress_proxy) / 0.22, 0.0, 1.0)
+    clip_room = _clamp((0.0015 - near_clip_ratio) / 0.0015, 0.0, 1.0)
+
+    return _clamp(
+        (quiet_lufs * 0.45)
+        + (tp_room * 0.25)
+        + (stress_room * 0.20)
+        + (clip_room * 0.10),
+        0.0,
+        1.0,
+    )
+
+
+def _delivery_punch_safety(analysis: SmartMasterAnalysis) -> float:
+    m = analysis.metrics
+
+    crest_db = _safe(m.crest_db, 10.0)
+    punch_proxy = _safe(m.punch_proxy, 10.0)
+    lra_ebu = _safe(m.lra_ebu, 3.0)
+
+    crest_score = _clamp((crest_db - 8.8) / 3.2, 0.0, 1.0)
+    punch_score = _clamp((punch_proxy - 9.8) / 3.0, 0.0, 1.0)
+    lra_score = _clamp((lra_ebu - 1.8) / 3.0, 0.0, 1.0)
+
+    return _clamp(
+        (crest_score * 0.45)
+        + (punch_score * 0.45)
+        + (lra_score * 0.10),
+        0.0,
+        1.0,
+    )
+
+
 def _spec_attr(primitive_name: str, attr: str, fallback: Any) -> Any:
     spec = PRIMITIVE_REGISTRY[primitive_name]
     return getattr(spec, attr, fallback)
@@ -610,34 +676,39 @@ def _build_local_desibilance_control(ctx: _PrimitiveBuildContext) -> Dict[str, A
 
 
 def _build_output_gain_trim(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
-    m = ctx.analysis.metrics
+    hot_score = _delivery_hot_score(ctx.analysis)
+    quiet_score = _delivery_quiet_score(ctx.analysis)
+    punch_safety = _delivery_punch_safety(ctx.analysis)
 
-    true_peak_dbtp = _safe(m.true_peak_dbtp, -1.0)
-    integrated_lufs = _safe(m.integrated_lufs, -14.0)
-    limiter_stress_proxy = _safe(m.limiter_stress_proxy, 0.0)
-    near_clip_ratio = _safe(m.near_clip_ratio, 0.0)
+    if hot_score >= 0.14:
+        gain_trim = -(
+            0.08
+            + (0.82 * hot_score)
+            + (0.12 * (1.0 - punch_safety) * hot_score)
+        )
+    else:
+        lift_room = _clamp((0.18 - hot_score) / 0.18, 0.0, 1.0)
+        gain_trim = (
+            (0.12 + (0.62 * quiet_score) + (0.18 * punch_safety * quiet_score))
+            * quiet_score
+            * lift_room
+        )
 
-    tp_hot = max(0.0, true_peak_dbtp + 1.0)
-    loud_hot = max(0.0, integrated_lufs + 9.5)
-    stress_hot = max(0.0, limiter_stress_proxy - 0.82)
-    clip_hot = min(1.0, near_clip_ratio * 120.0)
+    gain_trim = _clamp(gain_trim, -0.95, 0.55)
 
-    gain_trim = -(
-        0.20
-        + (tp_hot * 0.55)
-        + (loud_hot * 0.12)
-        + (stress_hot * 0.65)
-        + (clip_hot * 0.40)
+    note = (
+        "Delta-aware minimal trim before limiter."
+        if gain_trim <= 0.0
+        else "Delta-aware micro lift before limiter."
     )
-    gain_trim = _clamp(gain_trim, -2.50, -0.20)
 
     return _base_instance(
         ctx,
         "output_gain_trim",
         gain_db=round(gain_trim, 4),
         notes=[
-            "Terminal output trim before true-peak limiting.",
-            "Headroom comes first.",
+            note,
+            "Headroom first, but never louder/quieter by default.",
         ],
     )
 
@@ -645,25 +716,48 @@ def _build_output_gain_trim(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
 def _build_true_peak_limiter(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     m = ctx.analysis.metrics
 
-    true_peak_dbtp = _safe(m.true_peak_dbtp, -1.0)
     limiter_stress_proxy = _safe(m.limiter_stress_proxy, 0.0)
     near_clip_ratio = _safe(m.near_clip_ratio, 0.0)
 
-    tp_hot = max(0.0, true_peak_dbtp + 1.0)
-    stress_hot = max(0.0, limiter_stress_proxy - 0.82)
-    clip_hot = min(1.0, near_clip_ratio * 120.0)
+    hot_score = _delivery_hot_score(ctx.analysis)
+    quiet_score = _delivery_quiet_score(ctx.analysis)
+    punch_safety = _delivery_punch_safety(ctx.analysis)
+
+    safety_headroom_score = _clamp((0.92 - limiter_stress_proxy) / 0.24, 0.0, 1.0)
+    codec_room_score = _clamp((0.0020 - near_clip_ratio) / 0.0020, 0.0, 1.0)
+
+    drive_score = (
+        (quiet_score * 0.55)
+        + (punch_safety * 0.15)
+        + (safety_headroom_score * 0.15)
+        + (codec_room_score * 0.15)
+    )
+
+    drive_penalty = hot_score * (0.80 + (0.20 * (1.0 - punch_safety)))
+
+    desired_drive_db = _clamp(
+        0.12 + (1.35 * drive_score) - (1.05 * drive_penalty),
+        0.08,
+        1.35,
+    )
 
     ceiling_db = -1.00
-    threshold_db = -(
-        0.80
-        + (tp_hot * 1.60)
-        + (stress_hot * 1.20)
-        + (clip_hot * 0.80)
-    )
-    threshold_db = _clamp(threshold_db, -4.50, -0.80)
+    threshold_db = ceiling_db - desired_drive_db
 
-    attack_ms = _lerp(1.5, 0.25, ctx.activity)
-    release_ms = _lerp(120.0, 45.0, ctx.activity)
+    attack_ms = _clamp(
+        0.32 + (0.22 * hot_score) - (0.10 * punch_safety),
+        0.20,
+        0.60,
+    )
+
+    release_ms = _clamp(
+        70.0
+        + (35.0 * hot_score)
+        + (25.0 * (1.0 - punch_safety))
+        - (30.0 * quiet_score),
+        45.0,
+        120.0,
+    )
 
     return _base_instance(
         ctx,
@@ -675,7 +769,7 @@ def _build_true_peak_limiter(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         mix=1.0,
         notes=[
             "Terminal true-peak limiter.",
-            "Protects release safety without re-voicing the polish chain.",
+            "Delta-aware limiter drive: minimal necessary action, not loudness chase.",
         ],
     )
 
