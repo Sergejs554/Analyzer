@@ -1,5 +1,3 @@
-# sm/dsp/assembler.py
-
 from __future__ import annotations
 
 from dataclasses import replace
@@ -50,13 +48,13 @@ def _default_split_for_mode(role: RoleName, target_band_mode: str) -> Dict[str, 
     if role == RoleName.PROJECTION:
         if target_band_mode == "projection_dense":
             return {
-                "projection_contour_stack": (0.72, 0.78, 1.00),
-                "projection_assist_stack": (0.28, 0.34, 0.72),
+                "projection_contour_stack": (0.68, 0.82, 1.00),
+                "projection_assist_stack": (0.32, 0.42, 0.86),
             }
         if target_band_mode == "projection_mild":
             return {
-                "projection_contour_stack": (0.84, 0.90, 1.00),
-                "projection_assist_stack": (0.16, 0.22, 0.58),
+                "projection_contour_stack": (0.76, 0.86, 1.00),
+                "projection_assist_stack": (0.24, 0.34, 0.74),
             }
         if target_band_mode == "projection_clamp":
             return {
@@ -236,7 +234,7 @@ def _derive_support_recombine_gain_db(
     if bridge_stack is not None and bridge_stack.enabled:
         total += bridge_stack.execution_amount
 
-    return _clamp(-0.90 + (total * 1.35), -1.00, -0.10)
+    return _clamp(-0.28 + (total * 0.78), -0.35, 0.18)
 
 
 def _derive_projection_assist_blend(
@@ -246,10 +244,10 @@ def _derive_projection_assist_blend(
         return 0.0
 
     return _clamp(
-        (projection_assist_stack.execution_amount * 0.55)
-        + (projection_assist_stack.dynamic_scale * 0.04),
-        0.02,
-        0.18,
+        (projection_assist_stack.execution_amount * 0.88)
+        + (projection_assist_stack.dynamic_scale * 0.08),
+        0.04,
+        0.24,
     )
 
 
@@ -260,10 +258,10 @@ def _derive_spark_blend(
         return 0.0
 
     return _clamp(
-        (spark_stack.execution_amount * 0.42)
-        + (spark_stack.dynamic_scale * 0.02),
-        0.01,
-        0.08,
+        (spark_stack.execution_amount * 0.46)
+        + (spark_stack.dynamic_scale * 0.03),
+        0.02,
+        0.10,
     )
 
 
@@ -282,20 +280,20 @@ def _derive_delivery_execution_amount(analysis: SmartMasterAnalysis) -> float:
     punch_proxy = float(_read(metrics, "punch_proxy", 10.0) or 10.0)
 
     tp_hot = max(0.0, true_peak_dbtp + 1.0)
-    loud_hot = max(0.0, integrated_lufs + 9.5)
-    stress_hot = max(0.0, limiter_stress_proxy - 0.82)
-    clip_hot = min(1.0, near_clip_ratio * 120.0)
+    loud_hot = max(0.0, integrated_lufs + 9.3)
+    stress_hot = max(0.0, limiter_stress_proxy - 0.92)
+    clip_hot = min(1.0, near_clip_ratio * 70.0)
 
-    amount = 0.46
-    amount += tp_hot * 0.26
-    amount += loud_hot * 0.06
-    amount += stress_hot * 0.55
-    amount += clip_hot * 0.18
+    amount = 0.34
+    amount += tp_hot * 0.14
+    amount += loud_hot * 0.03
+    amount += stress_hot * 0.22
+    amount += clip_hot * 0.08
 
-    if punch_proxy < 11.0 or crest_db < 10.5:
-        amount -= 0.06
+    if punch_proxy < 10.8 or crest_db < 10.2:
+        amount -= 0.05
 
-    return _clamp(amount, 0.40, 1.00)
+    return _clamp(amount, 0.28, 0.78)
 
 
 def _derive_delivery_dynamic_scale(analysis: SmartMasterAnalysis) -> float:
@@ -308,18 +306,18 @@ def _derive_delivery_dynamic_scale(analysis: SmartMasterAnalysis) -> float:
     punch_proxy = float(_read(metrics, "punch_proxy", 10.0) or 10.0)
 
     tp_hot = max(0.0, true_peak_dbtp + 1.0)
-    stress_hot = max(0.0, limiter_stress_proxy - 0.82)
-    clip_hot = min(1.0, near_clip_ratio * 120.0)
+    stress_hot = max(0.0, limiter_stress_proxy - 0.92)
+    clip_hot = min(1.0, near_clip_ratio * 70.0)
 
-    dynamic_scale = 0.62
-    dynamic_scale += tp_hot * 0.18
-    dynamic_scale += stress_hot * 0.24
-    dynamic_scale += clip_hot * 0.10
+    dynamic_scale = 0.52
+    dynamic_scale += tp_hot * 0.10
+    dynamic_scale += stress_hot * 0.14
+    dynamic_scale += clip_hot * 0.05
 
-    if punch_proxy < 11.0 or crest_db < 10.5:
-        dynamic_scale -= 0.08
+    if punch_proxy < 10.8 or crest_db < 10.2:
+        dynamic_scale -= 0.07
 
-    return _clamp(dynamic_scale, 0.54, 1.00)
+    return _clamp(dynamic_scale, 0.42, 0.82)
 
 
 def _build_delivery_stack(
@@ -348,13 +346,14 @@ def _build_delivery_stack(
         "no tone shaping inside delivery",
         "no width moves inside delivery",
         "no extra sparkle inside delivery",
+        "delivery should preserve forward delta, not auto-dim hot material",
         f"analysis_true_peak_dbtp={round(true_peak_dbtp, 4)}",
         f"analysis_integrated_lufs={round(integrated_lufs, 4)}",
         f"analysis_limiter_stress_proxy={round(limiter_stress_proxy, 4)}",
         f"analysis_near_clip_ratio={round(near_clip_ratio, 6)}",
     ]
 
-    if punch_proxy < 11.0 or crest_db < 10.5:
+    if punch_proxy < 10.8 or crest_db < 10.2:
         notes.append("punch_fragile_delivery_moderation")
 
     return RoleDSPStack(
