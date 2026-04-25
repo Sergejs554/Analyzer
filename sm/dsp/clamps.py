@@ -1,5 +1,3 @@
-# sm/dsp/clamps.py
-
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -77,6 +75,16 @@ def _enabled(stack: Optional[RoleDSPStack]) -> bool:
     return stack is not None and stack.enabled
 
 
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def _read(obj, key: str, default=None):
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _derive_risk_context(analysis: SmartMasterAnalysis) -> DSPRiskContext:
     m = analysis.metrics
     d = analysis.derived
@@ -122,17 +130,31 @@ def _derive_risk_context(analysis: SmartMasterAnalysis) -> DSPRiskContext:
 
     thin_candidate = body_weak or bridge_broken or transition_fragile
 
-    delivery_overbudget = bool(
-        (_has(m.true_peak_dbtp) and m.true_peak_dbtp > -0.90)
-        or (_has(m.limiter_stress_proxy) and m.limiter_stress_proxy >= 1.18)
-        or (_has(m.near_clip_ratio) and m.near_clip_ratio >= 0.00020)
+    true_peak_dbtp = float(_read(m, "true_peak_dbtp", -1.0) or -1.0)
+    integrated_lufs = float(_read(m, "integrated_lufs", -12.0) or -12.0)
+    limiter_stress_proxy = float(_read(m, "limiter_stress_proxy", 0.0) or 0.0)
+    near_clip_ratio = float(_read(m, "near_clip_ratio", 0.0) or 0.0)
+    crest_db = float(_read(m, "crest_db", 10.0) or 10.0)
+    punch_proxy = float(_read(m, "punch_proxy", 10.0) or 10.0)
+
+    tp_hot = _clamp((true_peak_dbtp - 0.20) / 1.60, 0.0, 1.0)
+    loud_hot = _clamp((integrated_lufs + 8.20) / 2.60, 0.0, 1.0)
+    stress_hot = _clamp((limiter_stress_proxy - 0.98) / 0.22, 0.0, 1.0)
+    clip_hot = _clamp(near_clip_ratio / 0.0080, 0.0, 1.0)
+    punch_fragility = _clamp((10.6 - min(crest_db, punch_proxy)) / 2.0, 0.0, 1.0)
+
+    delivery_pressure = _clamp(
+        (tp_hot * 0.34)
+        + (loud_hot * 0.14)
+        + (stress_hot * 0.28)
+        + (clip_hot * 0.14)
+        + (punch_fragility * 0.10),
+        0.0,
+        1.0,
     )
 
-    delivery_extreme = bool(
-        (_has(m.true_peak_dbtp) and m.true_peak_dbtp > 0.25)
-        or (_has(m.limiter_stress_proxy) and m.limiter_stress_proxy >= 1.30)
-        or (_has(m.near_clip_ratio) and m.near_clip_ratio >= 0.00040)
-    )
+    delivery_overbudget = delivery_pressure >= 0.58
+    delivery_extreme = delivery_pressure >= 0.78
 
     return DSPRiskContext(
         foundation_missing=foundation_missing,
@@ -363,7 +385,6 @@ def apply_dsp_clamps(
     def register(clamp: DSPActiveClamp) -> None:
         active_clamps.append(clamp)
 
-    # 1. Cleanup must not go dense on fragile/weak body.
     if _enabled(cleanup) and cleanup.target_band_mode == "cleanup_dense" and (ctx.body_fragile or ctx.body_weak):
         cleanup = _clamp_stack(
             cleanup,
@@ -384,7 +405,6 @@ def apply_dsp_clamps(
         ))
         safety_notes.append("cleanup dense blocked by body protection")
 
-    # 2. Bridge-sensitive materials cannot take aggressive dense cleanup.
     if _enabled(cleanup) and cleanup.target_band_mode == "cleanup_dense" and (ctx.bridge_broken or ctx.bridge_gap_risky):
         cleanup = _clamp_stack(
             cleanup,
@@ -405,7 +425,6 @@ def apply_dsp_clamps(
         ))
         safety_notes.append("cleanup guarded by bridge protection")
 
-    # 3. Gluey bridge restrains bridge first and moderates anchor restore second.
     if ctx.bridge_gluey:
         if _enabled(bridge):
             bridge = _clamp_stack(
@@ -438,7 +457,6 @@ def apply_dsp_clamps(
         ))
         safety_notes.append("bridge glue clamp active")
 
-    # 4. Cleanup-primary pass cannot carry dense projection.
     if _enabled(cleanup) and cleanup.role_rank == "primary":
         if _enabled(projection_contour) and projection_contour.target_band_mode == "projection_dense":
             projection_contour = _clamp_stack(
@@ -471,7 +489,6 @@ def apply_dsp_clamps(
         ))
         safety_notes.append("projection softened by cleanup-primary law")
 
-    # 5. Active guard cannot coexist with aggressive projection density.
     if _enabled(guard) and guard.target_band_mode in {"guard_boxiness", "guard_transition_support"} and guard.execution_amount >= 0.18:
         if _enabled(projection_contour) and projection_contour.target_band_mode == "projection_dense":
             projection_contour = _clamp_stack(
@@ -504,7 +521,6 @@ def apply_dsp_clamps(
         ))
         safety_notes.append("projection softened by active guard")
 
-    # 6. Thin-track law.
     if ctx.thin_candidate:
         if _enabled(cleanup) and cleanup.target_band_mode == "cleanup_dense":
             cleanup = _clamp_stack(
@@ -539,7 +555,6 @@ def apply_dsp_clamps(
 
     projection_established = _projection_established(projection_contour, ctx)
 
-    # 7. Underprojected law and spark gating.
     if _enabled(spark):
         if ctx.underprojected:
             spark = _clamp_stack(
@@ -576,7 +591,6 @@ def apply_dsp_clamps(
             ))
             safety_notes.append("spark downgraded because projection not established")
 
-    # 8. Top fragility law.
     if ctx.top_fragile:
         if _enabled(projection_contour):
             projection_contour = _clamp_stack(
@@ -612,7 +626,6 @@ def apply_dsp_clamps(
         ))
         safety_notes.append("top fragility clamp active")
 
-    # 9. Width law.
     projection_established = _projection_established(projection_contour, ctx)
     if _enabled(spark) and (ctx.foundation_missing or ctx.body_weak or (not projection_established) or ctx.top_fragile):
         spark = _drop_allowed_primitives(
@@ -630,16 +643,15 @@ def apply_dsp_clamps(
         ))
         safety_notes.append("width law clamp active")
 
-    # 10. Delivery supremacy law.
     if ctx.delivery_overbudget:
         if _enabled(spark):
             spark = _clamp_stack(
                 spark,
                 clamp_name="delivery_budget_spark_trim",
                 reason="delivery budget trims spark first",
-                max_amount=0.04,
-                max_cap=0.08,
-                max_dynamic=0.20,
+                max_amount=0.06,
+                max_cap=0.10,
+                max_dynamic=0.24,
                 force_target_band_mode="spark_micro",
                 force_protection_mode="spark_micro_only",
             )
@@ -648,9 +660,9 @@ def apply_dsp_clamps(
                 projection_assist,
                 clamp_name="delivery_budget_projection_assist_trim",
                 reason="delivery budget trims projection assist second",
-                max_amount=0.06,
-                max_cap=0.10,
-                max_dynamic=0.28,
+                max_amount=0.08,
+                max_cap=0.14,
+                max_dynamic=0.34,
                 force_target_band_mode="projection_mild",
                 force_protection_mode="top_guarded",
             )
@@ -659,27 +671,27 @@ def apply_dsp_clamps(
                 anchor,
                 clamp_name="delivery_budget_anchor_trim",
                 reason="delivery budget trims anchor support third",
-                max_amount=0.16,
-                max_cap=0.24,
-                max_dynamic=0.44,
+                max_amount=0.18,
+                max_cap=0.26,
+                max_dynamic=0.48,
             )
         if _enabled(bridge):
             bridge = _clamp_stack(
                 bridge,
                 clamp_name="delivery_budget_bridge_trim",
                 reason="delivery budget trims bridge support third",
-                max_amount=0.14,
-                max_cap=0.22,
-                max_dynamic=0.40,
+                max_amount=0.16,
+                max_cap=0.24,
+                max_dynamic=0.44,
             )
         if ctx.delivery_extreme and _enabled(projection_contour):
             projection_contour = _clamp_stack(
                 projection_contour,
                 clamp_name="delivery_budget_projection_contour_trim",
                 reason="extreme delivery budget also trims projection contour",
-                max_amount=0.14,
-                max_cap=0.24,
-                max_dynamic=0.46,
+                max_amount=0.16,
+                max_cap=0.28,
+                max_dynamic=0.50,
                 force_target_band_mode="projection_mild",
                 force_protection_mode="top_guarded",
             )
@@ -693,7 +705,6 @@ def apply_dsp_clamps(
         ))
         safety_notes.append("delivery budget clamp active")
 
-    # Final blocked actions summary.
     for stack in [cleanup, guard, anchor, bridge, projection_contour, projection_assist, spark, delivery]:
         if stack is None:
             continue
