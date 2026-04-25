@@ -360,9 +360,9 @@ def _build_dynamic_body_support_boost(ctx: _PrimitiveBuildContext) -> Dict[str, 
 
 def _build_restrained_parallel_fill(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_anchor_center(ctx.analysis)
-    gain = _lerp(0.15, 0.55, ctx.activity)
-    mix = _lerp(0.03, 0.11, ctx.activity)
-    q = _lerp(0.70, 1.05, ctx.activity)
+    gain = _lerp(0.18, 0.68, ctx.activity)
+    mix = _lerp(0.04, 0.14, ctx.activity)
+    q = _lerp(0.68, 1.00, ctx.activity)
     return _base_instance(
         ctx,
         "restrained_parallel_fill",
@@ -524,8 +524,8 @@ def _build_local_antiharsh_control(ctx: _PrimitiveBuildContext) -> Dict[str, Any
 
 def _build_broad_presence_contour(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_presence_center(ctx.analysis)
-    gain = _lerp(0.20, 1.00, ctx.activity)
-    q = _lerp(0.45, 0.80, ctx.activity)
+    gain = _lerp(0.30, 1.22, ctx.activity)
+    q = _lerp(0.40, 0.78, ctx.activity)
     return _base_instance(
         ctx,
         "broad_presence_contour",
@@ -538,10 +538,10 @@ def _build_broad_presence_contour(ctx: _PrimitiveBuildContext) -> Dict[str, Any]
 
 def _build_dynamic_presence_lift(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_presence_center(ctx.analysis)
-    gain = _lerp(0.15, 0.85, ctx.activity)
-    q = _lerp(0.85, 1.60, ctx.activity)
-    attack = _lerp(5.0, 16.0, 1.0 - ctx.activity)
-    release = _lerp(45.0, 130.0, ctx.activity)
+    gain = _lerp(0.22, 1.02, ctx.activity)
+    q = _lerp(0.78, 1.45, ctx.activity)
+    attack = _lerp(4.0, 13.0, 1.0 - ctx.activity)
+    release = _lerp(40.0, 115.0, ctx.activity)
     return _base_instance(
         ctx,
         "dynamic_presence_lift",
@@ -573,8 +573,8 @@ def _build_projection_local_deharsh(ctx: _PrimitiveBuildContext) -> Dict[str, An
 
 
 def _build_band_limited_soft_saturation(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
-    drive = _lerp(0.20, 1.60, ctx.activity)
-    mix = _lerp(0.03, 0.14, ctx.activity)
+    drive = _lerp(0.28, 1.85, ctx.activity)
+    mix = _lerp(0.04, 0.16, ctx.activity)
     return _base_instance(
         ctx,
         "band_limited_soft_saturation",
@@ -587,15 +587,15 @@ def _build_band_limited_soft_saturation(ctx: _PrimitiveBuildContext) -> Dict[str
 
 
 def _build_controlled_harmonic_density(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
-    drive = _lerp(0.18, 1.20, ctx.activity)
-    mix = _lerp(0.02, 0.10, ctx.activity)
+    drive = _lerp(0.26, 1.42, ctx.activity)
+    mix = _lerp(0.04, 0.13, ctx.activity)
     return _base_instance(
         ctx,
         "controlled_harmonic_density",
         drive_db=round(drive, 4),
         mix=round(mix, 4),
-        low_cut_hz=1900.0,
-        high_cut_hz=5200.0,
+        low_cut_hz=1800.0,
+        high_cut_hz=5600.0,
         notes=["Controlled harmonic density to support projection without fake top-end gloss."],
     )
 
@@ -680,21 +680,21 @@ def _build_output_gain_trim(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     quiet_score = _delivery_quiet_score(ctx.analysis)
     punch_safety = _delivery_punch_safety(ctx.analysis)
 
-    if hot_score >= 0.14:
+    if hot_score >= 0.22:
         gain_trim = -(
-            0.08
-            + (0.82 * hot_score)
-            + (0.12 * (1.0 - punch_safety) * hot_score)
+            0.02
+            + (0.34 * hot_score)
+            + (0.06 * (1.0 - punch_safety) * hot_score)
         )
     else:
-        lift_room = _clamp((0.18 - hot_score) / 0.18, 0.0, 1.0)
+        lift_room = _clamp((0.24 - hot_score) / 0.24, 0.0, 1.0)
         gain_trim = (
-            (0.12 + (0.62 * quiet_score) + (0.18 * punch_safety * quiet_score))
+            (0.14 + (0.74 * quiet_score) + (0.22 * punch_safety * quiet_score))
             * quiet_score
             * lift_room
         )
 
-    gain_trim = _clamp(gain_trim, -0.95, 0.55)
+    gain_trim = _clamp(gain_trim, -0.42, 0.72)
 
     note = (
         "Delta-aware minimal trim before limiter."
@@ -723,40 +723,40 @@ def _build_true_peak_limiter(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     quiet_score = _delivery_quiet_score(ctx.analysis)
     punch_safety = _delivery_punch_safety(ctx.analysis)
 
-    safety_headroom_score = _clamp((0.92 - limiter_stress_proxy) / 0.24, 0.0, 1.0)
-    codec_room_score = _clamp((0.0020 - near_clip_ratio) / 0.0020, 0.0, 1.0)
+    safety_headroom_score = _clamp((0.96 - limiter_stress_proxy) / 0.24, 0.0, 1.0)
+    codec_room_score = _clamp((0.0035 - near_clip_ratio) / 0.0035, 0.0, 1.0)
 
     drive_score = (
-        (quiet_score * 0.55)
-        + (punch_safety * 0.15)
-        + (safety_headroom_score * 0.15)
-        + (codec_room_score * 0.15)
+        (quiet_score * 0.40)
+        + (punch_safety * 0.28)
+        + (safety_headroom_score * 0.18)
+        + (codec_room_score * 0.14)
     )
 
-    drive_penalty = hot_score * (0.80 + (0.20 * (1.0 - punch_safety)))
+    drive_penalty = hot_score * (0.58 + (0.18 * (1.0 - punch_safety)))
 
     desired_drive_db = _clamp(
-        0.12 + (1.35 * drive_score) - (1.05 * drive_penalty),
-        0.08,
-        1.35,
+        0.22 + (1.55 * drive_score) - (0.72 * drive_penalty),
+        0.16,
+        1.55,
     )
 
     ceiling_db = -1.00
     threshold_db = ceiling_db - desired_drive_db
 
     attack_ms = _clamp(
-        0.32 + (0.22 * hot_score) - (0.10 * punch_safety),
-        0.20,
-        0.60,
+        0.26 + (0.16 * hot_score) - (0.08 * punch_safety),
+        0.18,
+        0.48,
     )
 
     release_ms = _clamp(
-        70.0
-        + (35.0 * hot_score)
-        + (25.0 * (1.0 - punch_safety))
-        - (30.0 * quiet_score),
-        45.0,
-        120.0,
+        58.0
+        + (28.0 * hot_score)
+        + (18.0 * (1.0 - punch_safety))
+        - (16.0 * quiet_score),
+        42.0,
+        98.0,
     )
 
     return _base_instance(
