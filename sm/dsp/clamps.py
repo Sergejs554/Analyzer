@@ -183,13 +183,11 @@ def _projection_established(
 ) -> bool:
     if not _enabled(contour_stack):
         return False
-    if ctx.underprojected:
-        return False
     if ctx.top_fragile:
         return False
-    if contour_stack.target_band_mode not in {"projection_dense", "projection_mild"}:
+    if contour_stack.target_band_mode not in {"projection_dense", "projection_mild", "projection_clamp"}:
         return False
-    return contour_stack.execution_amount >= 0.12
+    return contour_stack.execution_amount >= 0.10
 
 
 def _refresh_permissions(stack: RoleDSPStack) -> RoleDSPStack:
@@ -390,16 +388,16 @@ def apply_dsp_clamps(
             cleanup,
             clamp_name="body_protection_cleanup_clamp",
             reason="body weakness / fragility forces guarded cleanup",
-            max_amount=0.22,
-            max_cap=0.34,
-            max_dynamic=0.58,
+            max_amount=0.30,
+            max_cap=0.42,
+            max_dynamic=0.66,
             force_target_band_mode="cleanup_guarded",
             force_protection_mode="body_ultra_guarded",
         )
         register(_make_clamp(
             clamp_name="body_protection_cleanup_clamp",
             severity="high",
-            reason="Body fragility or weakness blocks dense cleanup.",
+            reason="Body fragility or weakness blocks only dense cleanup, not projection/polish.",
             target_roles=["cleanup"],
             actions={"force_target_band_mode": "cleanup_guarded"},
         ))
@@ -410,16 +408,16 @@ def apply_dsp_clamps(
             cleanup,
             clamp_name="bridge_protection_cleanup_clamp",
             reason="bridge risk forces guarded cleanup",
-            max_amount=0.20,
-            max_cap=0.32,
-            max_dynamic=0.54,
+            max_amount=0.28,
+            max_cap=0.40,
+            max_dynamic=0.62,
             force_target_band_mode="cleanup_guarded",
             force_protection_mode="body_bridge_guarded",
         )
         register(_make_clamp(
             clamp_name="bridge_protection_cleanup_clamp",
             severity="high",
-            reason="Bridge break/gap risk blocks dense cleanup in V1.",
+            reason="Bridge break/gap risk blocks only dense cleanup in V1.",
             target_roles=["cleanup"],
             actions={"force_target_band_mode": "cleanup_guarded"},
         ))
@@ -431,9 +429,9 @@ def apply_dsp_clamps(
                 bridge,
                 clamp_name="bridge_glue_clamp",
                 reason="gluey bridge restrains bridge support energy",
-                max_amount=0.20,
-                max_cap=0.32,
-                max_dynamic=0.60,
+                max_amount=0.26,
+                max_cap=0.38,
+                max_dynamic=0.68,
                 force_target_band_mode="bridge_restrain",
                 force_protection_mode="glue_strict",
             )
@@ -442,143 +440,114 @@ def apply_dsp_clamps(
                 anchor,
                 clamp_name="anchor_moderated_by_bridge_glue",
                 reason="anchor restore moderated because bridge is glue-prone",
-                max_amount=0.24,
-                max_cap=0.36,
-                max_dynamic=0.74,
-                force_target_band_mode="body_hold",
+                max_amount=0.36,
+                max_cap=0.52,
+                max_dynamic=0.78,
                 force_protection_mode="body_strict",
             )
         register(_make_clamp(
             clamp_name="bridge_glue_clamp",
             severity="medium",
-            reason="Glue-prone bridge suppresses bridge-first and anchor-second support energy.",
+            reason="Glue-prone bridge restrains mud-prone low/body support without killing foundation.",
             target_roles=["bridge", "anchor"],
-            actions={"bridge_mode": "bridge_restrain", "anchor_mode": "body_hold"},
+            actions={"bridge_mode": "bridge_restrain", "anchor_restore": "moderated"},
         ))
         safety_notes.append("bridge glue clamp active")
 
-    if _enabled(cleanup) and cleanup.role_rank == "primary":
+    if ctx.transition_fragile and ctx.body_weak:
         if _enabled(projection_contour) and projection_contour.target_band_mode == "projection_dense":
             projection_contour = _clamp_stack(
                 projection_contour,
-                clamp_name="cleanup_primary_projection_clamp",
-                reason="cleanup-primary pass softens projection contour",
-                max_amount=0.18,
-                max_cap=0.30,
-                max_dynamic=0.56,
+                clamp_name="hollow_transition_projection_clamp",
+                reason="projection softened because transition is fragile and body is weak",
+                max_amount=0.26,
+                max_cap=0.40,
+                max_dynamic=0.62,
                 force_target_band_mode="projection_mild",
                 force_protection_mode="top_guarded",
             )
         if _enabled(projection_assist):
             projection_assist = _clamp_stack(
                 projection_assist,
-                clamp_name="cleanup_primary_projection_assist_clamp",
-                reason="cleanup-primary pass softens projection assist",
-                max_amount=0.12,
-                max_cap=0.20,
-                max_dynamic=0.44,
+                clamp_name="hollow_transition_projection_assist_clamp",
+                reason="projection assist softened because transition is fragile and body is weak",
+                max_amount=0.16,
+                max_cap=0.26,
+                max_dynamic=0.50,
                 force_target_band_mode="projection_mild",
                 force_protection_mode="top_guarded",
             )
         register(_make_clamp(
-            clamp_name="cleanup_primary_projection_clamp",
+            clamp_name="hollow_transition_projection_clamp",
             severity="medium",
-            reason="Primary cleanup lane prevents dense projection in same pass.",
+            reason="Projection is clamped only when transition fragility and body weakness are both active.",
             target_roles=["projection"],
             actions={"projection_mode": "projection_mild"},
         ))
-        safety_notes.append("projection softened by cleanup-primary law")
-
-    if _enabled(guard) and guard.target_band_mode in {"guard_boxiness", "guard_transition_support"} and guard.execution_amount >= 0.18:
-        if _enabled(projection_contour) and projection_contour.target_band_mode == "projection_dense":
-            projection_contour = _clamp_stack(
-                projection_contour,
-                clamp_name="guard_projection_density_clamp",
-                reason="active guard softens projection contour",
-                max_amount=0.16,
-                max_cap=0.28,
-                max_dynamic=0.52,
-                force_target_band_mode="projection_mild",
-                force_protection_mode="top_guarded",
-            )
-        if _enabled(projection_assist):
-            projection_assist = _clamp_stack(
-                projection_assist,
-                clamp_name="guard_projection_assist_clamp",
-                reason="active guard softens projection assist",
-                max_amount=0.10,
-                max_cap=0.16,
-                max_dynamic=0.36,
-                force_target_band_mode="projection_mild",
-                force_protection_mode="top_guarded",
-            )
-        register(_make_clamp(
-            clamp_name="guard_projection_density_clamp",
-            severity="medium",
-            reason="Guard-active pass limits projection density.",
-            target_roles=["guard", "projection"],
-            actions={"projection_mode": "projection_mild"},
-        ))
-        safety_notes.append("projection softened by active guard")
+        safety_notes.append("projection softened by real hollow-transition risk")
 
     if ctx.thin_candidate:
+        changed = False
         if _enabled(cleanup) and cleanup.target_band_mode == "cleanup_dense":
             cleanup = _clamp_stack(
                 cleanup,
                 clamp_name="thin_track_cleanup_clamp",
                 reason="thin-track law forces guarded cleanup",
-                max_amount=0.20,
-                max_cap=0.30,
-                max_dynamic=0.54,
+                max_amount=0.26,
+                max_cap=0.38,
+                max_dynamic=0.62,
                 force_target_band_mode="cleanup_guarded",
                 force_protection_mode="body_ultra_guarded",
             )
+            changed = True
         if _enabled(guard) and guard.target_band_mode == "guard_boxiness" and ctx.transition_fragile:
             guard = _clamp_stack(
                 guard,
                 clamp_name="thin_track_guard_bias",
                 reason="thin-track law biases guard toward transition support",
-                max_amount=0.20,
-                max_cap=0.30,
-                max_dynamic=0.62,
+                max_amount=0.24,
+                max_cap=0.36,
+                max_dynamic=0.66,
                 force_target_band_mode="guard_transition_support",
                 force_protection_mode="transition_support_only",
             )
-        register(_make_clamp(
-            clamp_name="thin_track_global_clamp",
-            severity="high",
-            reason="Thin-track law prevents subtractive double-hit and aggressive structure loss.",
-            target_roles=["cleanup", "guard"],
-            actions={"bias": "guarded"},
-        ))
-        safety_notes.append("thin-track clamp active")
+            changed = True
+        if changed:
+            register(_make_clamp(
+                clamp_name="thin_track_global_clamp",
+                severity="medium",
+                reason="Thin-track law prevents subtractive double-hit but does not block musical projection.",
+                target_roles=["cleanup", "guard"],
+                actions={"bias": "guarded"},
+            ))
+            safety_notes.append("thin-track clamp active")
 
     projection_established = _projection_established(projection_contour, ctx)
 
     if _enabled(spark):
-        if ctx.underprojected:
+        if ctx.top_fragile:
             spark = _clamp_stack(
                 spark,
-                clamp_name="underprojected_blocks_spark",
-                reason="spark disabled because projection is underprojected",
+                clamp_name="top_fragility_blocks_spark_precheck",
+                reason="spark disabled because top is fragile",
                 force_enabled=False,
             )
             register(_make_clamp(
-                clamp_name="underprojected_blocks_spark",
+                clamp_name="top_fragility_blocks_spark_precheck",
                 severity="high",
-                reason="Spark cannot substitute for missing projection.",
+                reason="Spark cannot run when top fragility is active.",
                 target_roles=["spark"],
                 actions={"enabled": False},
             ))
-            safety_notes.append("spark blocked by underprojected state")
+            safety_notes.append("spark blocked by top fragility")
         elif not projection_established:
             spark = _clamp_stack(
                 spark,
                 clamp_name="projection_not_established_spark_micro",
-                reason="spark downgraded because projection is not established",
-                max_amount=0.06,
-                max_cap=0.12,
-                max_dynamic=0.24,
+                reason="spark downgraded because projection is not yet established",
+                max_amount=0.10,
+                max_cap=0.16,
+                max_dynamic=0.30,
                 force_target_band_mode="spark_micro",
                 force_protection_mode="spark_micro_only",
             )
@@ -590,6 +559,8 @@ def apply_dsp_clamps(
                 actions={"spark_mode": "spark_micro"},
             ))
             safety_notes.append("spark downgraded because projection not established")
+        elif ctx.underprojected:
+            safety_notes.append("input was underprojected, but projection stack is established; spark remains allowed")
 
     if ctx.top_fragile:
         if _enabled(projection_contour):
@@ -597,9 +568,9 @@ def apply_dsp_clamps(
                 projection_contour,
                 clamp_name="top_fragility_projection_clamp",
                 reason="top fragility forces projection clamp mode",
-                max_amount=0.12,
-                max_cap=0.22,
-                max_dynamic=0.40,
+                max_amount=0.16,
+                max_cap=0.26,
+                max_dynamic=0.46,
                 force_target_band_mode="projection_clamp",
                 force_protection_mode="top_strict",
             )
@@ -649,9 +620,9 @@ def apply_dsp_clamps(
                 spark,
                 clamp_name="delivery_budget_spark_trim",
                 reason="delivery budget trims spark first",
-                max_amount=0.06,
-                max_cap=0.10,
-                max_dynamic=0.24,
+                max_amount=0.10,
+                max_cap=0.16,
+                max_dynamic=0.30,
                 force_target_band_mode="spark_micro",
                 force_protection_mode="spark_micro_only",
             )
@@ -660,38 +631,9 @@ def apply_dsp_clamps(
                 projection_assist,
                 clamp_name="delivery_budget_projection_assist_trim",
                 reason="delivery budget trims projection assist second",
-                max_amount=0.08,
-                max_cap=0.14,
-                max_dynamic=0.34,
-                force_target_band_mode="projection_mild",
-                force_protection_mode="top_guarded",
-            )
-        if _enabled(anchor):
-            anchor = _clamp_stack(
-                anchor,
-                clamp_name="delivery_budget_anchor_trim",
-                reason="delivery budget trims anchor support third",
-                max_amount=0.18,
-                max_cap=0.26,
-                max_dynamic=0.48,
-            )
-        if _enabled(bridge):
-            bridge = _clamp_stack(
-                bridge,
-                clamp_name="delivery_budget_bridge_trim",
-                reason="delivery budget trims bridge support third",
-                max_amount=0.16,
-                max_cap=0.24,
-                max_dynamic=0.44,
-            )
-        if ctx.delivery_extreme and _enabled(projection_contour):
-            projection_contour = _clamp_stack(
-                projection_contour,
-                clamp_name="delivery_budget_projection_contour_trim",
-                reason="extreme delivery budget also trims projection contour",
-                max_amount=0.16,
-                max_cap=0.28,
-                max_dynamic=0.50,
+                max_amount=0.12,
+                max_cap=0.20,
+                max_dynamic=0.42,
                 force_target_band_mode="projection_mild",
                 force_protection_mode="top_guarded",
             )
@@ -699,11 +641,15 @@ def apply_dsp_clamps(
         register(_make_clamp(
             clamp_name="delivery_budget_global_clamp",
             severity="high" if ctx.delivery_extreme else "medium",
-            reason="Delivery budget trims finish first, projection assist second, support third.",
-            target_roles=["spark", "projection", "anchor", "bridge"],
-            actions={"budget": "trim_to_safe"},
+            reason="Delivery budget trims finish/assist only; anchor and bridge are preserved.",
+            target_roles=["spark", "projection"],
+            actions={
+                "budget": "trim_finish_first",
+                "anchor": "preserved",
+                "bridge": "preserved",
+            },
         ))
-        safety_notes.append("delivery budget clamp active")
+        safety_notes.append("delivery budget clamp active without anchor/bridge trimming")
 
     for stack in [cleanup, guard, anchor, bridge, projection_contour, projection_assist, spark, delivery]:
         if stack is None:
@@ -725,6 +671,15 @@ def apply_dsp_clamps(
         safety_notes=_uniq(safety_notes),
         stage_plans=[],
         recombine_plans=[],
-        notes=_uniq(notes + ["dsp_clamps_applied", "graph_requires_reattach_after_clamps"]),
+        notes=_uniq(
+            notes
+            + [
+                "dsp_clamps_applied",
+                "music_first_clamp_policy_v2",
+                "projection_not_clamped_by_cleanup_or_guard_by_default",
+                "anchor_bridge_preserved_from_delivery_budget",
+                "graph_requires_reattach_after_clamps",
+            ]
+        ),
     )
     return patched
