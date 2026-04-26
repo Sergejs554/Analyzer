@@ -44,17 +44,35 @@ def _effective_mode(plan) -> str:
     return str(plan.target_band_mode or "off")
 
 
+def _value(v: Any) -> str:
+    if hasattr(v, "value"):
+        return str(v.value).strip().lower()
+    return str(v).strip().lower()
+
+
+def _stack_activity(stack: Optional[RoleDSPStack]) -> float:
+    if stack is None or not stack.enabled:
+        return 0.0
+
+    if stack.execution_cap <= 1e-9:
+        amount_norm = 0.0
+    else:
+        amount_norm = _clamp(stack.execution_amount / stack.execution_cap, 0.0, 1.0)
+
+    return _clamp((amount_norm * 0.58) + (stack.dynamic_scale * 0.42), 0.0, 1.0)
+
+
 def _default_split_for_mode(role: RoleName, target_band_mode: str) -> Dict[str, Tuple[float, float, float]]:
     if role == RoleName.PROJECTION:
         if target_band_mode == "projection_dense":
             return {
-                "projection_contour_stack": (0.68, 0.82, 1.00),
-                "projection_assist_stack": (0.32, 0.42, 0.86),
+                "projection_contour_stack": (0.70, 0.84, 1.00),
+                "projection_assist_stack": (0.40, 0.56, 0.92),
             }
         if target_band_mode == "projection_mild":
             return {
                 "projection_contour_stack": (0.76, 0.86, 1.00),
-                "projection_assist_stack": (0.24, 0.34, 0.74),
+                "projection_assist_stack": (0.44, 0.58, 0.82),
             }
         if target_band_mode == "projection_clamp":
             return {
@@ -224,17 +242,122 @@ def _index_role_stacks(stacks: List[RoleDSPStack]) -> Dict[str, RoleDSPStack]:
     return {stack.stack_name: stack for stack in stacks}
 
 
+def _is_spark_hard_emergency(analysis: Optional[SmartMasterAnalysis]) -> bool:
+    if analysis is None:
+        return False
+
+    metrics = _read(analysis, "metrics", {}) or {}
+    derived = _read(analysis, "derived", {}) or {}
+    projection = _read(analysis, "projection", {}) or {}
+
+    true_peak_dbtp = float(_read(metrics, "true_peak_dbtp", -1.0) or -1.0)
+    near_clip_ratio = float(_read(metrics, "near_clip_ratio", 0.0) or 0.0)
+    crest_db = float(_read(metrics, "crest_db", 10.0) or 10.0)
+    punch_proxy = float(_read(metrics, "punch_proxy", 10.0) or 10.0)
+
+    harshness_risk = _value(_read(projection, "harshness_risk", "low"))
+    sibilance_risk = _value(_read(projection, "sibilance_risk", "low"))
+    top_push_safety_proxy = _read(derived, "top_push_safety_proxy", None)
+
+    top_safety_collapse = (
+        top_push_safety_proxy is not None
+        and float(top_push_safety_proxy) < 0.34
+    )
+
+    double_top_emergency = (
+        harshness_risk == "high"
+        and sibilance_risk == "high"
+        and top_safety_collapse
+    )
+
+    hard_clip_emergency = true_peak_dbtp >= 2.20 or near_clip_ratio >= 0.018
+    punch_collapse = crest_db < 8.2 and punch_proxy < 9.2
+
+    return bool(double_top_emergency or hard_clip_emergency or punch_collapse)
+
+
+def _restore_mandatory_spark_floor(
+    *,
+    router_blueprint: SmartMasterExecutionBlueprint,
+    projection_contour_stack: Optional[RoleDSPStack],
+    spark_stacks: List[RoleDSPStack],
+    analysis: Optional[SmartMasterAnalysis],
+) -> Tuple[List[RoleDSPStack], List[str]]:
+    if spark_stacks:
+        return spark_stacks, []
+
+    if projection_contour_stack is None or not projection_contour_stack.enabled:
+        return spark_stacks, ["spark_not_restored_no_projection_carrier"]
+
+    if _is_spark_hard_emergency(analysis):
+        return spark_stacks, ["spark_off_hard_emergency_only"]
+
+    spark_plan = router_blueprint.spark
+    if spark_plan is None:
+        return spark_stacks, ["spark_not_restored_no_router_plan"]
+
+    old_tags = list(getattr(spark_plan, "interaction_tags", []) or [])
+    old_notes = list(getattr(spark_plan, "notes", []) or [])
+
+    patched_spark_plan = replace(
+        spark_plan,
+        enabled=True,
+        profile_name="finish_spark_micro_safe",
+        role_rank="support",
+        energy_class="mild",
+        requested_amount=max(float(_read(spark_plan, "requested_amount", 0.0) or 0.0), 0.14),
+        requested_cap=max(float(_read(spark_plan, "requested_cap", 0.0) or 0.0), 0.26),
+        execution_amount=max(float(_read(spark_plan, "execution_amount", 0.0) or 0.0), 0.14),
+        execution_cap=max(float(_read(spark_plan, "execution_cap", 0.0) or 0.0), 0.26),
+        dynamic_scale=max(float(_read(spark_plan, "dynamic_scale", 0.0) or 0.0), 0.46),
+        target_band_mode="spark_micro",
+        protection_mode="spark_micro_only",
+        allowed_primitives=[
+            "micro_air_shelf",
+            "micro_top_texture",
+            "protected_high_side_polish",
+            "local_desibilance_control",
+        ],
+        forbidden_primitives=[],
+        interaction_tags=_uniq(old_tags + ["assembler_restored_mandatory_spark_floor"]),
+        notes=_uniq(
+            old_notes
+            + [
+                "assembler restored mandatory polish spark floor",
+                "spark is finish magic, not optional silence",
+                "spark can be disabled only by hard emergency",
+            ]
+        ),
+    )
+
+    return _expand_role_plan_to_stacks(patched_spark_plan), ["assembler_restored_mandatory_spark_floor"]
+
+
 def _derive_support_recombine_gain_db(
     anchor_stack: Optional[RoleDSPStack],
     bridge_stack: Optional[RoleDSPStack],
 ) -> float:
-    total = 0.0
-    if anchor_stack is not None and anchor_stack.enabled:
-        total += anchor_stack.execution_amount
-    if bridge_stack is not None and bridge_stack.enabled:
-        total += bridge_stack.execution_amount
+    total_amount = 0.0
+    activity_sum = 0.0
+    active_count = 0
 
-    return _clamp(-0.28 + (total * 0.78), -0.35, 0.18)
+    for stack in [anchor_stack, bridge_stack]:
+        if stack is None or not stack.enabled:
+            continue
+        total_amount += stack.execution_amount
+        activity_sum += _stack_activity(stack)
+        active_count += 1
+
+    if active_count <= 0:
+        return 0.0
+
+    activity_avg = activity_sum / active_count
+
+    return _clamp(
+        -0.10 + (total_amount * 0.50) + (activity_avg * 0.08),
+        -0.12,
+        0.24,
+    )
 
 
 def _derive_projection_assist_blend(
@@ -243,12 +366,19 @@ def _derive_projection_assist_blend(
     if projection_assist_stack is None or not projection_assist_stack.enabled:
         return 0.0
 
-    return _clamp(
-        (projection_assist_stack.execution_amount * 0.88)
-        + (projection_assist_stack.dynamic_scale * 0.08),
-        0.04,
-        0.24,
-    )
+    activity = _stack_activity(projection_assist_stack)
+    mode = str(projection_assist_stack.target_band_mode or "")
+
+    if mode == "projection_dense":
+        return _clamp(0.20 + (activity * 0.24), 0.20, 0.42)
+
+    if mode == "projection_mild":
+        return _clamp(0.14 + (activity * 0.20), 0.14, 0.32)
+
+    if mode == "projection_clamp":
+        return 0.0
+
+    return _clamp(0.12 + (activity * 0.18), 0.12, 0.28)
 
 
 def _derive_spark_blend(
@@ -257,12 +387,16 @@ def _derive_spark_blend(
     if spark_stack is None or not spark_stack.enabled:
         return 0.0
 
-    return _clamp(
-        (spark_stack.execution_amount * 0.46)
-        + (spark_stack.dynamic_scale * 0.03),
-        0.02,
-        0.10,
-    )
+    activity = _stack_activity(spark_stack)
+    mode = str(spark_stack.target_band_mode or "")
+
+    if mode == "spark_excited":
+        return _clamp(0.16 + (activity * 0.14), 0.16, 0.34)
+
+    if mode == "spark_micro":
+        return _clamp(0.10 + (activity * 0.10), 0.10, 0.22)
+
+    return _clamp(0.08 + (activity * 0.08), 0.08, 0.18)
 
 
 def _delivery_role_value():
@@ -406,7 +540,6 @@ def build_dsp_execution_blueprint(
     cleanup_idx = _index_role_stacks(cleanup_stacks)
     guard_idx = _index_role_stacks(guard_stacks)
     projection_idx = _index_role_stacks(projection_stacks)
-    spark_idx = _index_role_stacks(spark_stacks)
 
     cleanup_stack = cleanup_idx.get("cleanup_core_stack")
     guard_stack = guard_idx.get("guard_core_stack")
@@ -414,6 +547,14 @@ def build_dsp_execution_blueprint(
     bridge_parallel_stack = bridge_idx.get("bridge_parallel_stack")
     projection_contour_stack = projection_idx.get("projection_contour_stack")
     projection_assist_stack = projection_idx.get("projection_assist_stack")
+
+    spark_stacks, spark_restore_notes = _restore_mandatory_spark_floor(
+        router_blueprint=router_blueprint,
+        projection_contour_stack=projection_contour_stack,
+        spark_stacks=spark_stacks,
+        analysis=analysis,
+    )
+    spark_idx = _index_role_stacks(spark_stacks)
     spark_stack = spark_idx.get("spark_finish_stack")
 
     delivery_stack = _build_delivery_stack(analysis) if analysis is not None else None
@@ -423,8 +564,10 @@ def build_dsp_execution_blueprint(
         [
             "assembler_initialized",
             "role_specs_expanded",
+            "musical_blend_floors_enabled",
         ]
     )
+    blueprint_notes.extend(spark_restore_notes)
 
     if delivery_stack is None:
         blueprint_notes.append("delivery_stack_pending_true_peak_stage")
