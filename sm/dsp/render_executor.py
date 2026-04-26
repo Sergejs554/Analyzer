@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import librosa
 import numpy as np
 import soundfile as sf
+from scipy import signal
 
 
 CustomBackend = Callable[[List[Dict[str, Any]], str, str, Dict[str, Any]], str]
@@ -246,6 +247,247 @@ def _apply_ffmpeg_ops(input_path: str, output_path: str, ops: Sequence[Dict[str,
     return output_path
 
 
+# === изменено ===
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+# === изменено ===
+def _rms_dbfs(audio: np.ndarray) -> float:
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.size == 0:
+        return -120.0
+    rms = float(np.sqrt(np.mean(np.square(audio)) + 1e-12))
+    return 20.0 * math.log10(max(rms, 1e-12))
+
+
+# === изменено ===
+def _soft_ceiling_clip(audio: np.ndarray, ceiling_lin: float, knee_db: float = 0.85) -> np.ndarray:
+    """
+    Musical peak safety.
+
+    This is intentionally closer to a soft clipper than a gain-riding limiter.
+    It protects true peak without pulling the whole track down.
+    """
+    x = np.asarray(audio, dtype=np.float32)
+    ceiling_lin = float(max(ceiling_lin, 1e-6))
+
+    knee_db = float(max(knee_db, 0.20))
+    knee_start = ceiling_lin / _db_to_linear(knee_db)
+    knee_start = min(knee_start, ceiling_lin * 0.995)
+
+    span = max(ceiling_lin - knee_start, 1e-6)
+
+    ax = np.abs(x)
+    sign = np.sign(x)
+
+    out_abs = ax.copy()
+    over = ax > knee_start
+
+    if np.any(over):
+        t = (ax[over] - knee_start) / span
+        out_abs[over] = knee_start + span * np.tanh(t)
+
+    out = sign * out_abs
+    return np.clip(out, -ceiling_lin, ceiling_lin).astype(np.float32)
+
+
+# === изменено ===
+def _filter_band_mono(
+    x: np.ndarray,
+    sr: int,
+    *,
+    low_cut_hz: Optional[float] = None,
+    high_cut_hz: Optional[float] = None,
+) -> np.ndarray:
+    """
+    Lightweight high/band extraction for finish-side polish.
+
+    Used only for micro finish layers. This avoids large full-file FFT memory spikes.
+    """
+    y = np.asarray(x, dtype=np.float32)
+    if y.size <= 8:
+        return y.copy()
+
+    nyq = max(float(sr) * 0.5, 1.0)
+
+    try:
+        if low_cut_hz is not None and float(low_cut_hz) > 20.0:
+            low = _clamp(float(low_cut_hz) / nyq, 0.0005, 0.98)
+            sos = signal.butter(2, low, btype="highpass", output="sos")
+            y = signal.sosfilt(sos, y).astype(np.float32)
+
+        if high_cut_hz is not None and float(high_cut_hz) > 20.0:
+            high = _clamp(float(high_cut_hz) / nyq, 0.0005, 0.98)
+            sos = signal.butter(2, high, btype="lowpass", output="sos")
+            y = signal.sosfilt(sos, y).astype(np.float32)
+
+        return np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+
+    except Exception:
+        return np.zeros_like(y, dtype=np.float32)
+
+
+# === изменено ===
+def _to_mid_side(audio: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    audio = _ensure_2d_audio(audio)
+    if audio.shape[1] < 2:
+        mono = audio[:, 0]
+        return mono.copy(), np.zeros_like(mono)
+
+    left = audio[:, 0]
+    right = audio[:, 1]
+    mid = (left + right) * 0.5
+    side = (left - right) * 0.5
+    return mid.astype(np.float32), side.astype(np.float32)
+
+
+# === изменено ===
+def _from_mid_side(mid: np.ndarray, side: np.ndarray) -> np.ndarray:
+    left = mid + side
+    right = mid - side
+    return np.stack([left, right], axis=1).astype(np.float32)
+
+
+# === изменено ===
+def _execute_high_side_polish_file(input_path: str, output_path: str, op: Dict[str, Any]) -> str:
+    audio, sr = _load_audio(input_path)
+    params = dict(op.get("params") or {})
+
+    freq_hz = float(params.get("freq_hz", 9600.0) or 9600.0)
+    mix = float(params.get("mix", 0.06) or 0.06)
+    side_gain_db = float(params.get("side_gain_db", 0.25) or 0.25)
+
+    mix = _clamp(mix, 0.0, 0.22)
+    side_gain = _db_to_linear(side_gain_db)
+
+    mid, side_ch = _to_mid_side(audio)
+    high_side = _filter_band_mono(
+        side_ch,
+        sr,
+        low_cut_hz=freq_hz,
+        high_cut_hz=None,
+    )
+
+    effective = _clamp(
+        (mix * 1.35) + (max(side_gain - 1.0, 0.0) * 0.85),
+        0.015,
+        0.18,
+    )
+    side_out = side_ch + (high_side * effective)
+
+    processed = _from_mid_side(mid, side_out)
+    processed = np.clip(processed, -1.0, 1.0)
+
+    _write_wav(output_path, processed, sr)
+    return output_path
+
+
+# === изменено ===
+def _execute_high_only_width_file(input_path: str, output_path: str, op: Dict[str, Any]) -> str:
+    audio, sr = _load_audio(input_path)
+    params = dict(op.get("params") or {})
+
+    low_cut_hz = float(params.get("low_cut_hz", 7000.0) or 7000.0)
+    high_cut_hz = float(params.get("high_cut_hz", 16000.0) or 16000.0)
+    width_amount = float(params.get("width_amount", 0.06) or 0.06)
+    mix = float(params.get("mix", 0.05) or 0.05)
+
+    width_amount = _clamp(width_amount, 0.0, 0.20)
+    mix = _clamp(mix, 0.0, 0.22)
+
+    mid, side_ch = _to_mid_side(audio)
+    high_side_band = _filter_band_mono(
+        side_ch,
+        sr,
+        low_cut_hz=low_cut_hz,
+        high_cut_hz=high_cut_hz,
+    )
+
+    effective_width = _clamp(width_amount * (0.80 + mix * 4.0), 0.0, 0.24)
+    side_out = side_ch + (high_side_band * effective_width)
+
+    processed = _from_mid_side(mid, side_out)
+    processed = np.clip(processed, -1.0, 1.0)
+
+    _write_wav(output_path, processed, sr)
+    return output_path
+
+
+# === изменено ===
+def _native_custom_op_supported(op: Dict[str, Any]) -> bool:
+    op_kind = str(op.get("op_kind") or "").lower()
+    return op_kind in {
+        "high_side_polish",
+        "high_only_width",
+    }
+
+
+# === изменено ===
+def _execute_native_custom_op_file(input_path: str, output_path: str, op: Dict[str, Any]) -> str:
+    op_kind = str(op.get("op_kind") or "").lower()
+
+    if op_kind == "high_side_polish":
+        return _execute_high_side_polish_file(input_path, output_path, op)
+
+    if op_kind == "high_only_width":
+        return _execute_high_only_width_file(input_path, output_path, op)
+
+    raise RuntimeError(f"Unsupported native custom op: {op_kind}")
+
+
+# === изменено ===
+def _execute_custom_group_with_native_fallback(
+    input_path: str,
+    output_path: str,
+    ops: Sequence[Dict[str, Any]],
+    td: str,
+    stack: Dict[str, Any],
+    custom_backend: Optional[CustomBackend],
+) -> Tuple[str, List[Dict[str, Any]], bool]:
+    """
+    Executes custom DSP group op-by-op when the group contains native executor fallbacks.
+
+    Reason:
+    The external custom backend already executes many ops, but high_side_polish
+    and high_only_width were coming back as unsupported_op_kind.
+    We execute those two here and delegate the rest.
+    """
+    working_path = input_path
+    unresolved: List[Dict[str, Any]] = []
+    any_audio_change = False
+
+    stack_name = str(stack.get("stack_name") or "custom_stack")
+
+    for idx, op in enumerate(ops):
+        is_last = idx == len(ops) - 1
+        step_output = output_path if is_last else _tmp_wav_path(
+            td,
+            f"{stack_name}__native_custom_{idx}",
+        )
+
+        if _native_custom_op_supported(op):
+            working_path = _execute_native_custom_op_file(working_path, step_output, op)
+            any_audio_change = True
+            continue
+
+        if custom_backend is not None:
+            working_path = custom_backend([op], working_path, step_output, stack)
+            any_audio_change = True
+            continue
+
+        unresolved.append(
+            {
+                "primitive_name": op.get("primitive_name"),
+                "instance_name": op.get("instance_name"),
+                "backend_hint": op.get("backend_hint") or "custom_dsp_required",
+                "stack_name": stack_name,
+            }
+        )
+
+    return working_path, unresolved, any_audio_change
+
+
 def _execute_output_trim_file(input_path: str, output_path: str, op: Dict[str, Any]) -> str:
     audio, sr = _load_audio(input_path)
     params = dict(op.get("params") or {})
@@ -257,46 +499,48 @@ def _execute_output_trim_file(input_path: str, output_path: str, op: Dict[str, A
     return output_path
 
 
+# === изменено ===
 def _execute_true_peak_limiter_file(input_path: str, output_path: str, op: Dict[str, Any]) -> str:
     audio, sr = _load_audio(input_path)
     params = dict(op.get("params") or {})
 
     ceiling_db = float(params.get("gain_db", -1.0))
-    threshold_db = float(params.get("threshold_db", -4.5))
-    attack_ms = float(params.get("attack_ms", 0.25))
-    release_ms = float(params.get("release_ms", 45.0))
 
+    # Keep public ceiling from the plan, but do not use threshold as a global pull-down.
+    # Old logic used min(threshold, ceiling), which made hot masters quieter by 1-2 LUFS.
     ceiling_lin = _db_to_linear(ceiling_db)
-    threshold_lin = _db_to_linear(threshold_db)
+
+    before_rms_db = _rms_dbfs(audio)
 
     oversample_factor = 4
     os_sr = sr * oversample_factor
     audio_os = _resample_audio(audio, sr, os_sr)
 
-    linked_peak = np.max(np.abs(audio_os), axis=1)
-    engage_level = min(threshold_lin, ceiling_lin)
-
-    desired_gain = np.ones_like(linked_peak, dtype=np.float32)
-    active = linked_peak > engage_level
-    if np.any(active):
-        desired_gain[active] = np.minimum(
-            1.0,
-            ceiling_lin / np.maximum(linked_peak[active], 1e-8),
-        ).astype(np.float32)
-
-    smoothed_gain = _smooth_gain_samples(
-        desired_gain,
-        attack_ms=attack_ms,
-        release_ms=release_ms,
-        sr=os_sr,
-    )
-
-    limited_os = audio_os * smoothed_gain[:, None]
-    limited_os = np.clip(limited_os, -ceiling_lin, ceiling_lin)
+    # Peak safety first: clipper-like, not gain-riding over the whole song.
+    limited_os = _soft_ceiling_clip(audio_os, ceiling_lin, knee_db=0.85)
 
     limited = _resample_audio(limited_os, os_sr, sr)
     limited = _match_length(limited, len(audio))
     limited = np.clip(limited, -ceiling_lin, ceiling_lin)
+
+    after_rms_db = _rms_dbfs(limited)
+    rms_loss_db = before_rms_db - after_rms_db
+
+    # Loudness-preserve floor.
+    # If peak safety made the track audibly quieter, add controlled drive into the same ceiling.
+    if rms_loss_db > 0.35:
+        makeup_db = _clamp(rms_loss_db - 0.22, 0.0, 0.90)
+
+        driven_os = audio_os * _db_to_linear(makeup_db)
+
+        # Slightly softer knee when makeup is used, so it behaves like mastering density,
+        # not hard clipping.
+        limited_os = _soft_ceiling_clip(driven_os, ceiling_lin, knee_db=1.05)
+
+        limited = _resample_audio(limited_os, os_sr, sr)
+        limited = _match_length(limited, len(audio))
+        limited = np.clip(limited, -ceiling_lin, ceiling_lin)
+
     limited = np.clip(limited, -1.0, 1.0)
 
     _write_wav(output_path, limited, sr)
@@ -407,8 +651,11 @@ def _execute_stack(
             )
             continue
 
+        # === изменено ===
         if backend_hint == "custom_dsp_required":
-            if custom_backend is not None:
+            has_native_fallback = any(_native_custom_op_supported(op) for op in group_ops)
+
+            if custom_backend is not None and not has_native_fallback:
                 working_path = custom_backend(group_ops, working_path, step_output, stack)
                 any_audio_change = True
                 executed_groups.append(
@@ -421,28 +668,42 @@ def _execute_stack(
                 )
                 continue
 
-            unresolved = [
-                {
-                    "primitive_name": op.get("primitive_name"),
-                    "instance_name": op.get("instance_name"),
-                    "backend_hint": backend_hint,
-                    "stack_name": stack.get("stack_name"),
-                }
-                for op in group_ops
-            ]
-            unresolved_custom_ops.extend(unresolved)
-            executed_groups.append(
-                {
-                    "backend": backend_hint,
-                    "status": "unresolved",
-                    "op_names": [op.get("primitive_name") for op in group_ops],
-                }
+            working_path, unresolved, changed = _execute_custom_group_with_native_fallback(
+                input_path=working_path,
+                output_path=step_output,
+                ops=group_ops,
+                td=td,
+                stack=stack,
+                custom_backend=custom_backend,
             )
-            if fail_on_custom:
-                names = ", ".join(op["primitive_name"] for op in unresolved)
-                raise RuntimeError(
-                    f"Custom DSP backend required for stack={stack.get('stack_name')} ops={names}"
+
+            if changed:
+                any_audio_change = True
+                executed_groups.append(
+                    {
+                        "backend": backend_hint,
+                        "status": "executed" if not unresolved else "partial",
+                        "op_names": [op.get("primitive_name") for op in group_ops],
+                        "output_path": working_path,
+                    }
                 )
+            else:
+                executed_groups.append(
+                    {
+                        "backend": backend_hint,
+                        "status": "unresolved",
+                        "op_names": [op.get("primitive_name") for op in group_ops],
+                    }
+                )
+
+            if unresolved:
+                unresolved_custom_ops.extend(unresolved)
+                if fail_on_custom:
+                    names = ", ".join(op["primitive_name"] for op in unresolved)
+                    raise RuntimeError(
+                        f"Custom DSP backend required for stack={stack.get('stack_name')} ops={names}"
+                    )
+
             continue
 
         if backend_hint == "delivery_backend":
@@ -701,5 +962,7 @@ def execute_sm_render_plan(
             "ffmpeg_safe_ops_executed",
             "custom_dsp_ops_routed_or_marked_unresolved",
             "delivery_backend_supported",
+            "delivery_loudness_preserve_peak_safety_enabled",
+            "native_finish_width_ops_supported",
         ],
     }
