@@ -328,22 +328,22 @@ def _base_instance(
 
 def _build_controlled_bell_boost(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_anchor_center(ctx.analysis)
-    gain = _lerp(0.20, 0.85, ctx.activity)
-    q = _lerp(0.70, 1.15, ctx.activity)
+    gain = _lerp(0.26, 1.05, ctx.activity)
+    q = _lerp(0.70, 1.12, ctx.activity)
     return _base_instance(
         ctx,
         "controlled_bell_boost",
         gain_db=round(gain, 4),
         freq_hz=round(freq, 2),
         q=round(q, 4),
-        notes=["Controlled body-support bell boost."],
+        notes=["Controlled body-support bell boost with audible foundation intent."],
     )
 
 
 def _build_dynamic_body_support_boost(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_anchor_center(ctx.analysis)
-    gain = _lerp(0.25, 1.05, ctx.activity)
-    q = _lerp(0.85, 1.60, ctx.activity)
+    gain = _lerp(0.32, 1.28, ctx.activity)
+    q = _lerp(0.82, 1.50, ctx.activity)
     attack = _lerp(14.0, 28.0, 1.0 - ctx.activity)
     release = _lerp(90.0, 220.0, ctx.activity)
     return _base_instance(
@@ -354,14 +354,14 @@ def _build_dynamic_body_support_boost(ctx: _PrimitiveBuildContext) -> Dict[str, 
         q=round(q, 4),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Dynamic body support boost to hold useful lower-body life."],
+        notes=["Dynamic body support boost to make body audibly present, not barely protected."],
     )
 
 
 def _build_restrained_parallel_fill(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_anchor_center(ctx.analysis)
-    gain = _lerp(0.18, 0.68, ctx.activity)
-    mix = _lerp(0.04, 0.14, ctx.activity)
+    gain = _lerp(0.22, 0.82, ctx.activity)
+    mix = _lerp(0.055, 0.18, ctx.activity)
     q = _lerp(0.68, 1.00, ctx.activity)
     return _base_instance(
         ctx,
@@ -370,15 +370,15 @@ def _build_restrained_parallel_fill(ctx: _PrimitiveBuildContext) -> Dict[str, An
         freq_hz=round(freq, 2),
         q=round(q, 4),
         mix=round(mix, 4),
-        notes=["Micro parallel body fill; never a mud rebuild layer."],
+        notes=["Parallel body fill with musical audibility; still protected from mud rebuild."],
     )
 
 
 def _build_restrained_parallel_handoff_support(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_bridge_center(ctx.analysis)
-    gain = _lerp(0.15, 0.50, ctx.activity)
-    mix = _lerp(0.03, 0.10, ctx.activity)
-    q = _lerp(0.75, 1.10, ctx.activity)
+    gain = _lerp(0.20, 0.66, ctx.activity)
+    mix = _lerp(0.045, 0.14, ctx.activity)
+    q = _lerp(0.72, 1.08, ctx.activity)
     return _base_instance(
         ctx,
         "restrained_parallel_handoff_support",
@@ -386,16 +386,16 @@ def _build_restrained_parallel_handoff_support(ctx: _PrimitiveBuildContext) -> D
         freq_hz=round(freq, 2),
         q=round(q, 4),
         mix=round(mix, 4),
-        notes=["Micro bridge/handoff support to preserve bass-to-body continuity."],
+        notes=["Bridge/handoff support to make bass-to-body continuity audible."],
     )
 
 
 def _build_transient_safe_support_compression(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
-    ratio = _lerp(1.20, 1.85, ctx.activity)
-    threshold = _lerp(-24.0, -15.0, ctx.activity)
+    ratio = _lerp(1.25, 2.05, ctx.activity)
+    threshold = _lerp(-25.0, -14.0, ctx.activity)
     attack = _lerp(18.0, 35.0, 1.0 - ctx.activity)
-    release = _lerp(85.0, 180.0, ctx.activity)
-    mix = _lerp(0.08, 0.22, ctx.activity)
+    release = _lerp(85.0, 190.0, ctx.activity)
+    mix = _lerp(0.10, 0.26, ctx.activity)
     return _base_instance(
         ctx,
         "transient_safe_support_compression",
@@ -404,31 +404,31 @@ def _build_transient_safe_support_compression(ctx: _PrimitiveBuildContext) -> Di
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
         mix=round(mix, 4),
-        notes=["Support compression that must not flatten transient identity."],
+        notes=["Support compression for weight and continuity without flattening punch."],
     )
 
 
 def _build_dynamic_bell_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     if ctx.is_cleanup:
         freq = _metric_cleanup_center(ctx.analysis)
-        gain = -_lerp(0.40, 1.80, ctx.activity)
-        q = _lerp(1.00, 2.10, ctx.activity)
+        gain = -_lerp(0.42, 1.72, ctx.activity)
+        q = _lerp(1.00, 2.00, ctx.activity)
     elif ctx.is_guard:
         freq = _metric_guard_center(ctx.analysis)
-        gain = -_lerp(0.35, 1.25, ctx.activity)
-        q = _lerp(1.20, 2.30, ctx.activity)
+        gain = -_lerp(0.30, 1.10, ctx.activity)
+        q = _lerp(1.15, 2.10, ctx.activity)
     elif ctx.is_anchor:
         freq = _lerp(210.0, 300.0, ctx.activity)
-        gain = -_lerp(0.15, 0.65, ctx.activity)
-        q = _lerp(0.90, 1.60, ctx.activity)
+        gain = -_lerp(0.12, 0.48, ctx.activity)
+        q = _lerp(0.90, 1.45, ctx.activity)
     elif ctx.is_bridge:
         freq = _lerp(120.0, 190.0, ctx.activity)
-        gain = -_lerp(0.15, 0.55, ctx.activity)
-        q = _lerp(0.85, 1.50, ctx.activity)
+        gain = -_lerp(0.12, 0.45, ctx.activity)
+        q = _lerp(0.85, 1.40, ctx.activity)
     else:
         freq = 280.0
-        gain = -_lerp(0.25, 0.90, ctx.activity)
-        q = _lerp(1.00, 1.80, ctx.activity)
+        gain = -_lerp(0.22, 0.80, ctx.activity)
+        q = _lerp(1.00, 1.70, ctx.activity)
 
     attack = _lerp(6.0, 18.0, 1.0 - ctx.activity)
     release = _lerp(55.0, 180.0, ctx.activity)
@@ -441,14 +441,14 @@ def _build_dynamic_bell_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         q=round(q, 4),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Dynamic cut intended to separate buildup from useful body."],
+        notes=["Dynamic cut separates buildup from body without turning cleanup into sterilization."],
     )
 
 
 def _build_dynamic_wide_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_cleanup_center(ctx.analysis)
-    gain = -_lerp(0.25, 1.10, ctx.activity)
-    q = _lerp(0.45, 0.85, ctx.activity)
+    gain = -_lerp(0.25, 1.05, ctx.activity)
+    q = _lerp(0.48, 0.82, ctx.activity)
     attack = _lerp(10.0, 20.0, 1.0 - ctx.activity)
     release = _lerp(90.0, 220.0, ctx.activity)
     return _base_instance(
@@ -459,7 +459,7 @@ def _build_dynamic_wide_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         q=round(q, 4),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Wide dynamic cut for distributed low-mid buildup control."],
+        notes=["Distributed low-mid decongestion with body-aware restraint."],
     )
 
 
@@ -475,8 +475,8 @@ def _build_restrained_static_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     else:
         freq = 320.0
 
-    gain = -_lerp(0.15, 0.65, ctx.activity)
-    q = _lerp(0.90, 1.70, ctx.activity)
+    gain = -_lerp(0.12, 0.55, ctx.activity)
+    q = _lerp(0.90, 1.60, ctx.activity)
 
     return _base_instance(
         ctx,
@@ -484,13 +484,13 @@ def _build_restrained_static_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         gain_db=round(gain, 4),
         freq_hz=round(freq, 2),
         q=round(q, 4),
-        notes=["Static cut kept intentionally restrained for premium preservation."],
+        notes=["Restrained static cut; never the main source of polish magic."],
     )
 
 
 def _build_dynamic_tilt_down(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     pivot = _lerp(900.0, 1400.0, ctx.activity)
-    tilt = -_lerp(0.20, 0.95, ctx.activity)
+    tilt = -_lerp(0.15, 0.72, ctx.activity)
     attack = _lerp(10.0, 24.0, 1.0 - ctx.activity)
     release = _lerp(90.0, 200.0, ctx.activity)
     return _base_instance(
@@ -500,13 +500,13 @@ def _build_dynamic_tilt_down(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         pivot_hz=round(pivot, 2),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Dynamic downward tilt used only when cleanup really needs spectral calming."],
+        notes=["Dynamic calming tilt, reduced so it does not eat projection by default."],
     )
 
 
 def _build_local_antiharsh_control(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_harsh_center(ctx.analysis)
-    gain = -_lerp(0.35, 1.20, ctx.activity)
+    gain = -_lerp(0.35, 1.15, ctx.activity)
     q = _lerp(1.40, 2.80, ctx.activity)
     attack = _lerp(1.5, 8.0, 1.0 - ctx.activity)
     release = _lerp(35.0, 120.0, ctx.activity)
@@ -518,28 +518,28 @@ def _build_local_antiharsh_control(ctx: _PrimitiveBuildContext) -> Dict[str, Any
         q=round(q, 4),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Local anti-harsh restraint to keep cleanup from turning into brittle tone."],
+        notes=["Local anti-harsh restraint without muting musical forwardness."],
     )
 
 
 def _build_broad_presence_contour(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_presence_center(ctx.analysis)
-    gain = _lerp(0.30, 1.22, ctx.activity)
-    q = _lerp(0.40, 0.78, ctx.activity)
+    gain = _lerp(0.45, 1.65, ctx.activity)
+    q = _lerp(0.42, 0.82, ctx.activity)
     return _base_instance(
         ctx,
         "broad_presence_contour",
         gain_db=round(gain, 4),
         freq_hz=round(freq, 2),
         q=round(q, 4),
-        notes=["Broad contour for controlled center-forward presentation."],
+        notes=["Audible center-forward contour for record-like projection."],
     )
 
 
 def _build_dynamic_presence_lift(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_presence_center(ctx.analysis)
-    gain = _lerp(0.22, 1.02, ctx.activity)
-    q = _lerp(0.78, 1.45, ctx.activity)
+    gain = _lerp(0.35, 1.35, ctx.activity)
+    q = _lerp(0.78, 1.35, ctx.activity)
     attack = _lerp(4.0, 13.0, 1.0 - ctx.activity)
     release = _lerp(40.0, 115.0, ctx.activity)
     return _base_instance(
@@ -550,7 +550,7 @@ def _build_dynamic_presence_lift(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         q=round(q, 4),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Dynamic presence lift to keep projection alive without static harshness."],
+        notes=["Dynamic presence lift for audible projection without static harshness."],
     )
 
 
@@ -568,54 +568,54 @@ def _build_projection_local_deharsh(ctx: _PrimitiveBuildContext) -> Dict[str, An
         q=round(q, 4),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Local de-harsh protection bound directly to projection contour."],
+        notes=["Local de-harsh protection bound directly to stronger projection."],
     )
 
 
 def _build_band_limited_soft_saturation(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
-    drive = _lerp(0.28, 1.85, ctx.activity)
-    mix = _lerp(0.04, 0.16, ctx.activity)
+    drive = _lerp(0.45, 2.35, ctx.activity)
+    mix = _lerp(0.06, 0.22, ctx.activity)
     return _base_instance(
         ctx,
         "band_limited_soft_saturation",
         drive_db=round(drive, 4),
         mix=round(mix, 4),
-        low_cut_hz=1600.0,
+        low_cut_hz=1300.0,
         high_cut_hz=6200.0,
-        notes=["Band-limited soft saturation for projection density, not brightness hype."],
+        notes=["Band-limited saturation for audible projection density and record-like push."],
     )
 
 
 def _build_controlled_harmonic_density(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
-    drive = _lerp(0.26, 1.42, ctx.activity)
-    mix = _lerp(0.04, 0.13, ctx.activity)
+    drive = _lerp(0.38, 1.85, ctx.activity)
+    mix = _lerp(0.06, 0.18, ctx.activity)
     return _base_instance(
         ctx,
         "controlled_harmonic_density",
         drive_db=round(drive, 4),
         mix=round(mix, 4),
-        low_cut_hz=1800.0,
+        low_cut_hz=1200.0,
         high_cut_hz=5600.0,
-        notes=["Controlled harmonic density to support projection without fake top-end gloss."],
+        notes=["Controlled harmonic density for premium center energy without cheap top gloss."],
     )
 
 
 def _build_micro_air_shelf(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_air_center(ctx.analysis)
-    gain = _lerp(0.08, 0.45, ctx.activity)
+    gain = _lerp(0.12, 0.70, ctx.activity)
     return _base_instance(
         ctx,
         "micro_air_shelf",
         gain_db=round(gain, 4),
         freq_hz=round(freq, 2),
         q=0.45,
-        notes=["Micro air shelf as finish polish only."],
+        notes=["Audible but controlled air polish for finished feel."],
     )
 
 
 def _build_micro_top_texture(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
-    drive = _lerp(0.08, 0.70, ctx.activity)
-    mix = _lerp(0.02, 0.07, ctx.activity)
+    drive = _lerp(0.12, 0.95, ctx.activity)
+    mix = _lerp(0.025, 0.095, ctx.activity)
     return _base_instance(
         ctx,
         "micro_top_texture",
@@ -623,14 +623,14 @@ def _build_micro_top_texture(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         mix=round(mix, 4),
         low_cut_hz=8000.0,
         high_cut_hz=16000.0,
-        notes=["Top texture micro-layer; never a substitute for projection."],
+        notes=["Top texture micro-layer for premium spark, not harsh brightness."],
     )
 
 
 def _build_protected_high_side_polish(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_air_center(ctx.analysis)
-    gain = _lerp(0.08, 0.35, ctx.activity)
-    mix = _lerp(0.02, 0.07, ctx.activity)
+    gain = _lerp(0.10, 0.42, ctx.activity)
+    mix = _lerp(0.025, 0.085, ctx.activity)
     return _base_instance(
         ctx,
         "protected_high_side_polish",
@@ -638,13 +638,13 @@ def _build_protected_high_side_polish(ctx: _PrimitiveBuildContext) -> Dict[str, 
         side_gain_db=round(gain, 4),
         freq_hz=round(freq, 2),
         mix=round(mix, 4),
-        notes=["High-side polish only under protected finish conditions."],
+        notes=["Protected high-side polish for premium width only when allowed."],
     )
 
 
 def _build_micro_width_high_only(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
-    width = _lerp(0.02, 0.08, ctx.activity)
-    mix = _lerp(0.02, 0.06, ctx.activity)
+    width = _lerp(0.025, 0.095, ctx.activity)
+    mix = _lerp(0.025, 0.075, ctx.activity)
     return _base_instance(
         ctx,
         "micro_width_high_only",
@@ -653,13 +653,13 @@ def _build_micro_width_high_only(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         mix=round(mix, 4),
         low_cut_hz=7000.0,
         high_cut_hz=16000.0,
-        notes=["High-only width micro-layer; never a replacement for depth or body."],
+        notes=["High-only width micro-layer for finish size, never replacing body or projection."],
     )
 
 
 def _build_local_desibilance_control(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_sibilance_center(ctx.analysis)
-    gain = -_lerp(0.20, 0.75, ctx.activity)
+    gain = -_lerp(0.22, 0.82, ctx.activity)
     q = _lerp(1.20, 2.40, ctx.activity)
     attack = _lerp(0.7, 4.5, 1.0 - ctx.activity)
     release = _lerp(25.0, 95.0, ctx.activity)
@@ -671,7 +671,7 @@ def _build_local_desibilance_control(ctx: _PrimitiveBuildContext) -> Dict[str, A
         q=round(q, 4),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Finish-local de-sibilance restraint."],
+        notes=["Finish-local de-sibilance so spark does not become squeak."],
     )
 
 
@@ -682,24 +682,24 @@ def _build_output_gain_trim(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
 
     if hot_score >= 0.22:
         gain_trim = -(
-            0.02
-            + (0.34 * hot_score)
-            + (0.06 * (1.0 - punch_safety) * hot_score)
+            0.015
+            + (0.26 * hot_score)
+            + (0.04 * (1.0 - punch_safety) * hot_score)
         )
     else:
-        lift_room = _clamp((0.24 - hot_score) / 0.24, 0.0, 1.0)
+        lift_room = _clamp((0.28 - hot_score) / 0.28, 0.0, 1.0)
         gain_trim = (
-            (0.14 + (0.74 * quiet_score) + (0.22 * punch_safety * quiet_score))
+            (0.18 + (0.92 * quiet_score) + (0.26 * punch_safety * quiet_score))
             * quiet_score
             * lift_room
         )
 
-    gain_trim = _clamp(gain_trim, -0.42, 0.72)
+    gain_trim = _clamp(gain_trim, -0.30, 1.10)
 
     note = (
-        "Delta-aware minimal trim before limiter."
+        "Delta-aware trim before limiter."
         if gain_trim <= 0.0
-        else "Delta-aware micro lift before limiter."
+        else "Delta-aware musical lift before limiter."
     )
 
     return _base_instance(
@@ -708,7 +708,7 @@ def _build_output_gain_trim(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         gain_db=round(gain_trim, 4),
         notes=[
             note,
-            "Headroom first, but never louder/quieter by default.",
+            "Delivery is allowed to add mastered feel when headroom and punch allow it.",
         ],
     )
 
@@ -736,27 +736,27 @@ def _build_true_peak_limiter(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     drive_penalty = hot_score * (0.58 + (0.18 * (1.0 - punch_safety)))
 
     desired_drive_db = _clamp(
-        0.22 + (1.55 * drive_score) - (0.72 * drive_penalty),
-        0.16,
-        1.55,
+        0.28 + (1.85 * drive_score) - (0.58 * drive_penalty),
+        0.20,
+        1.95,
     )
 
     ceiling_db = -1.00
     threshold_db = ceiling_db - desired_drive_db
 
     attack_ms = _clamp(
-        0.26 + (0.16 * hot_score) - (0.08 * punch_safety),
-        0.18,
+        0.24 + (0.16 * hot_score) - (0.08 * punch_safety),
+        0.16,
         0.48,
     )
 
     release_ms = _clamp(
-        58.0
+        54.0
         + (28.0 * hot_score)
         + (18.0 * (1.0 - punch_safety))
         - (16.0 * quiet_score),
-        42.0,
-        98.0,
+        40.0,
+        96.0,
     )
 
     return _base_instance(
@@ -769,7 +769,7 @@ def _build_true_peak_limiter(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         mix=1.0,
         notes=[
             "Terminal true-peak limiter.",
-            "Delta-aware limiter drive: minimal necessary action, not loudness chase.",
+            "Limiter drive is allowed to create controlled mastered feel when safe.",
         ],
     )
 
@@ -925,6 +925,7 @@ def attach_primitive_instances_to_blueprint(
             list(blueprint.notes or [])
             + [
                 "primitive_instances_attached",
+                "music_first_primitive_gain_map_v2",
                 f"primitive_instance_total={total_instances}",
             ]
         ),
