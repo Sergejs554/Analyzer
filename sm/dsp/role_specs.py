@@ -160,23 +160,22 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "bridge_sensitive",
                 ],
                 notes=[
-                    "Anchor restore must rebuild body without returning mud.",
+                    "Sound-first anchor restore: rebuild useful body and lower-body weight without returning mud.",
+                    "This is one of the musical identity blocks of polish, not a fallback protection block.",
                 ],
             ),
         ],
         required_safety_tags=["body_sensitive", "bridge_sensitive"],
-        blocked_by_default_clamps=[
-            "body_fragile",
-            "delivery_overbudget",
-        ],
+        blocked_by_default_clamps=[],
         notes=[
-            "Body restore is supportive, not tonal repaint.",
+            "Body restore is allowed to be musically audible when the track needs body.",
         ],
     ),
+
     (RoleName.ANCHOR, "body_hold"): _mode(
         role=RoleName.ANCHOR,
         target_band_mode="body_hold",
-        role_rank_bias="restrained",
+        role_rank_bias="support",
         stack_templates=[
             _stack(
                 stack_name="anchor_parallel_stack",
@@ -188,6 +187,7 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 recombine_mode="guarded_sum",
                 preferred_order=10,
                 allowed_primitive_names=[
+                    "controlled_bell_boost",
                     "dynamic_body_support_boost",
                     "restrained_parallel_fill",
                 ],
@@ -195,19 +195,17 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "body_sensitive",
                 ],
                 notes=[
-                    "Hold mode preserves body mass with lower support weight.",
+                    "Sound-first body hold: preserve and slightly enhance mass, not just protect it.",
                 ],
             ),
         ],
         required_safety_tags=["body_sensitive"],
-        blocked_by_default_clamps=[
-            "body_fragile",
-            "delivery_overbudget",
-        ],
+        blocked_by_default_clamps=[],
         notes=[
-            "Body hold should feel like retained mass, not audible EQ.",
+            "Body hold must still contribute to the polish character.",
         ],
     ),
+
     (RoleName.ANCHOR, "body_restrain"): _mode(
         role=RoleName.ANCHOR,
         target_band_mode="body_restrain",
@@ -230,18 +228,17 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "delivery_sensitive",
                 ],
                 notes=[
-                    "Anchor restrain in V1 means support suppression, not subtractive cutting.",
+                    "Body restrain keeps a small support layer alive instead of killing body completely.",
                 ],
             ),
         ],
         required_safety_tags=["body_sensitive", "delivery_sensitive"],
-        blocked_by_default_clamps=[
-            "body_fragile",
-        ],
+        blocked_by_default_clamps=[],
         notes=[
-            "This mode exists to avoid over-support, not to carve body away.",
+            "Restrain means smaller support, not no support.",
         ],
     ),
+
     (RoleName.ANCHOR, "off"): _mode(
         role=RoleName.ANCHOR,
         target_band_mode="off",
@@ -276,22 +273,55 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "body_sensitive",
                 ],
                 notes=[
-                    "Bridge restore should reconnect handoff, not widen the low-mid blob.",
+                    "Sound-first bridge restore: reconnect bass-to-body handoff and keep low vocal/body continuity.",
+                    "This block must make the low-end feel connected, not merely safe.",
                 ],
             ),
         ],
         required_safety_tags=["bridge_sensitive", "body_sensitive"],
-        blocked_by_default_clamps=[
-            "bridge_gluey",
-            "delivery_overbudget",
-        ],
+        blocked_by_default_clamps=[],
         notes=[
-            "Bridge restore is structural support, never warmth-hype.",
+            "Bridge restore is a core musical block of polish.",
         ],
     ),
+
     (RoleName.BRIDGE, "bridge_hold"): _mode(
         role=RoleName.BRIDGE,
         target_band_mode="bridge_hold",
+        role_rank_bias="support",
+        stack_templates=[
+            _stack(
+                stack_name="bridge_parallel_stack",
+                stack_kind="support_parallel",
+                path_type="parallel",
+                default_tap_point=NODE_GUARD_OUT,
+                output_node=NODE_BRIDGE_OUT,
+                recombine_target=NODE_SUPPORT_BUS,
+                recombine_mode="guarded_sum",
+                preferred_order=20,
+                allowed_primitive_names=[
+                    "restrained_parallel_handoff_support",
+                    "transient_safe_support_compression",
+                ],
+                required_safety_tags=[
+                    "bridge_sensitive",
+                    "body_sensitive",
+                ],
+                notes=[
+                    "Bridge hold keeps continuity alive with restrained but audible support.",
+                ],
+            ),
+        ],
+        required_safety_tags=["bridge_sensitive", "body_sensitive"],
+        blocked_by_default_clamps=[],
+        notes=[
+            "Hold mode must not disconnect bass from body.",
+        ],
+    ),
+
+    (RoleName.BRIDGE, "bridge_restrain"): _mode(
+        role=RoleName.BRIDGE,
+        target_band_mode="bridge_restrain",
         role_rank_bias="restrained",
         stack_templates=[
             _stack(
@@ -308,54 +338,20 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 ],
                 required_safety_tags=[
                     "bridge_sensitive",
-                    "body_sensitive",
-                ],
-                notes=[
-                    "Bridge hold keeps continuity without adding obvious glue.",
-                ],
-            ),
-        ],
-        required_safety_tags=["bridge_sensitive", "body_sensitive"],
-        blocked_by_default_clamps=[
-            "bridge_gluey",
-            "delivery_overbudget",
-        ],
-        notes=[
-            "Hold mode is subtle continuity retention.",
-        ],
-    ),
-    (RoleName.BRIDGE, "bridge_restrain"): _mode(
-        role=RoleName.BRIDGE,
-        target_band_mode="bridge_restrain",
-        role_rank_bias="restrained",
-        stack_templates=[
-            _stack(
-                stack_name="bridge_parallel_stack",
-                stack_kind="support_parallel",
-                path_type="parallel",
-                default_tap_point=NODE_GUARD_OUT,
-                output_node=NODE_BRIDGE_OUT,
-                recombine_target=NODE_SUPPORT_BUS,
-                recombine_mode="guarded_sum",
-                preferred_order=20,
-                allowed_primitive_names=[
-                    "transient_safe_support_compression",
-                ],
-                required_safety_tags=[
-                    "bridge_sensitive",
                     "delivery_sensitive",
                 ],
                 notes=[
-                    "Bridge restrain in V1 is support suppression and glue calming, not subtractive EQ.",
+                    "Bridge restrain keeps a minimum handoff layer instead of fully muting the bridge.",
                 ],
             ),
         ],
         required_safety_tags=["bridge_sensitive", "delivery_sensitive"],
         blocked_by_default_clamps=[],
         notes=[
-            "Restrain mode prevents over-glue rather than cutting bridge body directly.",
+            "Restrain means smaller bridge, not broken bridge.",
         ],
     ),
+
     (RoleName.BRIDGE, "off"): _mode(
         role=RoleName.BRIDGE,
         target_band_mode="off",
@@ -382,8 +378,6 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 allowed_primitive_names=[
                     "dynamic_bell_cut",
                     "dynamic_wide_cut",
-                    "restrained_static_cut",
-                    "dynamic_tilt_down",
                     "local_antiharsh_control",
                 ],
                 required_safety_tags=[
@@ -392,21 +386,18 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "top_sensitive",
                 ],
                 notes=[
-                    "Dense cleanup is the main corrective lane.",
-                    "Should separate buildup from useful body, not scoop blindly.",
+                    "Sound-first cleanup dense: remove real buildup while leaving useful body alive.",
+                    "No default tilt-down. No default static double-cut.",
                 ],
             ),
         ],
         required_safety_tags=["body_sensitive", "bridge_sensitive", "top_sensitive"],
-        blocked_by_default_clamps=[
-            "body_fragile",
-            "bridge_broken",
-            "thin_candidate",
-        ],
+        blocked_by_default_clamps=[],
         notes=[
-            "Dense cleanup only when the track truly carries removable buildup.",
+            "Dense cleanup is allowed when needed, but it must not become automatic drying.",
         ],
     ),
+
     (RoleName.CLEANUP, "cleanup_guarded"): _mode(
         role=RoleName.CLEANUP,
         target_band_mode="cleanup_guarded",
@@ -421,7 +412,6 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 preferred_order=10,
                 allowed_primitive_names=[
                     "dynamic_bell_cut",
-                    "restrained_static_cut",
                     "local_antiharsh_control",
                 ],
                 required_safety_tags=[
@@ -429,16 +419,17 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "bridge_sensitive",
                 ],
                 notes=[
-                    "Guarded cleanup preserves more body and bridge continuity.",
+                    "Guarded cleanup separates mud from body with fewer subtractive hits.",
                 ],
             ),
         ],
         required_safety_tags=["body_sensitive", "bridge_sensitive"],
         blocked_by_default_clamps=[],
         notes=[
-            "Use when correction is needed but body or bridge are sensitive.",
+            "Guarded cleanup should still make the track cleaner, not just safer.",
         ],
     ),
+
     (RoleName.CLEANUP, "cleanup_micro"): _mode(
         role=RoleName.CLEANUP,
         target_band_mode="cleanup_micro",
@@ -453,22 +444,22 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 preferred_order=10,
                 allowed_primitive_names=[
                     "dynamic_bell_cut",
-                    "restrained_static_cut",
                 ],
                 required_safety_tags=[
                     "body_sensitive",
                 ],
                 notes=[
-                    "Micro cleanup is for touch-up only.",
+                    "Micro cleanup is one precise move only.",
                 ],
             ),
         ],
         required_safety_tags=["body_sensitive"],
         blocked_by_default_clamps=[],
         notes=[
-            "Should not become the main tonal shaper.",
+            "Micro cleanup must not become invisible handbrake.",
         ],
     ),
+
     (RoleName.CLEANUP, "off"): _mode(
         role=RoleName.CLEANUP,
         target_band_mode="off",
@@ -494,23 +485,24 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 preferred_order=20,
                 allowed_primitive_names=[
                     "dynamic_bell_cut",
-                    "restrained_static_cut",
                 ],
                 required_safety_tags=[
                     "body_sensitive",
                     "bridge_sensitive",
                 ],
                 notes=[
-                    "Guard boxiness fixes congestion after cleanup without hollowing the body.",
+                    "Guard boxiness is one controlled shape move after cleanup.",
+                    "It must not double-scoop the body.",
                 ],
             ),
         ],
         required_safety_tags=["body_sensitive", "bridge_sensitive"],
         blocked_by_default_clamps=[],
         notes=[
-            "Guard is structural protection, never decorative EQ.",
+            "Guard is form control, not another cleanup stack.",
         ],
     ),
+
     (RoleName.GUARD, "guard_transition_support"): _mode(
         role=RoleName.GUARD,
         target_band_mode="guard_transition_support",
@@ -524,7 +516,6 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 output_node=NODE_GUARD_OUT,
                 preferred_order=20,
                 allowed_primitive_names=[
-                    "dynamic_bell_cut",
                     "restrained_static_cut",
                 ],
                 required_safety_tags=[
@@ -532,16 +523,18 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "bridge_sensitive",
                 ],
                 notes=[
-                    "In V1 transition support is encoded as milder guard behavior, not additive lift.",
+                    "Transition support mode must be extremely mild.",
+                    "This is not a second subtractive cleanup lane.",
                 ],
             ),
         ],
         required_safety_tags=["body_sensitive", "bridge_sensitive"],
         blocked_by_default_clamps=[],
         notes=[
-            "Transition support should preserve continuity, not brighten the upper body.",
+            "Transition support preserves handoff shape before projection.",
         ],
     ),
+
     (RoleName.GUARD, "guard_hold"): _mode(
         role=RoleName.GUARD,
         target_band_mode="guard_hold",
@@ -568,9 +561,10 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
         required_safety_tags=["body_sensitive"],
         blocked_by_default_clamps=[],
         notes=[
-            "Hold mode should barely move unless the structure needs it.",
+            "Hold mode should not steal musical movement.",
         ],
     ),
+
     (RoleName.GUARD, "off"): _mode(
         role=RoleName.GUARD,
         target_band_mode="off",
@@ -604,7 +598,8 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "body_sensitive",
                 ],
                 notes=[
-                    "Contour builds real studio-forward center image.",
+                    "Sound-first dense projection: push the finished center forward.",
+                    "This is the main studio-reveal block.",
                 ],
             ),
             _stack(
@@ -625,24 +620,22 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "delivery_sensitive",
                 ],
                 notes=[
-                    "Assist adds density, never fake brightness.",
+                    "Assist adds density, expensive tone, and studio finish.",
+                    "This is character, not fake brightness.",
                 ],
             ),
         ],
         required_safety_tags=["top_sensitive", "delivery_sensitive"],
-        blocked_by_default_clamps=[
-            "cleanup_primary_active",
-            "guard_active_boxiness",
-            "top_fragile",
-        ],
+        blocked_by_default_clamps=[],
         notes=[
-            "Dense projection only when body, bridge, and top safety already allow it.",
+            "Projection dense must not be blocked by cleanup/guard by default.",
         ],
     ),
+
     (RoleName.PROJECTION, "projection_mild"): _mode(
         role=RoleName.PROJECTION,
         target_band_mode="projection_mild",
-        role_rank_bias="restrained",
+        role_rank_bias="support",
         stack_templates=[
             _stack(
                 stack_name="projection_contour_stack",
@@ -660,7 +653,8 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "top_sensitive",
                 ],
                 notes=[
-                    "Mild projection keeps forwardness controlled.",
+                    "Mild projection still gives real forwardness.",
+                    "It is not a safety-only mode.",
                 ],
             ),
             _stack(
@@ -673,6 +667,7 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 recombine_mode="assist_sum",
                 preferred_order=40,
                 allowed_primitive_names=[
+                    "band_limited_soft_saturation",
                     "controlled_harmonic_density",
                 ],
                 required_safety_tags=[
@@ -680,18 +675,17 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "delivery_sensitive",
                 ],
                 notes=[
-                    "Assist stays conservative in mild mode.",
+                    "Mild assist keeps studio density alive with smaller amount.",
                 ],
             ),
         ],
         required_safety_tags=["top_sensitive", "delivery_sensitive"],
-        blocked_by_default_clamps=[
-            "top_fragile",
-        ],
+        blocked_by_default_clamps=[],
         notes=[
-            "This is the normal protected projection mode for sensitive material.",
+            "Projection mild is the normal musical mode for sensitive tracks.",
         ],
     ),
+
     (RoleName.PROJECTION, "projection_clamp"): _mode(
         role=RoleName.PROJECTION,
         target_band_mode="projection_clamp",
@@ -711,16 +705,17 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "top_sensitive",
                 ],
                 notes=[
-                    "Clamp mode is safety-led and contour-minimal.",
+                    "Projection clamp is emergency safety mode only.",
                 ],
             ),
         ],
         required_safety_tags=["top_sensitive"],
         blocked_by_default_clamps=[],
         notes=[
-            "Projection clamp is a safety mode, not a benefit mode.",
+            "Clamp mode is not a musical benefit mode.",
         ],
     ),
+
     (RoleName.PROJECTION, "off"): _mode(
         role=RoleName.PROJECTION,
         target_band_mode="off",
@@ -760,25 +755,22 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "delivery_sensitive",
                 ],
                 notes=[
-                    "Excited spark is still micro by law.",
-                    "Width remains high-only and protected.",
+                    "Spark excited is premium finish, width, air, and texture.",
+                    "Emergency clamps may remove width later, but role specs must not kill it by default.",
                 ],
             ),
         ],
         required_safety_tags=["top_sensitive", "width_sensitive", "finish_sensitive", "delivery_sensitive"],
-        blocked_by_default_clamps=[
-            "underprojected",
-            "top_fragile",
-            "mono_risk",
-        ],
+        blocked_by_default_clamps=[],
         notes=[
-            "Spark excited is allowed only when projection is already real and safe.",
+            "Spark excited is allowed as character when selected by blueprint.",
         ],
     ),
+
     (RoleName.SPARK, "spark_micro"): _mode(
         role=RoleName.SPARK,
         target_band_mode="spark_micro",
-        role_rank_bias="restrained",
+        role_rank_bias="support",
         stack_templates=[
             _stack(
                 stack_name="spark_finish_stack",
@@ -793,26 +785,28 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "micro_air_shelf",
                     "micro_top_texture",
                     "protected_high_side_polish",
+                    "micro_width_high_only",
                     "local_desibilance_control",
                 ],
                 required_safety_tags=[
                     "top_sensitive",
+                    "width_sensitive",
                     "finish_sensitive",
                     "delivery_sensitive",
                 ],
                 notes=[
-                    "Micro spark is finish polish only.",
+                    "Micro spark still carries audible finish polish.",
+                    "Width is allowed here; emergency width law handles unsafe cases.",
                 ],
             ),
         ],
-        required_safety_tags=["top_sensitive", "finish_sensitive", "delivery_sensitive"],
-        blocked_by_default_clamps=[
-            "top_fragile",
-        ],
+        required_safety_tags=["top_sensitive", "width_sensitive", "finish_sensitive", "delivery_sensitive"],
+        blocked_by_default_clamps=[],
         notes=[
-            "No width by default in micro spark mode.",
+            "Micro spark must not be reduced to invisible safety dust.",
         ],
     ),
+
     (RoleName.SPARK, "spark_off"): _mode(
         role=RoleName.SPARK,
         target_band_mode="spark_off",
@@ -820,6 +814,7 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
         stack_templates=[],
         notes=["Spark off."],
     ),
+
     (RoleName.SPARK, "off"): _mode(
         role=RoleName.SPARK,
         target_band_mode="off",
@@ -851,9 +846,9 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                     "delivery_sensitive",
                 ],
                 notes=[
-                    "Delivery is terminal protection only.",
-                    "Headroom first, limiter second.",
-                    "Delivery must not repaint polish tone.",
+                    "Delivery is terminal safety and final level only.",
+                    "It must not repaint polish tone.",
+                    "It must not trim anchor, bridge, projection, or spark backwards.",
                 ],
             ),
         ],
@@ -862,10 +857,10 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
         ],
         blocked_by_default_clamps=[],
         notes=[
-            "Fullband delivery is the final protection lane of the polish main branch.",
-            "It solves release safety and true peak without creative re-voicing.",
+            "Fullband delivery protects the final output after the musical polish is already built.",
         ],
     ),
+
     (RoleName.DELIVERY, "off"): _mode(
         role=RoleName.DELIVERY,
         target_band_mode="off",
@@ -907,6 +902,7 @@ def list_allowed_primitives(role: RoleName, target_band_mode: str) -> List[str]:
     allowed: List[str] = []
     for stack in spec.stack_templates:
         allowed.extend(stack.allowed_primitive_names)
+
     seen = set()
     out: List[str] = []
     for name in allowed:
