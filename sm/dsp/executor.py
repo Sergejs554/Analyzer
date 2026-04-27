@@ -758,13 +758,6 @@ def _apply_true_peak_limiter_audio(
     safety_margin_db: float = 0.10,
     max_passes: int = 2,
 ) -> np.ndarray:
-    """
-    Loudness-preserving terminal peak safety.
-
-    Important:
-    threshold_db is NOT used as a global pull-down.
-    This prevents hot/pro mastered tracks from being dragged down by 1-2 LUFS.
-    """
     dry = _ensure_2d_audio(audio)
     mix = float(np.clip(mix, 0.0, 1.0))
 
@@ -1164,6 +1157,259 @@ def _mix_audio_files(
     return output_path
 
 
+def _make_delta_file(
+    dry_path: str,
+    processed_path: str,
+    output_path: str,
+) -> str:
+    dry, sr = _load_audio(dry_path)
+    processed, psr = _load_audio(processed_path)
+
+    if psr != sr:
+        raise RuntimeError("Sample rate mismatch inside delta.")
+
+    processed = _match_length(processed, len(dry))
+
+    if processed.shape[1] != dry.shape[1]:
+        raise RuntimeError("Channel mismatch inside delta.")
+
+    delta = processed - dry
+    _write_wav(output_path, delta, sr)
+    return output_path
+
+
+def _op_outputs_wet_only(op_kind: str) -> bool:
+    return str(op_kind).lower() in {
+        "parallel_eq_fill",
+        "parallel_eq_boost",
+        "parallel_compressor",
+        "band_limited_saturation",
+        "band_limited_texture",
+    }
+
+
+def _op_is_finish_deess(op: Any) -> bool:
+    primitive_name = str(_read(op, "primitive_name", "") or "").lower()
+    op_kind = str(_read(op, "op_kind", "") or "").lower()
+    return primitive_name == "local_desibilance_control" and op_kind == "dynamic_eq"
+
+
+def _record_op_result(
+    report: dict[str, Any],
+    stack_report: dict[str, Any],
+    stage_name: str,
+    stack_name: str,
+    op_result: dict[str, Any],
+) -> bool:
+    stack_report["ops"].append(
+        {
+            "instance_name": op_result["instance_name"],
+            "primitive_name": op_result["primitive_name"],
+            "op_kind": op_result["op_kind"],
+            "backend_hint": op_result["backend_hint"],
+            "executed": op_result["executed"],
+            "pending_reason": op_result["pending_reason"],
+            "params": op_result["params"],
+        }
+    )
+
+    if op_result["executed"]:
+        report["executed_op_count"] += 1
+        return True
+
+    report["pending_custom_op_count"] += 1
+    report["unsupported_ops"].append(
+        {
+            "stage_name": stage_name,
+            "stack_name": stack_name,
+            "instance_name": op_result["instance_name"],
+            "primitive_name": op_result["primitive_name"],
+            "op_kind": op_result["op_kind"],
+            "backend_hint": op_result["backend_hint"],
+        }
+    )
+    return False
+
+
+def _execute_serial_stack(
+    *,
+    ops: list[Any],
+    input_path: str,
+    td: str,
+    stage_name: str,
+    stack_name: str,
+    report: dict[str, Any],
+    stack_report: dict[str, Any],
+    dry_run: bool,
+) -> str:
+    current_path = input_path
+
+    for op in ops:
+        op_result = _execute_op_file(
+            input_path=current_path,
+            td=td,
+            stage_name=stage_name,
+            stack_name=stack_name,
+            op=op,
+            dry_run=dry_run,
+        )
+
+        executed = _record_op_result(
+            report=report,
+            stack_report=stack_report,
+            stage_name=stage_name,
+            stack_name=stack_name,
+            op_result=op_result,
+        )
+
+        if executed:
+            current_path = op_result["output_path"]
+
+    return current_path
+
+
+def _execute_parallel_wet_stack(
+    *,
+    ops: list[Any],
+    stack_input_path: str,
+    td: str,
+    stage_name: str,
+    stack_name: str,
+    report: dict[str, Any],
+    stack_report: dict[str, Any],
+    dry_run: bool,
+    output_suffix: str,
+) -> str | None:
+    wet_paths: list[str] = []
+
+    for op in ops:
+        op_kind = str(_read(op, "op_kind", "") or "").lower()
+
+        op_result = _execute_op_file(
+            input_path=stack_input_path,
+            td=td,
+            stage_name=stage_name,
+            stack_name=stack_name,
+            op=op,
+            dry_run=dry_run,
+        )
+
+        executed = _record_op_result(
+            report=report,
+            stack_report=stack_report,
+            stage_name=stage_name,
+            stack_name=stack_name,
+            op_result=op_result,
+        )
+
+        if not executed:
+            continue
+
+        if dry_run:
+            wet_paths.append(stack_input_path)
+            continue
+
+        if _op_outputs_wet_only(op_kind):
+            wet_paths.append(op_result["output_path"])
+        else:
+            delta_path = _make_tmp_wav(
+                td,
+                stage_name,
+                stack_name,
+                f"{op_result['instance_name']}__delta",
+            )
+            wet_paths.append(
+                _make_delta_file(
+                    dry_path=stack_input_path,
+                    processed_path=op_result["output_path"],
+                    output_path=delta_path,
+                )
+            )
+
+    if not wet_paths:
+        return None
+
+    if dry_run:
+        return wet_paths[0]
+
+    out_path = _make_tmp_wav(
+        td,
+        stage_name,
+        stack_name,
+        f"{stack_name}__{output_suffix}",
+    )
+
+    _mix_audio_files(
+        source_paths=wet_paths,
+        output_path=out_path,
+        gain_db=0.0,
+        weights=[1.0] * len(wet_paths),
+    )
+
+    return out_path
+
+
+def _execute_finish_micro_stack(
+    *,
+    ops: list[Any],
+    stack_input_path: str,
+    td: str,
+    stage_name: str,
+    stack_name: str,
+    report: dict[str, Any],
+    stack_report: dict[str, Any],
+    dry_run: bool,
+) -> str | None:
+    wet_ops: list[Any] = []
+    deess_ops: list[Any] = []
+
+    for op in ops:
+        if _op_is_finish_deess(op):
+            deess_ops.append(op)
+        else:
+            wet_ops.append(op)
+
+    spark_bus_path = _execute_parallel_wet_stack(
+        ops=wet_ops,
+        stack_input_path=stack_input_path,
+        td=td,
+        stage_name=stage_name,
+        stack_name=stack_name,
+        report=report,
+        stack_report=stack_report,
+        dry_run=dry_run,
+        output_suffix="spark_bus",
+    )
+
+    if spark_bus_path is None:
+        return None
+
+    current_path = spark_bus_path
+
+    for op in deess_ops:
+        op_result = _execute_op_file(
+            input_path=current_path,
+            td=td,
+            stage_name=stage_name,
+            stack_name=stack_name,
+            op=op,
+            dry_run=dry_run,
+        )
+
+        executed = _record_op_result(
+            report=report,
+            stack_report=stack_report,
+            stage_name=stage_name,
+            stack_name=stack_name,
+            op_result=op_result,
+        )
+
+        if executed:
+            current_path = op_result["output_path"]
+
+    return current_path
+
+
 def _execute_recombine(
     rec: Any,
     node_paths: dict[str, str | None],
@@ -1277,7 +1523,12 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
         "safety_notes": list(_read(render_plan, "safety_notes", []) or []),
         "notes": list(_read(render_plan, "notes", []) or [])
         + [
-            "executor_active_v2",
+            "executor_active_v3",
+            "parallel_stack_semantics_fixed",
+            "parallel_ops_run_from_same_tap_point",
+            "parallel_outputs_are_wet_layers",
+            "finish_spark_is_wet_micro_bus",
+            "finish_deess_runs_on_spark_bus",
             "native_finish_width_ops_supported",
             "delivery_loudness_preserve_peak_safety_enabled",
             "recombine_blend_weights_fixed",
@@ -1318,7 +1569,6 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
             ops = list(_read(stack, "ops", []) or [])
 
             stack_input_path = node_paths.get(tap_point) or stage_current_path or stage_input_path
-            op_current_path = stack_input_path
 
             stack_report: dict[str, Any] = {
                 "stack_name": stack_name,
@@ -1328,60 +1578,81 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
                 "ops": [],
             }
 
-            for op in ops:
-                op_result = _execute_op_file(
-                    input_path=op_current_path,
+            if not stack_input_path:
+                raise RuntimeError(
+                    f"Missing input path for stack {stack_name} in stage {stage_name}"
+                )
+
+            if render_mode in {"serial_inplace", "delivery_serial"}:
+                stack_output_path = _execute_serial_stack(
+                    ops=ops,
+                    input_path=stack_input_path,
                     td=td,
                     stage_name=stage_name,
                     stack_name=stack_name,
-                    op=op,
+                    report=report,
+                    stack_report=stack_report,
                     dry_run=dry_run,
                 )
 
-                stack_report["ops"].append(
-                    {
-                        "instance_name": op_result["instance_name"],
-                        "primitive_name": op_result["primitive_name"],
-                        "op_kind": op_result["op_kind"],
-                        "backend_hint": op_result["backend_hint"],
-                        "executed": op_result["executed"],
-                        "pending_reason": op_result["pending_reason"],
-                        "params": op_result["params"],
-                    }
+                if output_node_for_stack:
+                    node_paths[output_node_for_stack] = stack_output_path
+
+                stage_current_path = stack_output_path
+
+            elif render_mode in {"parallel_return", "parallel_assist_return"}:
+                stack_output_path = _execute_parallel_wet_stack(
+                    ops=ops,
+                    stack_input_path=stack_input_path,
+                    td=td,
+                    stage_name=stage_name,
+                    stack_name=stack_name,
+                    report=report,
+                    stack_report=stack_report,
+                    dry_run=dry_run,
+                    output_suffix="wet_sum",
                 )
 
-                if op_result["executed"]:
-                    report["executed_op_count"] += 1
-                    op_current_path = op_result["output_path"]
-                else:
-                    report["pending_custom_op_count"] += 1
-                    report["unsupported_ops"].append(
-                        {
-                            "stage_name": stage_name,
-                            "stack_name": stack_name,
-                            "instance_name": op_result["instance_name"],
-                            "primitive_name": op_result["primitive_name"],
-                            "op_kind": op_result["op_kind"],
-                            "backend_hint": op_result["backend_hint"],
-                        }
-                    )
+                if output_node_for_stack and stack_output_path:
+                    node_paths[output_node_for_stack] = stack_output_path
 
-            if render_mode == "serial_inplace":
-                if output_node_for_stack:
-                    node_paths[output_node_for_stack] = op_current_path
-                stage_current_path = op_current_path
-            elif render_mode in {"parallel_return", "parallel_assist_return"}:
-                if output_node_for_stack:
-                    node_paths[output_node_for_stack] = op_current_path
+            elif render_mode == "finish_micro_return":
+                stack_output_path = _execute_finish_micro_stack(
+                    ops=ops,
+                    stack_input_path=stack_input_path,
+                    td=td,
+                    stage_name=stage_name,
+                    stack_name=stack_name,
+                    report=report,
+                    stack_report=stack_report,
+                    dry_run=dry_run,
+                )
+
+                if output_node_for_stack and stack_output_path:
+                    node_paths[output_node_for_stack] = stack_output_path
+
             else:
+                stack_output_path = _execute_serial_stack(
+                    ops=ops,
+                    input_path=stack_input_path,
+                    td=td,
+                    stage_name=stage_name,
+                    stack_name=stack_name,
+                    report=report,
+                    stack_report=stack_report,
+                    dry_run=dry_run,
+                )
+
                 if output_node_for_stack:
-                    node_paths[output_node_for_stack] = op_current_path
-                stage_current_path = op_current_path
+                    node_paths[output_node_for_stack] = stack_output_path
+
+                stage_current_path = stack_output_path
 
             stage_report["stack_reports"].append(stack_report)
 
         if recombine:
             last_target_path = None
+
             for rec in recombine:
                 rec_report, target_path = _execute_recombine(
                     rec=rec,
@@ -1399,6 +1670,7 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
 
             if output_node and node_paths.get(output_node) is None:
                 node_paths[output_node] = last_target_path or stage_current_path
+
         else:
             if output_node and node_paths.get(output_node) is None:
                 node_paths[output_node] = stage_current_path
