@@ -13,13 +13,15 @@ from .role_specs import RoleModeSpec, RoleStackTemplate, get_role_mode_spec
 
 
 def _read(obj: Any, key: str, default=None):
+    if obj is None:
+        return default
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, x))
+    return max(lo, min(hi, float(x)))
 
 
 def _uniq(values: List[str]) -> List[str]:
@@ -66,13 +68,13 @@ def _default_split_for_mode(role: RoleName, target_band_mode: str) -> Dict[str, 
     if role == RoleName.PROJECTION:
         if target_band_mode == "projection_dense":
             return {
-                "projection_contour_stack": (0.72, 0.86, 1.00),
-                "projection_assist_stack": (0.46, 0.62, 0.94),
+                "projection_contour_stack": (0.88, 0.96, 1.00),
+                "projection_assist_stack": (0.68, 0.86, 1.00),
             }
         if target_band_mode == "projection_mild":
             return {
-                "projection_contour_stack": (0.82, 0.90, 1.00),
-                "projection_assist_stack": (0.52, 0.66, 0.86),
+                "projection_contour_stack": (0.92, 1.00, 1.00),
+                "projection_assist_stack": (0.70, 0.88, 0.96),
             }
         if target_band_mode == "projection_clamp":
             return {
@@ -226,6 +228,9 @@ def _build_role_stack(
 
 
 def _expand_role_plan_to_stacks(plan) -> List[RoleDSPStack]:
+    if plan is None:
+        return []
+
     _set_all_primitive_names_from_mode_spec()
 
     mode_spec = get_role_mode_spec(plan.role, _effective_mode(plan))
@@ -239,7 +244,7 @@ def _expand_role_plan_to_stacks(plan) -> List[RoleDSPStack]:
 
 
 def _index_role_stacks(stacks: List[RoleDSPStack]) -> Dict[str, RoleDSPStack]:
-    return {stack.stack_name: stack for stack in stacks}
+    return {stack.stack_name: stack for stack in stacks if stack is not None}
 
 
 def _is_projection_hard_emergency(analysis: Optional[SmartMasterAnalysis]) -> bool:
@@ -297,9 +302,9 @@ def _restore_mandatory_projection_floor(
         and contour_stack.enabled
         and existing_mode != "projection_clamp"
         and (
-            contour_stack.execution_amount < 0.18
-            or contour_stack.dynamic_scale < 0.54
-            or existing_activity < 0.54
+            contour_stack.execution_amount < 0.24
+            or contour_stack.dynamic_scale < 0.62
+            or existing_activity < 0.62
         )
     )
     assist_is_missing_when_musical = (
@@ -307,7 +312,8 @@ def _restore_mandatory_projection_floor(
         and (
             assist_stack is None
             or not assist_stack.enabled
-            or assist_stack.execution_amount < 0.09
+            or assist_stack.execution_amount < 0.12
+            or _stack_activity(assist_stack) < 0.48
         )
     )
 
@@ -325,33 +331,33 @@ def _restore_mandatory_projection_floor(
         target_band_mode = "projection_clamp"
         profile_name = "projection_clamp_safe"
         protection_mode = "top_strict"
-        floor_amount = 0.16
-        floor_cap = 0.26
-        floor_dynamic = 0.46
+        floor_amount = 0.18
+        floor_cap = 0.28
+        floor_dynamic = 0.50
         energy_class = "mild"
     else:
         target_band_mode = "projection_mild"
         profile_name = "projection_mild_safe"
         protection_mode = "top_guarded"
-        floor_amount = 0.26
-        floor_cap = 0.38
-        floor_dynamic = 0.62
+        floor_amount = 0.31
+        floor_cap = 0.44
+        floor_dynamic = 0.70
         energy_class = "controlled"
 
     if existing_mode == "projection_dense" and not hard_emergency:
         target_band_mode = "projection_dense"
         profile_name = "projection_controlled_dense"
         protection_mode = "body_link_required"
-        floor_amount = 0.30
-        floor_cap = 0.44
-        floor_dynamic = 0.68
+        floor_amount = 0.36
+        floor_cap = 0.50
+        floor_dynamic = 0.76
         energy_class = "controlled"
 
     patched_projection_plan = replace(
         projection_plan,
         enabled=True,
         profile_name=profile_name,
-        role_rank="support",
+        role_rank="primary",
         energy_class=energy_class,
         requested_amount=max(float(_read(projection_plan, "requested_amount", 0.0) or 0.0), floor_amount),
         requested_cap=max(float(_read(projection_plan, "requested_cap", 0.0) or 0.0), floor_cap),
@@ -373,9 +379,9 @@ def _restore_mandatory_projection_floor(
             old_notes
             + [
                 "assembler restored mandatory projection floor",
-                "projection is mandatory in polish branch",
+                "projection is primary musical benefit in SM",
                 "cleanup creates space; projection must use that space musically",
-                "projection can become clamp in hard emergency, but never off",
+                "projection can become guarded or clamp in hard emergency, but not silent",
             ]
         ),
     )
@@ -428,7 +434,7 @@ def _restore_mandatory_spark_floor(
     existing_spark = spark_idx.get("spark_finish_stack")
 
     if existing_spark is not None and existing_spark.enabled:
-        if existing_spark.execution_amount >= 0.12 and existing_spark.dynamic_scale >= 0.42:
+        if existing_spark.execution_amount >= 0.16 and existing_spark.dynamic_scale >= 0.50:
             return spark_stacks, []
 
     if projection_contour_stack is None or not projection_contour_stack.enabled:
@@ -450,17 +456,18 @@ def _restore_mandatory_spark_floor(
         profile_name="finish_spark_micro_safe",
         role_rank="support",
         energy_class="mild",
-        requested_amount=max(float(_read(spark_plan, "requested_amount", 0.0) or 0.0), 0.16),
-        requested_cap=max(float(_read(spark_plan, "requested_cap", 0.0) or 0.0), 0.28),
-        execution_amount=max(float(_read(spark_plan, "execution_amount", 0.0) or 0.0), 0.16),
-        execution_cap=max(float(_read(spark_plan, "execution_cap", 0.0) or 0.0), 0.28),
-        dynamic_scale=max(float(_read(spark_plan, "dynamic_scale", 0.0) or 0.0), 0.50),
+        requested_amount=max(float(_read(spark_plan, "requested_amount", 0.0) or 0.0), 0.18),
+        requested_cap=max(float(_read(spark_plan, "requested_cap", 0.0) or 0.0), 0.30),
+        execution_amount=max(float(_read(spark_plan, "execution_amount", 0.0) or 0.0), 0.18),
+        execution_cap=max(float(_read(spark_plan, "execution_cap", 0.0) or 0.0), 0.30),
+        dynamic_scale=max(float(_read(spark_plan, "dynamic_scale", 0.0) or 0.0), 0.54),
         target_band_mode="spark_micro",
         protection_mode="spark_micro_only",
         allowed_primitives=[
             "micro_air_shelf",
             "micro_top_texture",
             "protected_high_side_polish",
+            "micro_width_high_only",
             "local_desibilance_control",
         ],
         forbidden_primitives=[],
@@ -471,11 +478,66 @@ def _restore_mandatory_spark_floor(
                 "assembler restored mandatory polish spark floor",
                 "spark is finish magic, not optional silence",
                 "spark can be disabled only by hard emergency",
+                "micro spark must remain small but audible",
             ]
         ),
     )
 
     return _expand_role_plan_to_stacks(patched_spark_plan), ["assembler_restored_mandatory_spark_floor"]
+
+
+def _restore_enabled_support_floor(
+    *,
+    plan,
+    current_stacks: List[RoleDSPStack],
+    stack_name: str,
+    floor_amount: float,
+    floor_cap: float,
+    floor_dynamic: float,
+    floor_activity: float,
+    note_tag: str,
+) -> Tuple[List[RoleDSPStack], List[str]]:
+    if not _enabled(plan) or _effective_mode(plan) == "off":
+        return current_stacks, []
+
+    idx = _index_role_stacks(current_stacks)
+    stack = idx.get(stack_name)
+
+    too_weak = (
+        stack is None
+        or not stack.enabled
+        or stack.execution_amount < floor_amount
+        or stack.execution_cap < floor_cap
+        or stack.dynamic_scale < floor_dynamic
+        or _stack_activity(stack) < floor_activity
+    )
+
+    if not too_weak:
+        return current_stacks, []
+
+    old_tags = list(getattr(plan, "interaction_tags", []) or [])
+    old_notes = list(getattr(plan, "notes", []) or [])
+
+    patched_plan = replace(
+        plan,
+        enabled=True,
+        requested_amount=max(float(_read(plan, "requested_amount", 0.0) or 0.0), floor_amount),
+        requested_cap=max(float(_read(plan, "requested_cap", 0.0) or 0.0), floor_cap),
+        execution_amount=max(float(_read(plan, "execution_amount", 0.0) or 0.0), floor_amount),
+        execution_cap=max(float(_read(plan, "execution_cap", 0.0) or 0.0), floor_cap),
+        dynamic_scale=max(float(_read(plan, "dynamic_scale", 0.0) or 0.0), floor_dynamic),
+        interaction_tags=_uniq(old_tags + [note_tag]),
+        notes=_uniq(
+            old_notes
+            + [
+                note_tag,
+                "support floor restored after clamps",
+                "support preserves body and bass-to-body bridge instead of disappearing",
+            ]
+        ),
+    )
+
+    return _expand_role_plan_to_stacks(patched_plan), [note_tag]
 
 
 def _derive_support_recombine_gain_db(
@@ -499,9 +561,9 @@ def _derive_support_recombine_gain_db(
     activity_avg = activity_sum / active_count
 
     return _clamp(
-        -0.08 + (total_amount * 0.54) + (activity_avg * 0.10),
-        -0.10,
-        0.28,
+        -0.02 + (total_amount * 0.74) + (activity_avg * 0.18),
+        0.00,
+        0.46,
     )
 
 
@@ -515,15 +577,15 @@ def _derive_projection_assist_blend(
     mode = str(projection_assist_stack.target_band_mode or "")
 
     if mode == "projection_dense":
-        return _clamp(0.24 + (activity * 0.26), 0.24, 0.46)
+        return _clamp(0.30 + (activity * 0.28), 0.30, 0.58)
 
     if mode == "projection_mild":
-        return _clamp(0.18 + (activity * 0.22), 0.18, 0.36)
+        return _clamp(0.26 + (activity * 0.24), 0.26, 0.50)
 
     if mode == "projection_clamp":
         return 0.0
 
-    return _clamp(0.16 + (activity * 0.18), 0.16, 0.30)
+    return _clamp(0.20 + (activity * 0.20), 0.20, 0.40)
 
 
 def _derive_spark_blend(
@@ -536,12 +598,12 @@ def _derive_spark_blend(
     mode = str(spark_stack.target_band_mode or "")
 
     if mode == "spark_excited":
-        return _clamp(0.18 + (activity * 0.16), 0.18, 0.36)
+        return _clamp(0.20 + (activity * 0.18), 0.20, 0.38)
 
     if mode == "spark_micro":
-        return _clamp(0.12 + (activity * 0.12), 0.12, 0.24)
+        return _clamp(0.16 + (activity * 0.14), 0.16, 0.30)
 
-    return _clamp(0.10 + (activity * 0.08), 0.10, 0.20)
+    return _clamp(0.12 + (activity * 0.10), 0.12, 0.22)
 
 
 def _delivery_role_value():
@@ -680,6 +742,28 @@ def build_dsp_execution_blueprint(
     projection_stacks = _expand_role_plan_to_stacks(router_blueprint.projection)
     spark_stacks = _expand_role_plan_to_stacks(router_blueprint.spark)
 
+    anchor_stacks, anchor_restore_notes = _restore_enabled_support_floor(
+        plan=router_blueprint.anchor,
+        current_stacks=anchor_stacks,
+        stack_name="anchor_parallel_stack",
+        floor_amount=0.18,
+        floor_cap=0.30,
+        floor_dynamic=0.42,
+        floor_activity=0.46,
+        note_tag="assembler_restored_anchor_support_floor",
+    )
+
+    bridge_stacks, bridge_restore_notes = _restore_enabled_support_floor(
+        plan=router_blueprint.bridge,
+        current_stacks=bridge_stacks,
+        stack_name="bridge_parallel_stack",
+        floor_amount=0.14,
+        floor_cap=0.24,
+        floor_dynamic=0.40,
+        floor_activity=0.42,
+        note_tag="assembler_restored_bridge_handoff_floor",
+    )
+
     projection_stacks, projection_restore_notes = _restore_mandatory_projection_floor(
         router_blueprint=router_blueprint,
         projection_stacks=projection_stacks,
@@ -718,9 +802,12 @@ def build_dsp_execution_blueprint(
             "role_specs_expanded",
             "mandatory_projection_floor_enabled",
             "mandatory_spark_floor_enabled",
+            "mandatory_support_floor_enabled",
             "musical_blend_floors_enabled",
         ]
     )
+    blueprint_notes.extend(anchor_restore_notes)
+    blueprint_notes.extend(bridge_restore_notes)
     blueprint_notes.extend(projection_restore_notes)
     blueprint_notes.extend(spark_restore_notes)
 
@@ -765,6 +852,93 @@ def build_dsp_execution_blueprint(
     return blueprint
 
 
+def _enforce_post_clamp_musical_floors(
+    *,
+    blueprint: DSPExecutionBlueprint,
+    router_blueprint: SmartMasterExecutionBlueprint,
+    analysis: SmartMasterAnalysis,
+) -> DSPExecutionBlueprint:
+    notes: List[str] = ["post_clamp_musical_floor_pass_enabled"]
+
+    anchor_stacks, anchor_notes = _restore_enabled_support_floor(
+        plan=router_blueprint.anchor,
+        current_stacks=[blueprint.anchor_parallel_stack] if blueprint.anchor_parallel_stack is not None else [],
+        stack_name="anchor_parallel_stack",
+        floor_amount=0.18,
+        floor_cap=0.30,
+        floor_dynamic=0.42,
+        floor_activity=0.46,
+        note_tag="post_clamp_restored_anchor_support_floor",
+    )
+
+    bridge_stacks, bridge_notes = _restore_enabled_support_floor(
+        plan=router_blueprint.bridge,
+        current_stacks=[blueprint.bridge_parallel_stack] if blueprint.bridge_parallel_stack is not None else [],
+        stack_name="bridge_parallel_stack",
+        floor_amount=0.14,
+        floor_cap=0.24,
+        floor_dynamic=0.40,
+        floor_activity=0.42,
+        note_tag="post_clamp_restored_bridge_handoff_floor",
+    )
+
+    projection_stacks, projection_notes = _restore_mandatory_projection_floor(
+        router_blueprint=router_blueprint,
+        projection_stacks=[
+            stack for stack in [
+                blueprint.projection_contour_stack,
+                blueprint.projection_assist_stack,
+            ]
+            if stack is not None
+        ],
+        analysis=analysis,
+    )
+
+    projection_idx = _index_role_stacks(projection_stacks)
+    projection_contour_stack = projection_idx.get("projection_contour_stack", blueprint.projection_contour_stack)
+    projection_assist_stack = projection_idx.get("projection_assist_stack", blueprint.projection_assist_stack)
+
+    spark_stacks, spark_notes = _restore_mandatory_spark_floor(
+        router_blueprint=router_blueprint,
+        projection_contour_stack=projection_contour_stack,
+        spark_stacks=[blueprint.spark_stack] if blueprint.spark_stack is not None else [],
+        analysis=analysis,
+    )
+
+    anchor_idx = _index_role_stacks(anchor_stacks)
+    bridge_idx = _index_role_stacks(bridge_stacks)
+    spark_idx = _index_role_stacks(spark_stacks)
+
+    anchor_parallel_stack = anchor_idx.get("anchor_parallel_stack", blueprint.anchor_parallel_stack)
+    bridge_parallel_stack = bridge_idx.get("bridge_parallel_stack", blueprint.bridge_parallel_stack)
+    spark_stack = spark_idx.get("spark_finish_stack", blueprint.spark_stack)
+
+    notes.extend(anchor_notes)
+    notes.extend(bridge_notes)
+    notes.extend(projection_notes)
+    notes.extend(spark_notes)
+
+    return replace(
+        blueprint,
+        anchor_parallel_stack=anchor_parallel_stack,
+        bridge_parallel_stack=bridge_parallel_stack,
+        projection_contour_stack=projection_contour_stack,
+        projection_assist_stack=projection_assist_stack,
+        spark_stack=spark_stack,
+        support_recombine_gain_db=_derive_support_recombine_gain_db(
+            anchor_parallel_stack,
+            bridge_parallel_stack,
+        ),
+        projection_assist_blend=_derive_projection_assist_blend(
+            projection_assist_stack,
+        ),
+        spark_blend=_derive_spark_blend(
+            spark_stack,
+        ),
+        notes=_uniq(list(blueprint.notes or []) + notes),
+    )
+
+
 def assemble_sm_dsp_blueprint(
     analysis: SmartMasterAnalysis,
     router_blueprint: SmartMasterExecutionBlueprint,
@@ -774,6 +948,11 @@ def assemble_sm_dsp_blueprint(
         analysis=analysis,
     )
     blueprint = apply_dsp_clamps(blueprint, analysis)
+    blueprint = _enforce_post_clamp_musical_floors(
+        blueprint=blueprint,
+        router_blueprint=router_blueprint,
+        analysis=analysis,
+    )
     blueprint = attach_primitive_instances_to_blueprint(blueprint, analysis)
     blueprint = attach_graph_to_blueprint(blueprint)
     return replace(
@@ -784,6 +963,8 @@ def assemble_sm_dsp_blueprint(
                 "assembler_completed",
                 "premium_v1_topology_attached",
                 "primitive_instances_ready",
+                "sm_music_first_architecture_v2",
+                "post_clamp_projection_support_spark_floors_locked",
             ]
         ),
     )
