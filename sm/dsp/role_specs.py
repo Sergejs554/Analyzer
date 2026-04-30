@@ -412,6 +412,7 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 preferred_order=10,
                 allowed_primitive_names=[
                     "dynamic_bell_cut",
+                    "dynamic_wide_cut",
                     "local_antiharsh_control",
                 ],
                 required_safety_tags=[
@@ -420,6 +421,7 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 ],
                 notes=[
                     "Guarded cleanup separates mud from body with fewer subtractive hits.",
+                    "Dynamic wide cut is allowed here because primitive_instances v3 scales it by body and bridge protection.",
                 ],
             ),
         ],
@@ -667,7 +669,6 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 recombine_mode="assist_sum",
                 preferred_order=40,
                 allowed_primitive_names=[
-                    "band_limited_soft_saturation",
                     "controlled_harmonic_density",
                 ],
                 required_safety_tags=[
@@ -676,6 +677,7 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 ],
                 notes=[
                     "Mild assist keeps studio density alive with smaller amount.",
+                    "Band-limited soft saturation is removed from mild mode to avoid buying projection with harshness.",
                 ],
             ),
         ],
@@ -760,7 +762,12 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 ],
             ),
         ],
-        required_safety_tags=["top_sensitive", "width_sensitive", "finish_sensitive", "delivery_sensitive"],
+        required_safety_tags=[
+            "top_sensitive",
+            "width_sensitive",
+            "finish_sensitive",
+            "delivery_sensitive",
+        ],
         blocked_by_default_clamps=[],
         notes=[
             "Spark excited is allowed as character when selected by blueprint.",
@@ -800,7 +807,12 @@ ROLE_MODE_SPECS: Dict[Tuple[RoleName, str], RoleModeSpec] = {
                 ],
             ),
         ],
-        required_safety_tags=["top_sensitive", "width_sensitive", "finish_sensitive", "delivery_sensitive"],
+        required_safety_tags=[
+            "top_sensitive",
+            "width_sensitive",
+            "finish_sensitive",
+            "delivery_sensitive",
+        ],
         blocked_by_default_clamps=[],
         notes=[
             "Micro spark must not be reduced to invisible safety dust.",
@@ -883,7 +895,9 @@ def get_role_mode_spec(role: RoleName, target_band_mode: str) -> RoleModeSpec:
         off_key = (role, "off")
         if off_key in ROLE_MODE_SPECS:
             return ROLE_MODE_SPECS[off_key]
-        raise KeyError(f"Unknown role mode spec: role={role} target_band_mode={target_band_mode}")
+        raise KeyError(
+            f"Unknown role mode spec: role={role} target_band_mode={target_band_mode}"
+        )
     return ROLE_MODE_SPECS[key]
 
 
