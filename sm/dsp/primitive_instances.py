@@ -55,6 +55,11 @@ def _metric(analysis: SmartMasterAnalysis, name: str, fallback: float) -> float:
     return _safe(_read(metrics, name, fallback), fallback)
 
 
+def _derived(analysis: SmartMasterAnalysis, name: str, fallback: float) -> float:
+    derived = _read(analysis, "derived", {}) or {}
+    return _safe(_read(derived, name, fallback), fallback)
+
+
 def _section_value(
     analysis: SmartMasterAnalysis,
     section_name: str,
@@ -98,30 +103,105 @@ def _role_key(stack: RoleDSPStack) -> str:
     return str(role).strip().lower()
 
 
-def _buildup_need_score(analysis: SmartMasterAnalysis) -> float:
+def _useful_body_score(analysis: SmartMasterAnalysis) -> float:
+    body = _metric(analysis, "body_150_400_db", 34.0)
+    low_body = _metric(analysis, "low_body_150_300_db", 33.5)
+    lowmid = _metric(analysis, "lowmid_120_300_db", 33.5)
+    mud_to_body = _metric(analysis, "mud_to_body_db", -1.0)
+    center_body = _derived(analysis, "center_body_support_proxy", 0.55)
+    handoff = _derived(analysis, "body_to_mid_handoff_proxy", 0.55)
+
+    body_abs = _clamp((body - 30.5) / 7.0, 0.0, 1.0)
+    low_body_abs = _clamp((low_body - 30.2) / 7.0, 0.0, 1.0)
+    lowmid_abs = _clamp((lowmid - 30.0) / 7.0, 0.0, 1.0)
+    mud_not_dominant = _clamp((-0.15 - mud_to_body) / 2.0, 0.0, 1.0)
+
+    return _clamp(
+        (body_abs * 0.30)
+        + (low_body_abs * 0.22)
+        + (lowmid_abs * 0.12)
+        + (mud_not_dominant * 0.16)
+        + (center_body * 0.12)
+        + (handoff * 0.08),
+        0.0,
+        1.0,
+    )
+
+
+def _studio_density_score(analysis: SmartMasterAnalysis) -> float:
+    body = _metric(analysis, "body_150_400_db", 34.0)
+    low_body = _metric(analysis, "low_body_150_300_db", 33.5)
+    mud_to_body = _metric(analysis, "mud_to_body_db", -1.0)
+    lowmid_buildup_ratio = _metric(analysis, "lowmid_buildup_ratio_db", 12.0)
+    bass_to_body = _metric(analysis, "bass_to_body_db", 5.0)
+    presence_to_body = _metric(analysis, "presence_to_body_db", -16.0)
+    crest = _metric(analysis, "crest_db", 11.0)
+    punch = _metric(analysis, "punch_proxy", 11.0)
+    lufs = _metric(analysis, "integrated_lufs", -12.0)
+    center_body = _derived(analysis, "center_body_support_proxy", 0.55)
+
+    body_ok = _clamp((body - 31.2) / 5.2, 0.0, 1.0)
+    low_body_ok = _clamp((low_body - 31.0) / 5.0, 0.0, 1.0)
+    mud_not_over_body = _clamp((0.20 - mud_to_body) / 1.80, 0.0, 1.0)
+    density_not_mud = _clamp((lowmid_buildup_ratio - 10.0) / 10.0, 0.0, 1.0) * mud_not_over_body
+    bass_connected = _clamp((10.5 - abs(bass_to_body - 5.5)) / 10.5, 0.0, 1.0)
+    presence_not_missing = _clamp((presence_to_body + 23.0) / 11.0, 0.0, 1.0)
+    punch_ok = _clamp((punch - 10.2) / 4.5, 0.0, 1.0)
+    crest_ok = _clamp((crest - 10.0) / 5.0, 0.0, 1.0)
+    mastered_loudness = _clamp((lufs + 15.0) / 5.0, 0.0, 1.0)
+
+    return _clamp(
+        (body_ok * 0.18)
+        + (low_body_ok * 0.14)
+        + (mud_not_over_body * 0.18)
+        + (density_not_mud * 0.10)
+        + (bass_connected * 0.08)
+        + (presence_not_missing * 0.08)
+        + (punch_ok * 0.10)
+        + (crest_ok * 0.08)
+        + (mastered_loudness * 0.04)
+        + (center_body * 0.02),
+        0.0,
+        1.0,
+    )
+
+
+def _real_mud_confidence_score(analysis: SmartMasterAnalysis) -> float:
     lowmid_buildup_ratio = _metric(analysis, "lowmid_buildup_ratio_db", 12.0)
     mud_to_body = _metric(analysis, "mud_to_body_db", -1.0)
     mud = _metric(analysis, "mud_200_500_db", 34.0)
     buildup = _metric(analysis, "lowmid_buildup_200_400_db", 34.0)
-    body = _metric(analysis, "body_150_400_db", 35.0)
+    body = _metric(analysis, "body_150_400_db", 34.0)
+    low_body = _metric(analysis, "low_body_150_300_db", 33.0)
+    useful_body = _useful_body_score(analysis)
+    studio_density = _studio_density_score(analysis)
 
-    ratio_score = _clamp((lowmid_buildup_ratio - 11.0) / 9.0, 0.0, 1.0)
-    mud_relation_score = _clamp((mud_to_body + 1.20) / 2.40, 0.0, 1.0)
-    absolute_mud_score = _clamp((mud - 34.5) / 4.5, 0.0, 1.0)
-    cluster_score = _clamp((buildup - body + 0.45) / 2.00, 0.0, 1.0)
+    ratio_score = _clamp((lowmid_buildup_ratio - 13.0) / 9.0, 0.0, 1.0)
+    mud_over_body = _clamp((mud_to_body + 0.30) / 2.20, 0.0, 1.0)
+    absolute_mud = _clamp((mud - 35.4) / 4.6, 0.0, 1.0)
+    buildup_over_body = _clamp((buildup - body + 0.30) / 2.20, 0.0, 1.0)
+    buildup_over_low_body = _clamp((buildup - low_body + 0.40) / 2.80, 0.0, 1.0)
 
     cleanup_risk = _value(_section_value(analysis, "cleanup", "buildup_risk", "low"))
-    cleanup_bonus = 0.14 if cleanup_risk == "high" else 0.06 if cleanup_risk == "medium" else 0.0
+    cleanup_bonus = 0.13 if cleanup_risk == "high" else 0.06 if cleanup_risk == "medium" else 0.0
 
-    return _clamp(
-        (ratio_score * 0.38)
-        + (mud_relation_score * 0.22)
-        + (absolute_mud_score * 0.25)
-        + (cluster_score * 0.15)
-        + cleanup_bonus,
-        0.0,
-        1.0,
+    raw = (
+        (ratio_score * 0.22)
+        + (mud_over_body * 0.30)
+        + (absolute_mud * 0.20)
+        + (buildup_over_body * 0.18)
+        + (buildup_over_low_body * 0.10)
+        + cleanup_bonus
     )
+
+    studio_relief = 0.36 * studio_density
+    body_relief = 0.20 * useful_body
+
+    return _clamp(raw - studio_relief - body_relief, 0.0, 1.0)
+
+
+def _buildup_need_score(analysis: SmartMasterAnalysis) -> float:
+    return _real_mud_confidence_score(analysis)
 
 
 def _body_protection_score(analysis: SmartMasterAnalysis) -> float:
@@ -130,31 +210,39 @@ def _body_protection_score(analysis: SmartMasterAnalysis) -> float:
     lowmid = _metric(analysis, "lowmid_120_300_db", 34.0)
     punch = _metric(analysis, "punch_proxy", 10.5)
     crest = _metric(analysis, "crest_db", 10.5)
+    center_body = _derived(analysis, "center_body_support_proxy", 0.55)
 
-    body_abs_fragile = _clamp((34.2 - body) / 4.0, 0.0, 1.0)
-    low_body_fragile = _clamp((33.8 - low_body) / 4.0, 0.0, 1.0)
-    lowmid_fragile = _clamp((33.5 - lowmid) / 4.0, 0.0, 1.0)
+    body_abs_fragile = _clamp((33.4 - body) / 4.5, 0.0, 1.0)
+    low_body_fragile = _clamp((33.2 - low_body) / 4.5, 0.0, 1.0)
+    lowmid_fragile = _clamp((32.8 - lowmid) / 4.5, 0.0, 1.0)
+    center_fragile = _clamp((0.42 - center_body) / 0.42, 0.0, 1.0)
     punch_fragile = _clamp((10.0 - punch) / 2.0, 0.0, 1.0)
     crest_fragile = _clamp((9.4 - crest) / 2.0, 0.0, 1.0)
 
-    thin_bonus = 0.22 if _flag_bool(analysis, "thin_behavior_candidate", False) else 0.0
-    punch_flag_bonus = 0.14 if _flag_bool(analysis, "punch_fragile_candidate", False) else 0.0
+    thin_bonus = 0.20 if _flag_bool(analysis, "thin_behavior_candidate", False) else 0.0
+    punch_flag_bonus = 0.13 if _flag_bool(analysis, "punch_fragile_candidate", False) else 0.0
 
     anchor_fragility = _value(_section_value(analysis, "anchor", "fragility", "low"))
     anchor_bonus = 0.18 if anchor_fragility == "high" else 0.08 if anchor_fragility == "medium" else 0.0
 
-    excessive_body_relief = _clamp((body - 37.2) / 2.8, 0.0, 1.0) * 0.30
+    studio_density = _studio_density_score(analysis)
+    useful_body = _useful_body_score(analysis)
+
+    excessive_body_relief = _clamp((body - 37.2) / 2.8, 0.0, 1.0) * 0.20
+    studio_relief = studio_density * useful_body * 0.18
 
     return _clamp(
-        (body_abs_fragile * 0.26)
-        + (low_body_fragile * 0.24)
-        + (lowmid_fragile * 0.14)
-        + (punch_fragile * 0.12)
-        + (crest_fragile * 0.08)
+        (body_abs_fragile * 0.22)
+        + (low_body_fragile * 0.21)
+        + (lowmid_fragile * 0.10)
+        + (center_fragile * 0.16)
+        + (punch_fragile * 0.10)
+        + (crest_fragile * 0.06)
         + thin_bonus
         + punch_flag_bonus
         + anchor_bonus
-        - excessive_body_relief,
+        - excessive_body_relief
+        - studio_relief,
         0.0,
         1.0,
     )
@@ -164,21 +252,24 @@ def _bridge_protection_score(analysis: SmartMasterAnalysis) -> float:
     bass_to_body = _metric(analysis, "bass_to_body_db", 5.0)
     sub_to_body = _metric(analysis, "sub_to_body_db", 4.0)
     low_foundation_ratio = _metric(analysis, "low_foundation_ratio_db", 4.0)
+    handoff = _derived(analysis, "body_to_mid_handoff_proxy", 0.55)
 
-    detached_bass = _clamp((bass_to_body - 6.0) / 4.0, 0.0, 1.0)
+    detached_bass = _clamp((bass_to_body - 7.0) / 4.5, 0.0, 1.0)
     weak_sub_handoff = _clamp((2.2 - sub_to_body) / 3.2, 0.0, 1.0)
     weak_foundation = _clamp((2.4 - low_foundation_ratio) / 3.0, 0.0, 1.0)
+    weak_handoff = _clamp((0.42 - handoff) / 0.42, 0.0, 1.0)
 
     bridge_state = _value(_section_value(analysis, "bridge", "state", "ok"))
     bridge_stop = bool(_section_value(analysis, "bridge", "stop", False))
 
-    overglue_guard = 0.22 if bridge_state == "overglued" else 0.0
-    stop_guard = 0.16 if bridge_stop else 0.0
+    overglue_guard = 0.18 if bridge_state == "overglued" else 0.0
+    stop_guard = 0.13 if bridge_stop else 0.0
 
     return _clamp(
-        (detached_bass * 0.30)
-        + (weak_sub_handoff * 0.25)
-        + (weak_foundation * 0.14)
+        (detached_bass * 0.26)
+        + (weak_sub_handoff * 0.22)
+        + (weak_foundation * 0.12)
+        + (weak_handoff * 0.22)
         + overglue_guard
         + stop_guard,
         0.0,
@@ -191,18 +282,21 @@ def _guard_need_score(analysis: SmartMasterAnalysis) -> float:
     mud_to_body = _metric(analysis, "mud_to_body_db", -1.0)
     lowmid_buildup_ratio = _metric(analysis, "lowmid_buildup_ratio_db", 12.0)
 
-    mud_score = _clamp((mud - 35.2) / 3.8, 0.0, 1.0)
-    relation_score = _clamp((mud_to_body + 0.65) / 1.80, 0.0, 1.0)
-    ratio_score = _clamp((lowmid_buildup_ratio - 13.0) / 8.0, 0.0, 1.0)
+    mud_score = _clamp((mud - 35.8) / 4.0, 0.0, 1.0)
+    relation_score = _clamp((mud_to_body + 0.35) / 1.90, 0.0, 1.0)
+    ratio_score = _clamp((lowmid_buildup_ratio - 14.5) / 8.5, 0.0, 1.0)
 
     guard_shape = _value(_section_value(analysis, "guard", "shape", "stable"))
-    shape_bonus = 0.22 if guard_shape == "boxy" else 0.0
+    shape_bonus = 0.20 if guard_shape == "boxy" else 0.0
+
+    studio_relief = 0.30 * _studio_density_score(analysis)
 
     return _clamp(
-        (mud_score * 0.38)
-        + (relation_score * 0.24)
+        (mud_score * 0.36)
+        + (relation_score * 0.28)
         + (ratio_score * 0.16)
-        + shape_bonus,
+        + shape_bonus
+        - studio_relief,
         0.0,
         1.0,
     )
@@ -214,26 +308,29 @@ def _top_risk_score(analysis: SmartMasterAnalysis) -> float:
     harsh_to_mid = _metric(analysis, "harsh_to_mid_db", -7.0)
     harsh_band = _metric(analysis, "harsh_2p5k_6k_db", 16.0)
     sibilance_band = _metric(analysis, "sibilance_5k_9k_db", 15.0)
+    top_push_safety = _derived(analysis, "top_push_safety_proxy", 0.65)
 
-    harsh_score = _clamp((harshness_index + 12.0) / 6.0, 0.0, 1.0)
-    sibilance_score = _clamp((sibilance_index + 7.0) / 5.0, 0.0, 1.0)
-    harsh_to_mid_score = _clamp((harsh_to_mid + 7.0) / 4.0, 0.0, 1.0)
-    harsh_band_score = _clamp((harsh_band - 16.0) / 5.0, 0.0, 1.0)
-    sib_band_score = _clamp((sibilance_band - 15.0) / 4.0, 0.0, 1.0)
+    harsh_score = _clamp((harshness_index + 12.0) / 6.5, 0.0, 1.0)
+    sibilance_score = _clamp((sibilance_index + 6.5) / 5.5, 0.0, 1.0)
+    harsh_to_mid_score = _clamp((harsh_to_mid + 6.2) / 4.5, 0.0, 1.0)
+    harsh_band_score = _clamp((harsh_band - 17.0) / 5.5, 0.0, 1.0)
+    sib_band_score = _clamp((sibilance_band - 16.0) / 4.5, 0.0, 1.0)
+    top_safety_collapse = _clamp((0.42 - top_push_safety) / 0.42, 0.0, 1.0)
 
     projection_harsh = _value(_section_value(analysis, "projection", "harshness_risk", "low"))
     projection_sib = _value(_section_value(analysis, "projection", "sibilance_risk", "low"))
 
-    projection_bonus = 0.20 if projection_harsh == "high" else 0.10 if projection_harsh == "medium" else 0.0
-    sib_bonus = 0.12 if projection_sib == "high" else 0.06 if projection_sib == "medium" else 0.0
-    flag_bonus = 0.10 if _flag_bool(analysis, "top_risk_candidate", False) else 0.0
+    projection_bonus = 0.16 if projection_harsh == "high" else 0.07 if projection_harsh == "medium" else 0.0
+    sib_bonus = 0.10 if projection_sib == "high" else 0.05 if projection_sib == "medium" else 0.0
+    flag_bonus = 0.08 if _flag_bool(analysis, "top_risk_candidate", False) else 0.0
 
     return _clamp(
-        (harsh_score * 0.22)
-        + (sibilance_score * 0.18)
-        + (harsh_to_mid_score * 0.18)
-        + (harsh_band_score * 0.14)
-        + (sib_band_score * 0.10)
+        (harsh_score * 0.20)
+        + (sibilance_score * 0.17)
+        + (harsh_to_mid_score * 0.16)
+        + (harsh_band_score * 0.12)
+        + (sib_band_score * 0.08)
+        + (top_safety_collapse * 0.12)
         + projection_bonus
         + sib_bonus
         + flag_bonus,
@@ -242,23 +339,57 @@ def _top_risk_score(analysis: SmartMasterAnalysis) -> float:
     )
 
 
+def _hard_top_emergency_score(analysis: SmartMasterAnalysis) -> float:
+    harshness_index = _metric(analysis, "harshness_index", -10.0)
+    sibilance_index = _metric(analysis, "sibilance_index", -7.0)
+    true_peak = _metric(analysis, "true_peak_dbtp", -1.0)
+    near_clip = _metric(analysis, "near_clip_ratio", 0.0)
+    top_push_safety = _derived(analysis, "top_push_safety_proxy", 0.65)
+    crest = _metric(analysis, "crest_db", 11.0)
+    punch = _metric(analysis, "punch_proxy", 11.0)
+
+    harsh_emergency = _clamp((harshness_index + 7.0) / 4.0, 0.0, 1.0)
+    sib_emergency = _clamp((sibilance_index + 2.5) / 4.0, 0.0, 1.0)
+    tp_emergency = _clamp((true_peak - 1.6) / 1.2, 0.0, 1.0)
+    clip_emergency = _clamp((near_clip - 0.012) / 0.018, 0.0, 1.0)
+    safety_collapse = _clamp((0.24 - top_push_safety) / 0.24, 0.0, 1.0)
+    punch_collapse = _clamp((8.0 - crest) / 2.0, 0.0, 1.0) * _clamp((9.0 - punch) / 2.0, 0.0, 1.0)
+
+    return _clamp(
+        (harsh_emergency * 0.18)
+        + (sib_emergency * 0.18)
+        + (tp_emergency * 0.20)
+        + (clip_emergency * 0.18)
+        + (safety_collapse * 0.18)
+        + (punch_collapse * 0.08),
+        0.0,
+        1.0,
+    )
+
+
 def _projection_need_score(analysis: SmartMasterAnalysis) -> float:
     presence_to_body = _metric(analysis, "presence_to_body_db", -15.0)
     mid_1k_2k = _metric(analysis, "mid_1k_2k_db", 27.0)
-    body_handoff_proxy = _safe(_section_value(analysis, "derived", "body_to_mid_handoff_proxy", 0.7), 0.7)
+    body_handoff_proxy = _derived(analysis, "body_to_mid_handoff_proxy", 0.7)
+    studio_density = _studio_density_score(analysis)
 
     presence_gap = _clamp((-12.5 - presence_to_body) / 8.0, 0.0, 1.0)
     mid_weak = _clamp((27.0 - mid_1k_2k) / 5.0, 0.0, 1.0)
-    handoff_bonus = _clamp((body_handoff_proxy - 0.70) / 0.35, 0.0, 1.0) * 0.12
+    handoff_bonus = _clamp((body_handoff_proxy - 0.62) / 0.38, 0.0, 1.0) * 0.12
+    studio_reveal_need = studio_density * _clamp((-13.0 - presence_to_body) / 7.0, 0.0, 1.0) * 0.14
 
-    state = _value(_section_value(analysis, "projection", "readiness", "balanced"))
-    readiness_bonus = 0.10 if state in {"guarded", "ready", "balanced"} else 0.0
+    readiness = _value(_section_value(analysis, "projection", "readiness", "balanced"))
+    readiness_bonus = 0.10 if readiness in {"guarded", "ready", "balanced"} else 0.0
+
+    emergency_relief = _hard_top_emergency_score(analysis) * 0.42
 
     return _clamp(
-        (presence_gap * 0.62)
+        (presence_gap * 0.54)
         + (mid_weak * 0.18)
         + handoff_bonus
-        + readiness_bonus,
+        + studio_reveal_need
+        + readiness_bonus
+        - emergency_relief,
         0.0,
         1.0,
     )
@@ -267,11 +398,12 @@ def _projection_need_score(analysis: SmartMasterAnalysis) -> float:
 def _air_need_score(analysis: SmartMasterAnalysis) -> float:
     air_ratio = _metric(analysis, "air_ratio_db", -20.0)
     air16_to_body = _metric(analysis, "air16_to_body_db", -22.0)
+    top_risk = _top_risk_score(analysis)
 
     air_gap = _clamp((-18.5 - air_ratio) / 8.0, 0.0, 1.0)
     air16_gap = _clamp((-20.5 - air16_to_body) / 8.0, 0.0, 1.0)
 
-    return _clamp((air_gap * 0.62) + (air16_gap * 0.38), 0.0, 1.0)
+    return _clamp(((air_gap * 0.62) + (air16_gap * 0.38)) * _lerp(1.0, 0.55, top_risk), 0.0, 1.0)
 
 
 def _metric_presence_center(analysis: SmartMasterAnalysis) -> float:
@@ -279,16 +411,16 @@ def _metric_presence_center(analysis: SmartMasterAnalysis) -> float:
     harsh_to_mid = _metric(analysis, "harsh_to_mid_db", -6.0)
     top_risk = _top_risk_score(analysis)
 
-    if top_risk > 0.62:
+    if top_risk > 0.70:
         return 2150.0 if presence_to_body < -17.0 else 2300.0
 
     if presence_to_body < -18.5:
         return 2200.0
 
     if harsh_to_mid > -4.5:
-        return 2550.0
+        return 2500.0
 
-    return 2400.0
+    return 2350.0
 
 
 def _metric_cleanup_center(analysis: SmartMasterAnalysis) -> float:
@@ -300,26 +432,30 @@ def _metric_cleanup_center(analysis: SmartMasterAnalysis) -> float:
     body_protect = _body_protection_score(analysis)
     bridge_protect = _bridge_protection_score(analysis)
     buildup_need = _buildup_need_score(analysis)
+    studio_density = _studio_density_score(analysis)
+
+    if studio_density > 0.62 and buildup_need < 0.42:
+        return 360.0
 
     if body_protect > 0.66:
-        return 340.0
+        return 345.0
 
     if bridge_protect > 0.62:
-        return 325.0
+        return 330.0
 
     if mud_to_body > 0.35:
-        return 340.0
+        return 345.0
 
     if mud >= 37.0 and buildup_need > 0.55:
         return 315.0
 
     if buildup - low_body > 1.2 and body_protect < 0.45:
-        return 280.0
+        return 285.0
 
     if mud >= 36.0:
-        return 300.0
+        return 305.0
 
-    return 285.0
+    return 295.0
 
 
 def _metric_guard_center(analysis: SmartMasterAnalysis) -> float:
@@ -327,9 +463,13 @@ def _metric_guard_center(analysis: SmartMasterAnalysis) -> float:
     mud_to_body = _metric(analysis, "mud_to_body_db", -1.0)
     guard_need = _guard_need_score(analysis)
     body_protect = _body_protection_score(analysis)
+    studio_density = _studio_density_score(analysis)
+
+    if studio_density > 0.62 and guard_need < 0.40:
+        return 420.0
 
     if body_protect > 0.66:
-        return 390.0
+        return 395.0
 
     if mud_to_body > 0.35:
         return 420.0
@@ -338,9 +478,9 @@ def _metric_guard_center(analysis: SmartMasterAnalysis) -> float:
         return 390.0
 
     if mud > 36.0:
-        return 360.0
+        return 365.0
 
-    return 330.0
+    return 340.0
 
 
 def _metric_anchor_center(analysis: SmartMasterAnalysis) -> float:
@@ -381,10 +521,10 @@ def _metric_harsh_center(analysis: SmartMasterAnalysis) -> float:
     sibilance = _metric(analysis, "sibilance_5k_9k_db", 15.5)
     harsh_to_mid = _metric(analysis, "harsh_to_mid_db", -7.0)
 
-    if sibilance > 16.8:
-        return 5200.0
+    if sibilance > 17.0:
+        return 5400.0
 
-    if harsh > 18.0 or harsh_to_mid > -5.2:
+    if harsh > 18.2 or harsh_to_mid > -5.0:
         return 4300.0
 
     return 4700.0
@@ -392,9 +532,9 @@ def _metric_harsh_center(analysis: SmartMasterAnalysis) -> float:
 
 def _metric_sibilance_center(analysis: SmartMasterAnalysis) -> float:
     sibilance = _metric(analysis, "sibilance_5k_9k_db", 15.5)
-    if sibilance > 16.5:
-        return 7100.0
-    if sibilance > 15.5:
+    if sibilance > 17.0:
+        return 7200.0
+    if sibilance > 15.8:
         return 6600.0
     return 6100.0
 
@@ -403,7 +543,7 @@ def _metric_air_center(analysis: SmartMasterAnalysis) -> float:
     air_ratio = _metric(analysis, "air_ratio_db", -18.0)
     top_risk = _top_risk_score(analysis)
 
-    if top_risk > 0.62:
+    if top_risk > 0.70:
         return 11800.0
 
     if air_ratio < -23.0:
@@ -421,16 +561,16 @@ def _delivery_hot_score(analysis: SmartMasterAnalysis) -> float:
     limiter_stress_proxy = _metric(analysis, "limiter_stress_proxy", 0.0)
     near_clip_ratio = _metric(analysis, "near_clip_ratio", 0.0)
 
-    tp_hot = _clamp((true_peak_dbtp + 0.15) / 1.60, 0.0, 1.0)
-    loud_hot = _clamp((integrated_lufs + 8.40) / 2.20, 0.0, 1.0)
-    stress_hot = _clamp((limiter_stress_proxy - 0.88) / 0.18, 0.0, 1.0)
-    clip_hot = _clamp(near_clip_ratio / 0.0040, 0.0, 1.0)
+    tp_hot = _clamp((true_peak_dbtp + 0.90) / 1.80, 0.0, 1.0)
+    loud_hot = _clamp((integrated_lufs + 8.20) / 2.60, 0.0, 1.0)
+    stress_hot = _clamp((limiter_stress_proxy - 1.02) / 0.36, 0.0, 1.0)
+    clip_hot = _clamp(near_clip_ratio / 0.0060, 0.0, 1.0)
 
     return _clamp(
-        (tp_hot * 0.42)
-        + (loud_hot * 0.20)
-        + (stress_hot * 0.23)
-        + (clip_hot * 0.15),
+        (tp_hot * 0.48)
+        + (loud_hot * 0.16)
+        + (stress_hot * 0.20)
+        + (clip_hot * 0.16),
         0.0,
         1.0,
     )
@@ -442,16 +582,16 @@ def _delivery_quiet_score(analysis: SmartMasterAnalysis) -> float:
     limiter_stress_proxy = _metric(analysis, "limiter_stress_proxy", 0.0)
     near_clip_ratio = _metric(analysis, "near_clip_ratio", 0.0)
 
-    quiet_lufs = _clamp((-10.60 - integrated_lufs) / 3.40, 0.0, 1.0)
-    tp_room = _clamp((-1.40 - true_peak_dbtp) / 1.80, 0.0, 1.0)
-    stress_room = _clamp((0.90 - limiter_stress_proxy) / 0.22, 0.0, 1.0)
-    clip_room = _clamp((0.0015 - near_clip_ratio) / 0.0015, 0.0, 1.0)
+    quiet_lufs = _clamp((-11.20 - integrated_lufs) / 4.20, 0.0, 1.0)
+    tp_room = _clamp((-1.45 - true_peak_dbtp) / 2.50, 0.0, 1.0)
+    stress_room = _clamp((1.02 - limiter_stress_proxy) / 0.36, 0.0, 1.0)
+    clip_room = _clamp((0.0025 - near_clip_ratio) / 0.0025, 0.0, 1.0)
 
     return _clamp(
-        (quiet_lufs * 0.45)
-        + (tp_room * 0.25)
-        + (stress_room * 0.20)
-        + (clip_room * 0.10),
+        (quiet_lufs * 0.46)
+        + (tp_room * 0.30)
+        + (stress_room * 0.16)
+        + (clip_room * 0.08),
         0.0,
         1.0,
     )
@@ -461,18 +601,44 @@ def _delivery_punch_safety(analysis: SmartMasterAnalysis) -> float:
     crest_db = _metric(analysis, "crest_db", 10.0)
     punch_proxy = _metric(analysis, "punch_proxy", 10.0)
     lra_ebu = _metric(analysis, "lra_ebu", 3.0)
+    plr = _metric(analysis, "plr_proxy_db", 10.0)
 
-    crest_score = _clamp((crest_db - 8.8) / 3.2, 0.0, 1.0)
-    punch_score = _clamp((punch_proxy - 9.8) / 3.0, 0.0, 1.0)
-    lra_score = _clamp((lra_ebu - 1.8) / 3.0, 0.0, 1.0)
+    crest_score = _clamp((crest_db - 8.8) / 4.0, 0.0, 1.0)
+    punch_score = _clamp((punch_proxy - 9.6) / 4.2, 0.0, 1.0)
+    lra_score = _clamp((lra_ebu - 1.8) / 3.5, 0.0, 1.0)
+    plr_score = _clamp((plr - 8.8) / 4.2, 0.0, 1.0)
 
     return _clamp(
-        (crest_score * 0.45)
-        + (punch_score * 0.45)
+        (crest_score * 0.34)
+        + (punch_score * 0.36)
+        + (plr_score * 0.20)
         + (lra_score * 0.10),
         0.0,
         1.0,
     )
+
+
+def _delivery_target_lufs(analysis: SmartMasterAnalysis) -> float:
+    studio_density = _studio_density_score(analysis)
+    punch_safety = _delivery_punch_safety(analysis)
+    integrated_lufs = _metric(analysis, "integrated_lufs", -12.0)
+
+    if integrated_lufs <= -14.0:
+        base = -11.2
+    elif integrated_lufs <= -12.3:
+        base = -10.9
+    elif integrated_lufs <= -10.8:
+        base = -10.7
+    else:
+        base = integrated_lufs + 0.15
+
+    if studio_density > 0.62:
+        base = min(base, integrated_lufs + 0.45)
+
+    if punch_safety < 0.40:
+        base = min(base, integrated_lufs + 0.25)
+
+    return _clamp(base, -12.2, -9.8)
 
 
 def _spec_attr(primitive_name: str, attr: str, fallback: Any) -> Any:
@@ -592,10 +758,12 @@ def _build_controlled_bell_boost(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_anchor_center(ctx.analysis)
     body_protect = _body_protection_score(ctx.analysis)
     buildup_need = _buildup_need_score(ctx.analysis)
+    studio_density = _studio_density_score(ctx.analysis)
 
     gain = _lerp(0.30, 1.18, ctx.activity)
     gain *= _lerp(1.08, 0.88, buildup_need)
-    gain *= _lerp(0.92, 1.14, body_protect)
+    gain *= _lerp(0.96, 1.16, body_protect)
+    gain *= _lerp(1.00, 0.94, studio_density)
     gain = _clamp(gain, 0.22, 1.20)
 
     q = _lerp(0.68, 1.08, ctx.activity)
@@ -606,7 +774,11 @@ def _build_controlled_bell_boost(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         gain_db=round(gain, 4),
         freq_hz=round(freq, 2),
         q=round(q, 4),
-        notes=["Controlled body-support bell boost with body-protection and mud-aware scaling."],
+        notes=[
+            "Controlled body-support bell boost with body-protection and mud-aware scaling.",
+            f"useful_body_score={round(_useful_body_score(ctx.analysis), 4)}",
+            f"studio_density_score={round(studio_density, 4)}",
+        ],
     )
 
 
@@ -614,10 +786,12 @@ def _build_dynamic_body_support_boost(ctx: _PrimitiveBuildContext) -> Dict[str, 
     freq = _metric_anchor_center(ctx.analysis)
     body_protect = _body_protection_score(ctx.analysis)
     buildup_need = _buildup_need_score(ctx.analysis)
+    studio_density = _studio_density_score(ctx.analysis)
 
     gain = _lerp(0.38, 1.42, ctx.activity)
     gain *= _lerp(1.04, 0.88, buildup_need)
-    gain *= _lerp(0.94, 1.18, body_protect)
+    gain *= _lerp(0.96, 1.18, body_protect)
+    gain *= _lerp(1.00, 0.94, studio_density)
     gain = _clamp(gain, 0.30, 1.45)
 
     q = _lerp(0.78, 1.38, ctx.activity)
@@ -640,15 +814,18 @@ def _build_restrained_parallel_fill(ctx: _PrimitiveBuildContext) -> Dict[str, An
     freq = _metric_anchor_center(ctx.analysis)
     body_protect = _body_protection_score(ctx.analysis)
     buildup_need = _buildup_need_score(ctx.analysis)
+    studio_density = _studio_density_score(ctx.analysis)
 
     gain = _lerp(0.34, 1.12, ctx.activity)
     gain *= _lerp(1.06, 0.86, buildup_need)
-    gain *= _lerp(0.96, 1.16, body_protect)
+    gain *= _lerp(0.98, 1.14, body_protect)
+    gain *= _lerp(1.00, 0.92, studio_density)
     gain = _clamp(gain, 0.24, 1.14)
 
     mix = _lerp(0.070, 0.215, ctx.activity)
     mix *= _lerp(1.05, 0.82, buildup_need)
-    mix *= _lerp(0.95, 1.12, body_protect)
+    mix *= _lerp(0.96, 1.10, body_protect)
+    mix *= _lerp(1.00, 0.90, studio_density)
     mix = _clamp(mix, 0.055, 0.215)
 
     q = _lerp(0.66, 1.02, ctx.activity)
@@ -696,18 +873,18 @@ def _build_transient_safe_support_compression(ctx: _PrimitiveBuildContext) -> Di
     bridge_protect = _bridge_protection_score(ctx.analysis)
     punch_safety = _delivery_punch_safety(ctx.analysis)
 
-    ratio = _lerp(1.18, 1.82, ctx.activity)
+    ratio = _lerp(1.12, 1.72, ctx.activity)
     ratio *= _lerp(0.92, 1.04, bridge_protect)
-    ratio *= _lerp(0.88, 1.00, punch_safety)
-    ratio = _clamp(ratio, 1.12, 1.90)
+    ratio *= _lerp(0.86, 1.00, punch_safety)
+    ratio = _clamp(ratio, 1.08, 1.78)
 
-    threshold = _lerp(-24.0, -15.5, ctx.activity)
-    attack = _lerp(22.0, 42.0, 1.0 - ctx.activity)
+    threshold = _lerp(-24.0, -15.8, ctx.activity)
+    attack = _lerp(26.0, 46.0, 1.0 - ctx.activity)
     release = _lerp(90.0, 210.0, ctx.activity)
 
-    mix = _lerp(0.08, 0.22, ctx.activity)
-    mix *= _lerp(0.85, 1.00, punch_safety)
-    mix = _clamp(mix, 0.06, 0.22)
+    mix = _lerp(0.07, 0.20, ctx.activity)
+    mix *= _lerp(0.80, 1.00, punch_safety)
+    mix = _clamp(mix, 0.05, 0.20)
 
     return _base_instance(
         ctx,
@@ -726,43 +903,46 @@ def _build_dynamic_bell_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     body_protect = _body_protection_score(ctx.analysis)
     bridge_protect = _bridge_protection_score(ctx.analysis)
     guard_need = _guard_need_score(ctx.analysis)
+    studio_density = _studio_density_score(ctx.analysis)
 
     if ctx.is_cleanup:
         freq = _metric_cleanup_center(ctx.analysis)
 
-        depth = _lerp(0.58, 2.25, ctx.activity)
-        depth *= _lerp(0.92, 1.24, buildup_need)
-        depth *= _lerp(1.00, 0.70, body_protect)
-        depth *= _lerp(1.00, 0.90, bridge_protect)
-        depth = _clamp(depth, 0.45, 2.35)
+        depth = _lerp(0.42, 2.05, ctx.activity)
+        depth *= _lerp(0.82, 1.30, buildup_need)
+        depth *= _lerp(1.00, 0.62, body_protect)
+        depth *= _lerp(1.00, 0.86, bridge_protect)
+        depth *= _lerp(1.00, 0.66, studio_density)
+        depth = _clamp(depth, 0.25, 2.20)
 
-        q = _lerp(1.08, 2.05, ctx.activity)
+        q = _lerp(1.06, 2.05, ctx.activity)
         q *= _lerp(0.96, 1.10, buildup_need)
         q = _clamp(q, 0.95, 2.25)
 
-        attack = _lerp(7.0, 16.0, 1.0 - ctx.activity)
-        release = _lerp(75.0, 210.0, ctx.activity)
+        attack = _lerp(8.0, 18.0, 1.0 - ctx.activity)
+        release = _lerp(85.0, 220.0, ctx.activity)
 
     elif ctx.is_guard:
         freq = _metric_guard_center(ctx.analysis)
 
-        depth = _lerp(0.24, 0.98, ctx.activity)
-        depth *= _lerp(0.88, 1.18, guard_need)
-        depth *= _lerp(1.00, 0.74, body_protect)
-        depth = _clamp(depth, 0.18, 1.05)
+        depth = _lerp(0.18, 0.88, ctx.activity)
+        depth *= _lerp(0.82, 1.20, guard_need)
+        depth *= _lerp(1.00, 0.64, body_protect)
+        depth *= _lerp(1.00, 0.70, studio_density)
+        depth = _clamp(depth, 0.10, 0.95)
 
         q = _lerp(1.05, 1.80, ctx.activity)
         q *= _lerp(0.95, 1.08, guard_need)
         q = _clamp(q, 0.95, 1.95)
 
-        attack = _lerp(8.0, 18.0, 1.0 - ctx.activity)
-        release = _lerp(85.0, 220.0, ctx.activity)
+        attack = _lerp(9.0, 20.0, 1.0 - ctx.activity)
+        release = _lerp(90.0, 230.0, ctx.activity)
 
     elif ctx.is_anchor:
         freq = _lerp(210.0, 300.0, ctx.activity)
-        depth = _lerp(0.10, 0.42, ctx.activity)
-        depth *= _lerp(1.00, 0.82, body_protect)
-        depth = _clamp(depth, 0.06, 0.45)
+        depth = _lerp(0.08, 0.38, ctx.activity)
+        depth *= _lerp(1.00, 0.76, body_protect)
+        depth = _clamp(depth, 0.04, 0.40)
 
         q = _lerp(0.85, 1.35, ctx.activity)
         attack = _lerp(10.0, 20.0, 1.0 - ctx.activity)
@@ -770,9 +950,9 @@ def _build_dynamic_bell_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
 
     elif ctx.is_bridge:
         freq = _lerp(125.0, 190.0, ctx.activity)
-        depth = _lerp(0.08, 0.38, ctx.activity)
-        depth *= _lerp(1.00, 0.82, bridge_protect)
-        depth = _clamp(depth, 0.05, 0.40)
+        depth = _lerp(0.06, 0.34, ctx.activity)
+        depth *= _lerp(1.00, 0.78, bridge_protect)
+        depth = _clamp(depth, 0.04, 0.36)
 
         q = _lerp(0.82, 1.35, ctx.activity)
         attack = _lerp(10.0, 20.0, 1.0 - ctx.activity)
@@ -780,7 +960,7 @@ def _build_dynamic_bell_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
 
     else:
         freq = 300.0
-        depth = _lerp(0.24, 0.88, ctx.activity)
+        depth = _lerp(0.20, 0.78, ctx.activity)
         q = _lerp(1.00, 1.70, ctx.activity)
         attack = _lerp(8.0, 18.0, 1.0 - ctx.activity)
         release = _lerp(70.0, 180.0, ctx.activity)
@@ -793,7 +973,12 @@ def _build_dynamic_bell_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         q=round(q, 4),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Dynamic cleanup separates buildup/mud from useful body with body and bridge protection."],
+        notes=[
+            "Dynamic cleanup separates real buildup/mud from useful studio body.",
+            f"real_mud_confidence_score={round(_real_mud_confidence_score(ctx.analysis), 4)}",
+            f"studio_density_score={round(studio_density, 4)}",
+            f"body_protection_score={round(body_protect, 4)}",
+        ],
     )
 
 
@@ -801,15 +986,17 @@ def _build_dynamic_wide_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_cleanup_center(ctx.analysis)
     buildup_need = _buildup_need_score(ctx.analysis)
     body_protect = _body_protection_score(ctx.analysis)
+    studio_density = _studio_density_score(ctx.analysis)
 
-    depth = _lerp(0.28, 1.32, ctx.activity)
-    depth *= _lerp(0.92, 1.16, buildup_need)
-    depth *= _lerp(1.00, 0.68, body_protect)
-    depth = _clamp(depth, 0.22, 1.38)
+    depth = _lerp(0.22, 1.18, ctx.activity)
+    depth *= _lerp(0.82, 1.20, buildup_need)
+    depth *= _lerp(1.00, 0.62, body_protect)
+    depth *= _lerp(1.00, 0.58, studio_density)
+    depth = _clamp(depth, 0.14, 1.24)
 
     q = _lerp(0.45, 0.82, ctx.activity)
-    attack = _lerp(12.0, 22.0, 1.0 - ctx.activity)
-    release = _lerp(110.0, 260.0, ctx.activity)
+    attack = _lerp(14.0, 24.0, 1.0 - ctx.activity)
+    release = _lerp(120.0, 280.0, ctx.activity)
 
     return _base_instance(
         ctx,
@@ -819,7 +1006,7 @@ def _build_dynamic_wide_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         q=round(q, 4),
         attack_ms=round(attack, 3),
         release_ms=round(release, 3),
-        notes=["Wide low-mid cleanup for distributed buildup, reduced on body-fragile material."],
+        notes=["Wide low-mid cleanup only when buildup is real, not when density is studio body."],
     )
 
 
@@ -836,10 +1023,12 @@ def _build_restrained_static_cut(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         freq = 330.0
 
     body_protect = _body_protection_score(ctx.analysis)
+    studio_density = _studio_density_score(ctx.analysis)
 
-    depth = _lerp(0.10, 0.50, ctx.activity)
-    depth *= _lerp(1.00, 0.70, body_protect)
-    depth = _clamp(depth, 0.06, 0.52)
+    depth = _lerp(0.08, 0.44, ctx.activity)
+    depth *= _lerp(1.00, 0.66, body_protect)
+    depth *= _lerp(1.00, 0.68, studio_density)
+    depth = _clamp(depth, 0.04, 0.46)
 
     q = _lerp(0.88, 1.55, ctx.activity)
 
@@ -858,13 +1047,13 @@ def _build_dynamic_tilt_down(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     projection_need = _projection_need_score(ctx.analysis)
 
     pivot = _lerp(950.0, 1450.0, ctx.activity)
-    tilt = _lerp(0.12, 0.62, ctx.activity)
-    tilt *= _lerp(0.80, 1.16, top_risk)
-    tilt *= _lerp(1.00, 0.72, projection_need)
-    tilt = _clamp(tilt, 0.08, 0.66)
+    tilt = _lerp(0.10, 0.54, ctx.activity)
+    tilt *= _lerp(0.80, 1.14, top_risk)
+    tilt *= _lerp(1.00, 0.66, projection_need)
+    tilt = _clamp(tilt, 0.06, 0.58)
 
-    attack = _lerp(10.0, 24.0, 1.0 - ctx.activity)
-    release = _lerp(90.0, 210.0, ctx.activity)
+    attack = _lerp(12.0, 26.0, 1.0 - ctx.activity)
+    release = _lerp(95.0, 220.0, ctx.activity)
 
     return _base_instance(
         ctx,
@@ -880,14 +1069,16 @@ def _build_dynamic_tilt_down(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
 def _build_local_antiharsh_control(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_harsh_center(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
+    projection_need = _projection_need_score(ctx.analysis)
 
-    depth = _lerp(0.34, 1.22, ctx.activity)
+    depth = _lerp(0.28, 1.12, ctx.activity)
     depth *= _lerp(0.82, 1.28, top_risk)
-    depth = _clamp(depth, 0.28, 1.38)
+    depth *= _lerp(1.00, 0.88, projection_need)
+    depth = _clamp(depth, 0.20, 1.24)
 
     q = _lerp(1.35, 2.90, ctx.activity)
-    attack = _lerp(1.2, 7.5, 1.0 - ctx.activity)
-    release = _lerp(35.0, 130.0, ctx.activity)
+    attack = _lerp(1.4, 7.5, 1.0 - ctx.activity)
+    release = _lerp(38.0, 130.0, ctx.activity)
 
     return _base_instance(
         ctx,
@@ -905,13 +1096,15 @@ def _build_broad_presence_contour(ctx: _PrimitiveBuildContext) -> Dict[str, Any]
     freq = _metric_presence_center(ctx.analysis)
     projection_need = _projection_need_score(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
+    top_emergency = _hard_top_emergency_score(ctx.analysis)
     body_protect = _body_protection_score(ctx.analysis)
 
-    gain = _lerp(0.58, 1.92, ctx.activity)
+    gain = _lerp(0.50, 1.78, ctx.activity)
     gain *= _lerp(0.96, 1.24, projection_need)
     gain *= _lerp(1.00, 0.78, top_risk)
+    gain *= _lerp(1.00, 0.50, top_emergency)
     gain *= _lerp(1.00, 0.92, body_protect)
-    gain = _clamp(gain, 0.38, 1.95)
+    gain = _clamp(gain, 0.28, 1.82)
 
     q = _lerp(0.40, 0.78, ctx.activity)
     q *= _lerp(1.00, 0.92, top_risk)
@@ -923,7 +1116,12 @@ def _build_broad_presence_contour(ctx: _PrimitiveBuildContext) -> Dict[str, Any]
         gain_db=round(gain, 4),
         freq_hz=round(freq, 2),
         q=round(q, 4),
-        notes=["Body-linked center-forward contour for real mastered projection, not cheap brightness."],
+        notes=[
+            "Body-linked center-forward contour for real mastered projection, not cheap brightness.",
+            f"projection_need_score={round(projection_need, 4)}",
+            f"top_risk_score={round(top_risk, 4)}",
+            f"hard_top_emergency_score={round(top_emergency, 4)}",
+        ],
     )
 
 
@@ -931,15 +1129,17 @@ def _build_dynamic_presence_lift(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_presence_center(ctx.analysis)
     projection_need = _projection_need_score(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
+    top_emergency = _hard_top_emergency_score(ctx.analysis)
 
-    gain = _lerp(0.42, 1.55, ctx.activity)
+    gain = _lerp(0.36, 1.42, ctx.activity)
     gain *= _lerp(0.96, 1.22, projection_need)
     gain *= _lerp(1.00, 0.76, top_risk)
-    gain = _clamp(gain, 0.28, 1.55)
+    gain *= _lerp(1.00, 0.48, top_emergency)
+    gain = _clamp(gain, 0.20, 1.45)
 
     q = _lerp(0.74, 1.30, ctx.activity)
-    attack = _lerp(4.0, 13.0, 1.0 - ctx.activity)
-    release = _lerp(45.0, 125.0, ctx.activity)
+    attack = _lerp(4.5, 14.0, 1.0 - ctx.activity)
+    release = _lerp(48.0, 130.0, ctx.activity)
 
     return _base_instance(
         ctx,
@@ -957,15 +1157,17 @@ def _build_projection_local_deharsh(ctx: _PrimitiveBuildContext) -> Dict[str, An
     freq = _metric_harsh_center(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
     projection_need = _projection_need_score(ctx.analysis)
+    top_emergency = _hard_top_emergency_score(ctx.analysis)
 
-    depth = _lerp(0.30, 1.12, ctx.activity)
-    depth *= _lerp(0.90, 1.32, top_risk)
-    depth *= _lerp(0.92, 1.08, projection_need)
-    depth = _clamp(depth, 0.24, 1.28)
+    depth = _lerp(0.26, 1.08, ctx.activity)
+    depth *= _lerp(0.90, 1.26, top_risk)
+    depth *= _lerp(0.92, 1.06, projection_need)
+    depth *= _lerp(1.00, 1.20, top_emergency)
+    depth = _clamp(depth, 0.18, 1.28)
 
     q = _lerp(1.55, 3.00, ctx.activity)
-    attack = _lerp(0.9, 5.8, 1.0 - ctx.activity)
-    release = _lerp(38.0, 120.0, ctx.activity)
+    attack = _lerp(1.0, 6.0, 1.0 - ctx.activity)
+    release = _lerp(40.0, 125.0, ctx.activity)
 
     return _base_instance(
         ctx,
@@ -982,16 +1184,19 @@ def _build_projection_local_deharsh(ctx: _PrimitiveBuildContext) -> Dict[str, An
 def _build_band_limited_soft_saturation(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     projection_need = _projection_need_score(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
+    top_emergency = _hard_top_emergency_score(ctx.analysis)
 
-    drive = _lerp(0.52, 2.55, ctx.activity)
+    drive = _lerp(0.42, 2.30, ctx.activity)
     drive *= _lerp(0.96, 1.18, projection_need)
-    drive *= _lerp(1.00, 0.76, top_risk)
-    drive = _clamp(drive, 0.35, 2.45)
+    drive *= _lerp(1.00, 0.74, top_risk)
+    drive *= _lerp(1.00, 0.34, top_emergency)
+    drive = _clamp(drive, 0.22, 2.25)
 
-    mix = _lerp(0.075, 0.235, ctx.activity)
+    mix = _lerp(0.060, 0.210, ctx.activity)
     mix *= _lerp(0.96, 1.14, projection_need)
-    mix *= _lerp(1.00, 0.72, top_risk)
-    mix = _clamp(mix, 0.050, 0.225)
+    mix *= _lerp(1.00, 0.70, top_risk)
+    mix *= _lerp(1.00, 0.35, top_emergency)
+    mix = _clamp(mix, 0.035, 0.205)
 
     low_cut = _lerp(1200.0, 1500.0, top_risk)
     high_cut = _lerp(6400.0, 5000.0, top_risk)
@@ -1010,16 +1215,19 @@ def _build_band_limited_soft_saturation(ctx: _PrimitiveBuildContext) -> Dict[str
 def _build_controlled_harmonic_density(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     projection_need = _projection_need_score(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
+    top_emergency = _hard_top_emergency_score(ctx.analysis)
 
-    drive = _lerp(0.42, 2.05, ctx.activity)
+    drive = _lerp(0.34, 1.88, ctx.activity)
     drive *= _lerp(0.98, 1.14, projection_need)
-    drive *= _lerp(1.00, 0.78, top_risk)
-    drive = _clamp(drive, 0.32, 1.95)
+    drive *= _lerp(1.00, 0.76, top_risk)
+    drive *= _lerp(1.00, 0.34, top_emergency)
+    drive = _clamp(drive, 0.20, 1.82)
 
-    mix = _lerp(0.070, 0.200, ctx.activity)
+    mix = _lerp(0.055, 0.180, ctx.activity)
     mix *= _lerp(0.98, 1.12, projection_need)
-    mix *= _lerp(1.00, 0.74, top_risk)
-    mix = _clamp(mix, 0.048, 0.190)
+    mix *= _lerp(1.00, 0.72, top_risk)
+    mix *= _lerp(1.00, 0.36, top_emergency)
+    mix = _clamp(mix, 0.034, 0.175)
 
     low_cut = _lerp(1150.0, 1450.0, top_risk)
     high_cut = _lerp(5700.0, 4700.0, top_risk)
@@ -1039,11 +1247,13 @@ def _build_micro_air_shelf(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     freq = _metric_air_center(ctx.analysis)
     air_need = _air_need_score(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
+    top_emergency = _hard_top_emergency_score(ctx.analysis)
 
-    gain = _lerp(0.16, 0.82, ctx.activity)
+    gain = _lerp(0.12, 0.70, ctx.activity)
     gain *= _lerp(0.94, 1.20, air_need)
-    gain *= _lerp(1.00, 0.68, top_risk)
-    gain = _clamp(gain, 0.08, 0.78)
+    gain *= _lerp(1.00, 0.66, top_risk)
+    gain *= _lerp(1.00, 0.25, top_emergency)
+    gain = _clamp(gain, 0.04, 0.70)
 
     return _base_instance(
         ctx,
@@ -1058,16 +1268,19 @@ def _build_micro_air_shelf(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
 def _build_micro_top_texture(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     air_need = _air_need_score(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
+    top_emergency = _hard_top_emergency_score(ctx.analysis)
 
-    drive = _lerp(0.16, 1.05, ctx.activity)
+    drive = _lerp(0.12, 0.92, ctx.activity)
     drive *= _lerp(0.96, 1.15, air_need)
-    drive *= _lerp(1.00, 0.72, top_risk)
-    drive = _clamp(drive, 0.10, 1.00)
+    drive *= _lerp(1.00, 0.70, top_risk)
+    drive *= _lerp(1.00, 0.25, top_emergency)
+    drive = _clamp(drive, 0.06, 0.90)
 
-    mix = _lerp(0.030, 0.105, ctx.activity)
+    mix = _lerp(0.024, 0.092, ctx.activity)
     mix *= _lerp(0.96, 1.12, air_need)
-    mix *= _lerp(1.00, 0.70, top_risk)
-    mix = _clamp(mix, 0.020, 0.095)
+    mix *= _lerp(1.00, 0.68, top_risk)
+    mix *= _lerp(1.00, 0.24, top_emergency)
+    mix = _clamp(mix, 0.012, 0.088)
 
     high_cut = _lerp(16000.0, 14500.0, top_risk)
     low_cut = _lerp(7800.0, 9000.0, top_risk)
@@ -1087,16 +1300,19 @@ def _build_protected_high_side_polish(ctx: _PrimitiveBuildContext) -> Dict[str, 
     freq = _metric_air_center(ctx.analysis)
     air_need = _air_need_score(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
+    top_emergency = _hard_top_emergency_score(ctx.analysis)
 
-    gain = _lerp(0.12, 0.46, ctx.activity)
+    gain = _lerp(0.10, 0.40, ctx.activity)
     gain *= _lerp(0.96, 1.12, air_need)
     gain *= _lerp(1.00, 0.62, top_risk)
-    gain = _clamp(gain, 0.06, 0.42)
+    gain *= _lerp(1.00, 0.25, top_emergency)
+    gain = _clamp(gain, 0.04, 0.38)
 
-    mix = _lerp(0.030, 0.090, ctx.activity)
+    mix = _lerp(0.024, 0.078, ctx.activity)
     mix *= _lerp(0.96, 1.10, air_need)
-    mix *= _lerp(1.00, 0.60, top_risk)
-    mix = _clamp(mix, 0.018, 0.082)
+    mix *= _lerp(1.00, 0.58, top_risk)
+    mix *= _lerp(1.00, 0.24, top_emergency)
+    mix = _clamp(mix, 0.012, 0.074)
 
     return _base_instance(
         ctx,
@@ -1111,16 +1327,19 @@ def _build_protected_high_side_polish(ctx: _PrimitiveBuildContext) -> Dict[str, 
 
 def _build_micro_width_high_only(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
     top_risk = _top_risk_score(ctx.analysis)
+    top_emergency = _hard_top_emergency_score(ctx.analysis)
     air_need = _air_need_score(ctx.analysis)
 
-    width = _lerp(0.030, 0.105, ctx.activity)
+    width = _lerp(0.024, 0.092, ctx.activity)
     width *= _lerp(0.96, 1.08, air_need)
-    width *= _lerp(1.00, 0.58, top_risk)
-    width = _clamp(width, 0.016, 0.095)
+    width *= _lerp(1.00, 0.56, top_risk)
+    width *= _lerp(1.00, 0.20, top_emergency)
+    width = _clamp(width, 0.010, 0.086)
 
-    mix = _lerp(0.030, 0.080, ctx.activity)
-    mix *= _lerp(1.00, 0.62, top_risk)
-    mix = _clamp(mix, 0.018, 0.074)
+    mix = _lerp(0.024, 0.070, ctx.activity)
+    mix *= _lerp(1.00, 0.60, top_risk)
+    mix *= _lerp(1.00, 0.22, top_emergency)
+    mix = _clamp(mix, 0.012, 0.066)
 
     low_cut = _lerp(7200.0, 8800.0, top_risk)
     high_cut = 16000.0
@@ -1141,13 +1360,13 @@ def _build_local_desibilance_control(ctx: _PrimitiveBuildContext) -> Dict[str, A
     freq = _metric_sibilance_center(ctx.analysis)
     top_risk = _top_risk_score(ctx.analysis)
 
-    depth = _lerp(0.24, 0.90, ctx.activity)
+    depth = _lerp(0.22, 0.86, ctx.activity)
     depth *= _lerp(0.88, 1.28, top_risk)
-    depth = _clamp(depth, 0.18, 1.02)
+    depth = _clamp(depth, 0.16, 0.98)
 
     q = _lerp(1.20, 2.50, ctx.activity)
-    attack = _lerp(0.7, 4.5, 1.0 - ctx.activity)
-    release = _lerp(26.0, 100.0, ctx.activity)
+    attack = _lerp(0.8, 4.8, 1.0 - ctx.activity)
+    release = _lerp(28.0, 104.0, ctx.activity)
 
     return _base_instance(
         ctx,
@@ -1162,30 +1381,54 @@ def _build_local_desibilance_control(ctx: _PrimitiveBuildContext) -> Dict[str, A
 
 
 def _build_output_gain_trim(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
+    integrated_lufs = _metric(ctx.analysis, "integrated_lufs", -12.0)
+    true_peak = _metric(ctx.analysis, "true_peak_dbtp", -1.0)
+    near_clip = _metric(ctx.analysis, "near_clip_ratio", 0.0)
+    limiter_stress = _metric(ctx.analysis, "limiter_stress_proxy", 0.0)
+
     hot_score = _delivery_hot_score(ctx.analysis)
     quiet_score = _delivery_quiet_score(ctx.analysis)
     punch_safety = _delivery_punch_safety(ctx.analysis)
+    studio_density = _studio_density_score(ctx.analysis)
 
-    if hot_score >= 0.22:
-        gain_trim = -(
-            0.005
-            + (0.145 * hot_score)
-            + (0.030 * (1.0 - punch_safety) * hot_score)
-        )
+    target_lufs = _delivery_target_lufs(ctx.analysis)
+    wanted_lift = max(0.0, target_lufs - integrated_lufs)
+
+    tp_room_to_safe_ceiling = max(0.0, -1.12 - true_peak)
+    moderate_limiter_allowance = _lerp(0.18, 0.55, punch_safety) * _lerp(1.0, 0.55, studio_density)
+    available_lift = tp_room_to_safe_ceiling + moderate_limiter_allowance
+
+    quiet_lift_cap = _lerp(0.45, 1.75, quiet_score)
+    punch_lift_cap = _lerp(0.42, 1.45, punch_safety)
+    studio_lift_cap = _lerp(1.55, 0.50, studio_density)
+
+    controlled_lift = min(
+        wanted_lift,
+        available_lift,
+        quiet_lift_cap,
+        punch_lift_cap,
+        studio_lift_cap,
+    )
+
+    real_hot_trim = 0.0
+    if true_peak > -0.65:
+        real_hot_trim += min(0.22, (true_peak + 0.65) * 0.10)
+    if near_clip > 0.004:
+        real_hot_trim += min(0.12, (near_clip - 0.004) * 14.0)
+    if limiter_stress > 1.18:
+        real_hot_trim += min(0.12, (limiter_stress - 1.18) * 0.20)
+
+    if hot_score > 0.62 and quiet_score < 0.22:
+        gain_trim = -real_hot_trim
     else:
-        lift_room = _clamp((0.30 - hot_score) / 0.30, 0.0, 1.0)
-        gain_trim = (
-            (0.14 + (0.72 * quiet_score) + (0.22 * punch_safety * quiet_score))
-            * quiet_score
-            * lift_room
-        )
+        gain_trim = controlled_lift - real_hot_trim
 
-    gain_trim = _clamp(gain_trim, -0.18, 0.82)
+    gain_trim = _clamp(gain_trim, -0.28, 1.65)
 
     note = (
         "Delta-aware safety trim before limiter."
         if gain_trim <= 0.0
-        else "Delta-aware controlled lift before limiter."
+        else "Delta-aware controlled loudness lift before limiter."
     )
 
     return _base_instance(
@@ -1194,53 +1437,62 @@ def _build_output_gain_trim(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         gain_db=round(gain_trim, 4),
         notes=[
             note,
-            "Delivery protects true peak and codec headroom without remastering tone.",
+            "Delivery is gain staging only: no tone shaping, no automatic loudness dim.",
+            f"delivery_target_lufs={round(target_lufs, 4)}",
+            f"wanted_lift_db={round(wanted_lift, 4)}",
+            f"available_lift_db={round(available_lift, 4)}",
+            f"hot_score={round(hot_score, 4)}",
+            f"quiet_score={round(quiet_score, 4)}",
+            f"punch_safety={round(punch_safety, 4)}",
+            f"studio_density_score={round(studio_density, 4)}",
         ],
     )
 
 
 def _build_true_peak_limiter(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
+    true_peak = _metric(ctx.analysis, "true_peak_dbtp", -1.0)
     limiter_stress_proxy = _metric(ctx.analysis, "limiter_stress_proxy", 0.0)
     near_clip_ratio = _metric(ctx.analysis, "near_clip_ratio", 0.0)
 
     hot_score = _delivery_hot_score(ctx.analysis)
     quiet_score = _delivery_quiet_score(ctx.analysis)
     punch_safety = _delivery_punch_safety(ctx.analysis)
+    studio_density = _studio_density_score(ctx.analysis)
 
-    safety_headroom_score = _clamp((0.96 - limiter_stress_proxy) / 0.24, 0.0, 1.0)
-    codec_room_score = _clamp((0.0035 - near_clip_ratio) / 0.0035, 0.0, 1.0)
+    ceiling_db = -1.05
 
-    drive_score = (
-        (quiet_score * 0.38)
-        + (punch_safety * 0.28)
-        + (safety_headroom_score * 0.20)
-        + (codec_room_score * 0.14)
+    peak_excess = max(0.0, true_peak - ceiling_db)
+    stress_excess = max(0.0, limiter_stress_proxy - 1.04)
+    clip_excess = _clamp((near_clip_ratio - 0.0025) / 0.010, 0.0, 1.0)
+
+    catch_depth = (
+        0.035
+        + (peak_excess * 0.34)
+        + (hot_score * 0.18)
+        + (stress_excess * 0.16)
+        + (clip_excess * 0.14)
     )
 
-    drive_penalty = hot_score * (0.66 + (0.20 * (1.0 - punch_safety)))
+    catch_depth *= _lerp(1.08, 0.78, punch_safety)
+    catch_depth *= _lerp(1.00, 0.82, quiet_score)
+    catch_depth *= _lerp(1.00, 0.88, studio_density)
 
-    desired_drive_db = _clamp(
-        0.24 + (1.62 * drive_score) - (0.54 * drive_penalty),
-        0.16,
-        1.65,
-    )
-
-    ceiling_db = -1.00
-    threshold_db = ceiling_db - desired_drive_db
+    catch_depth = _clamp(catch_depth, 0.035, 0.62)
+    threshold_db = ceiling_db - catch_depth
 
     attack_ms = _clamp(
-        0.22 + (0.16 * hot_score) - (0.06 * punch_safety),
-        0.16,
-        0.46,
+        0.24 + (0.18 * hot_score) - (0.05 * punch_safety),
+        0.18,
+        0.48,
     )
 
     release_ms = _clamp(
-        54.0
-        + (30.0 * hot_score)
-        + (18.0 * (1.0 - punch_safety))
-        - (14.0 * quiet_score),
-        42.0,
-        98.0,
+        58.0
+        + (32.0 * hot_score)
+        + (20.0 * (1.0 - punch_safety))
+        - (10.0 * quiet_score),
+        46.0,
+        104.0,
     )
 
     return _base_instance(
@@ -1253,7 +1505,12 @@ def _build_true_peak_limiter(ctx: _PrimitiveBuildContext) -> Dict[str, Any]:
         mix=1.0,
         notes=[
             "Terminal true-peak limiter.",
-            "Peak safety only: preserves loudness and punch unless real peak danger exists.",
+            "Limiter is final peak protection, not loudness compressor or handbrake.",
+            f"catch_depth_db={round(catch_depth, 4)}",
+            f"hot_score={round(hot_score, 4)}",
+            f"quiet_score={round(quiet_score, 4)}",
+            f"punch_safety={round(punch_safety, 4)}",
+            f"studio_density_score={round(studio_density, 4)}",
         ],
     )
 
@@ -1409,9 +1666,10 @@ def attach_primitive_instances_to_blueprint(
             list(blueprint.notes or [])
             + [
                 "primitive_instances_attached",
-                "music_first_primitive_gain_map_v3",
-                "buildup_body_bridge_projection_scores_enabled",
-                "delivery_trim_reduced_to_peak_safety",
+                "music_first_primitive_gain_map_v4",
+                "studio_density_vs_mud_intelligence_enabled",
+                "body_bridge_projection_scores_enabled",
+                "delivery_gain_stage_redesigned_not_handbrake",
                 f"primitive_instance_total={total_instances}",
             ]
         ),
