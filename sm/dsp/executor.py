@@ -10,7 +10,35 @@ import librosa
 import numpy as np
 import soundfile as sf
 from scipy import signal
-from scipy.ndimage import maximum_filter1d, uniform_filter1d
+from scipy.ndimage import maximum_filter1d
+
+
+# ============================================================
+# SM EXECUTOR CONTRACT
+# ============================================================
+# Executor не принимает музыкальные решения.
+# Он только физически исполняет render_plan.
+#
+# Музыкальное мышление живет выше:
+# analysis -> selector -> router -> clamps -> role_specs -> primitive_instances -> graph.
+#
+# Исполнительные законы:
+# 1. Internal pipeline = float WAV.
+# 2. No hidden normalization.
+# 3. Parallel stacks return wet/delta only.
+# 4. Bridge/support compression is band-limited, not fullband duplicate.
+# 5. Delivery is terminal only.
+# 6. Limiter is transparent peak protection, not loudness compressor.
+# 7. No RMS makeup inside limiter.
+# ============================================================
+
+INTERNAL_WAV_SUBTYPE = "FLOAT"
+
+NO_STAGE_NORMALIZATION = True
+PARALLEL_STACKS_ARE_WET_ONLY = True
+DELIVERY_IS_TERMINAL_ONLY = True
+LIMITER_NO_RMS_MAKEUP = True
+LIMITER_NO_CREATIVE_COMPRESSION = True
 
 
 def _read(obj: Any, key: str, default=None):
@@ -44,7 +72,15 @@ def _rms_dbfs(audio: np.ndarray) -> float:
     if audio.size == 0:
         return -120.0
     rms = float(np.sqrt(np.mean(np.square(audio)) + 1e-12))
-    return 20.0 * math.log10(max(rms, 1e-12))
+    return _lin_to_db(rms)
+
+
+def _sample_peak_dbfs(audio: np.ndarray) -> float:
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.size == 0:
+        return -120.0
+    peak = float(np.max(np.abs(audio)))
+    return _lin_to_db(peak) if peak > 1e-12 else -120.0
 
 
 def _ensure_2d_audio(audio: np.ndarray) -> np.ndarray:
@@ -67,12 +103,13 @@ def _match_length(x: np.ndarray, target_len: int) -> np.ndarray:
 
 
 def _write_wav(path: str, audio: np.ndarray, sr: int) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     sf.write(
         path,
         np.asarray(audio, dtype=np.float32),
         sr,
         format="WAV",
-        subtype="PCM_24",
+        subtype=INTERNAL_WAV_SUBTYPE,
     )
 
 
@@ -81,10 +118,69 @@ def _load_audio(path: str) -> tuple[np.ndarray, int]:
     return _ensure_2d_audio(audio), int(sr)
 
 
+def _audio_file_stats(path: str | None) -> dict[str, Any]:
+    if not path or not os.path.isfile(path):
+        return {
+            "status": "missing",
+            "sample_peak_dbfs": None,
+            "rms_dbfs": None,
+            "duration_sec": None,
+            "channels": None,
+            "sample_rate_hz": None,
+        }
+
+    try:
+        audio, sr = _load_audio(path)
+        return {
+            "status": "ok",
+            "sample_peak_dbfs": round(_sample_peak_dbfs(audio), 4),
+            "rms_dbfs": round(_rms_dbfs(audio), 4),
+            "duration_sec": round(len(audio) / float(sr), 4) if sr else 0.0,
+            "channels": int(audio.shape[1]) if audio.ndim == 2 else 1,
+            "sample_rate_hz": int(sr),
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": str(exc)[:500],
+            "sample_peak_dbfs": None,
+            "rms_dbfs": None,
+            "duration_sec": None,
+            "channels": None,
+            "sample_rate_hz": None,
+        }
+
+
+def _stats_delta(pre: dict[str, Any], post: dict[str, Any]) -> dict[str, Any]:
+    try:
+        pre_peak = pre.get("sample_peak_dbfs")
+        post_peak = post.get("sample_peak_dbfs")
+        pre_rms = pre.get("rms_dbfs")
+        post_rms = post.get("rms_dbfs")
+
+        return {
+            "delta_peak_db": round(float(post_peak) - float(pre_peak), 4)
+            if pre_peak is not None and post_peak is not None
+            else None,
+            "delta_rms_db": round(float(post_rms) - float(pre_rms), 4)
+            if pre_rms is not None and post_rms is not None
+            else None,
+        }
+    except Exception:
+        return {
+            "delta_peak_db": None,
+            "delta_rms_db": None,
+        }
+
+
 def _make_tmp_wav(td: str, stage_name: str, stack_name: str, instance_name: str) -> str:
     fname = f"{_safe_name(stage_name)}__{_safe_name(stack_name)}__{_safe_name(instance_name)}.wav"
     return os.path.join(td, fname)
 
+
+# ============================================================
+# SPECTRAL HELPERS
+# ============================================================
 
 def _log_gaussian_band(freqs_hz: np.ndarray, center_hz: float, q: float) -> np.ndarray:
     center_hz = max(float(center_hz), 20.0)
@@ -97,6 +193,7 @@ def _log_gaussian_band(freqs_hz: np.ndarray, center_hz: float, q: float) -> np.n
 
     if len(weights) > 0:
         weights[0] = 0.0
+
     return weights.astype(np.float32)
 
 
@@ -116,6 +213,7 @@ def _soft_band_weights(freqs_hz: np.ndarray, low_hz: float, high_hz: float) -> n
 
     if len(weights) > 0:
         weights[0] = 0.0
+
     return weights.astype(np.float32)
 
 
@@ -129,6 +227,7 @@ def _high_shelf_weights(freqs_hz: np.ndarray, center_hz: float, softness_oct: fl
 
     if len(weights) > 0:
         weights[0] = 0.0
+
     return weights.astype(np.float32)
 
 
@@ -142,6 +241,7 @@ def _upper_tilt_weights(freqs_hz: np.ndarray, pivot_hz: float, softness_oct: flo
 
     if len(weights) > 0:
         weights[0] = 0.0
+
     return weights.astype(np.float32)
 
 
@@ -172,6 +272,36 @@ def _smooth_envelope_frames(
         out[i] = prev
 
     return out
+
+
+def _smooth_limiter_gain_samples(
+    target_gain: np.ndarray,
+    attack_ms: float,
+    release_ms: float,
+    sr: int,
+) -> np.ndarray:
+    target_gain = np.asarray(target_gain, dtype=np.float32)
+    if target_gain.size == 0:
+        return target_gain
+
+    attack_ms = max(float(attack_ms), 0.05)
+    release_ms = max(float(release_ms), attack_ms)
+
+    attack_coeff = math.exp(-1.0 / (sr * attack_ms * 0.001))
+    release_coeff = math.exp(-1.0 / (sr * release_ms * 0.001))
+
+    out = np.zeros_like(target_gain, dtype=np.float32)
+    prev = float(target_gain[0])
+
+    for i, g in enumerate(target_gain):
+        g = float(g)
+
+        # gain падает - attack, gain восстанавливается - release
+        coeff = attack_coeff if g < prev else release_coeff
+        prev = coeff * prev + (1.0 - coeff) * g
+        out[i] = prev
+
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
 
 
 def _stft_params(sr: int) -> tuple[int, int]:
@@ -256,8 +386,14 @@ def _build_band_activity_frames(
     if Z.size == 0:
         return np.zeros(0, dtype=np.float32)
 
-    det_weights = _log_gaussian_band(freqs, center_hz=center_hz, q=max(q * 0.9, 0.35))
-    band_power = (np.abs(Z) ** 2 * det_weights[:, None]).sum(axis=0) / (det_weights.sum() + 1e-12)
+    det_weights = _log_gaussian_band(
+        freqs,
+        center_hz=center_hz,
+        q=max(q * 0.9, 0.35),
+    )
+    band_power = (np.abs(Z) ** 2 * det_weights[:, None]).sum(axis=0) / (
+        det_weights.sum() + 1e-12
+    )
     band_rms = np.sqrt(np.maximum(band_power, 1e-18)).astype(np.float32)
 
     detector_env = _smooth_envelope_frames(
@@ -317,7 +453,17 @@ def _build_wideband_activity_frames(
     return np.clip((env - low_thr) / (high_thr - low_thr), 0.0, 1.0).astype(np.float32)
 
 
-def _apply_fixed_bell_eq_audio(audio: np.ndarray, sr: int, center_hz: float, q: float, gain_db: float) -> np.ndarray:
+# ============================================================
+# AUDIO OPS
+# ============================================================
+
+def _apply_fixed_bell_eq_audio(
+    audio: np.ndarray,
+    sr: int,
+    center_hz: float,
+    q: float,
+    gain_db: float,
+) -> np.ndarray:
     audio = _ensure_2d_audio(audio)
     n_fft, _ = _stft_params(sr)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
@@ -338,7 +484,12 @@ def _apply_fixed_bell_eq_audio(audio: np.ndarray, sr: int, center_hz: float, q: 
     return np.stack(out, axis=1).astype(np.float32)
 
 
-def _apply_fixed_high_shelf_audio(audio: np.ndarray, sr: int, center_hz: float, gain_db: float) -> np.ndarray:
+def _apply_fixed_high_shelf_audio(
+    audio: np.ndarray,
+    sr: int,
+    center_hz: float,
+    gain_db: float,
+) -> np.ndarray:
     audio = _ensure_2d_audio(audio)
     n_fft, _ = _stft_params(sr)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
@@ -389,19 +540,21 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
             window="hann",
             center=True,
         ).shape[1]
-        gain_frames_db = (activity_frames[:frame_count] * float(gain_db)).astype(np.float32)
+
+        gain_frames_db = (activity_frames[:frame_count] * gain_db).astype(np.float32)
         shape_weights = _log_gaussian_band(
             librosa.fft_frequencies(sr=sr, n_fft=n_fft),
             center_hz=center_hz,
             q=q,
         )
+
         y = _apply_framewise_spectral_gain(
             x=audio[:, 0],
             sr=sr,
             shape_weights=shape_weights,
             gain_frames_db=gain_frames_db,
         )
-        return y[:, None]
+        return y[:, None].astype(np.float32)
 
     left = audio[:, 0]
     right = audio[:, 1]
@@ -418,6 +571,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
             attack_ms=attack_ms,
             release_ms=release_ms,
         )
+
         n_fft, hop = _stft_params(sr)
         frame_count = librosa.stft(
             mid,
@@ -427,7 +581,8 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
             window="hann",
             center=True,
         ).shape[1]
-        gain_frames_db = (activity_frames[:frame_count] * float(gain_db)).astype(np.float32)
+
+        gain_frames_db = (activity_frames[:frame_count] * gain_db).astype(np.float32)
         shape_weights = _log_gaussian_band(
             librosa.fft_frequencies(sr=sr, n_fft=n_fft),
             center_hz=center_hz,
@@ -446,6 +601,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
         return np.stack([out_left, out_right], axis=1).astype(np.float32)
 
     detector = 0.5 * (left + right)
+
     activity_frames = _build_band_activity_frames(
         detector_signal=detector,
         sr=sr,
@@ -465,7 +621,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
         center=True,
     ).shape[1]
 
-    gain_frames_db = (activity_frames[:frame_count] * float(gain_db)).astype(np.float32)
+    gain_frames_db = (activity_frames[:frame_count] * gain_db).astype(np.float32)
     shape_weights = _log_gaussian_band(
         librosa.fft_frequencies(sr=sr, n_fft=n_fft),
         center_hz=center_hz,
@@ -538,7 +694,7 @@ def _apply_dynamic_tilt_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray
             shape_weights=shape_weights,
             gain_frames_db=gain_frames_db,
         )
-        return y[:, None]
+        return y[:, None].astype(np.float32)
 
     out = []
     for ch in range(audio.shape[1]):
@@ -553,7 +709,12 @@ def _apply_dynamic_tilt_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray
     return np.stack(out, axis=1).astype(np.float32)
 
 
-def _apply_band_component_audio(audio: np.ndarray, sr: int, low_hz: float, high_hz: float) -> np.ndarray:
+def _apply_band_component_audio(
+    audio: np.ndarray,
+    sr: int,
+    low_hz: float,
+    high_hz: float,
+) -> np.ndarray:
     audio = _ensure_2d_audio(audio)
     n_fft, hop = _stft_params(sr)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
@@ -571,6 +732,7 @@ def _apply_band_component_audio(audio: np.ndarray, sr: int, low_hz: float, high_
             window="hann",
             center=True,
         )
+
         if Z.size == 0:
             out.append(x.copy())
             continue
@@ -638,6 +800,10 @@ def _from_mid_side(mid: np.ndarray, side: np.ndarray) -> np.ndarray:
     right = mid - side
     return np.stack([left, right], axis=1).astype(np.float32)
 
+
+# ============================================================
+# COMPRESSOR / LIMITER HELPERS
+# ============================================================
 
 def _build_parallel_compressor_gain(
     detector_signal: np.ndarray,
@@ -709,7 +875,13 @@ def _estimate_approx_true_peak_dbtp(audio: np.ndarray, sr: int, oversample: int 
         x = np.asarray(audio[:, ch], dtype=np.float32)
         if x.size == 0:
             continue
-        y = librosa.resample(x, orig_sr=sr, target_sr=target_sr)
+
+        y = librosa.resample(
+            x,
+            orig_sr=sr,
+            target_sr=target_sr,
+            res_type="soxr_hq",
+        )
         ch_peak = float(np.max(np.abs(y))) if y.size else 0.0
         peak = max(peak, ch_peak)
 
@@ -721,28 +893,124 @@ def _apply_output_trim_audio(audio: np.ndarray, gain_db: float) -> np.ndarray:
     return (audio * _db_to_lin(gain_db)).astype(np.float32)
 
 
-def _soft_ceiling_clip(audio: np.ndarray, ceiling_lin: float, knee_db: float = 0.90) -> np.ndarray:
-    x = np.asarray(audio, dtype=np.float32)
-    ceiling_lin = float(max(ceiling_lin, 1e-6))
+def _oversample_audio(audio: np.ndarray, sr: int, oversample: int) -> tuple[np.ndarray, int]:
+    audio = _ensure_2d_audio(audio)
 
-    knee_db = float(max(knee_db, 0.20))
-    knee_start = ceiling_lin / _db_to_lin(knee_db)
-    knee_start = min(knee_start, ceiling_lin * 0.995)
+    oversample = max(int(oversample), 1)
+    if oversample == 1:
+        return audio.copy(), int(sr)
 
-    span = max(ceiling_lin - knee_start, 1e-6)
+    target_sr = int(sr * oversample)
 
-    ax = np.abs(x)
-    sign = np.sign(x)
+    channels = []
+    for ch in range(audio.shape[1]):
+        channels.append(
+            librosa.resample(
+                audio[:, ch],
+                orig_sr=sr,
+                target_sr=target_sr,
+                res_type="soxr_hq",
+            ).astype(np.float32)
+        )
 
-    out_abs = ax.copy()
-    over = ax > knee_start
+    min_len = min(len(x) for x in channels)
+    out = np.stack([x[:min_len] for x in channels], axis=1).astype(np.float32)
 
-    if np.any(over):
-        t = (ax[over] - knee_start) / span
-        out_abs[over] = knee_start + span * np.tanh(t)
+    return out, target_sr
 
-    out = sign * out_abs
-    return np.clip(out, -ceiling_lin, ceiling_lin).astype(np.float32)
+
+def _downsample_audio(audio_os: np.ndarray, target_sr: int, original_sr: int, original_len: int) -> np.ndarray:
+    audio_os = _ensure_2d_audio(audio_os)
+
+    if target_sr == original_sr:
+        return _match_length(audio_os, original_len).astype(np.float32)
+
+    channels = []
+    for ch in range(audio_os.shape[1]):
+        channels.append(
+            librosa.resample(
+                audio_os[:, ch],
+                orig_sr=target_sr,
+                target_sr=original_sr,
+                res_type="soxr_hq",
+            ).astype(np.float32)
+        )
+
+    min_len = min(len(x) for x in channels)
+    out = np.stack([x[:min_len] for x in channels], axis=1).astype(np.float32)
+    return _match_length(out, original_len).astype(np.float32)
+
+
+def _build_transparent_limiter_gain(
+    audio_os: np.ndarray,
+    sr_os: int,
+    ceiling_db: float,
+    threshold_db: float,
+    attack_ms: float,
+    release_ms: float,
+    lookahead_ms: float = 1.25,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    audio_os = _ensure_2d_audio(audio_os)
+
+    ceiling_db = float(ceiling_db)
+    threshold_db = float(threshold_db)
+
+    if threshold_db >= ceiling_db - 0.05:
+        threshold_db = ceiling_db - 0.45
+
+    ceiling_lin = _db_to_lin(ceiling_db)
+    threshold_lin = min(_db_to_lin(threshold_db), ceiling_lin * 0.995)
+
+    peak = np.max(np.abs(audio_os), axis=1).astype(np.float32)
+
+    lookahead_samples = max(1, int(sr_os * lookahead_ms * 0.001))
+    if lookahead_samples > 1 and peak.size > lookahead_samples:
+        peak_detector = maximum_filter1d(
+            peak,
+            size=lookahead_samples,
+            mode="nearest",
+        ).astype(np.float32)
+    else:
+        peak_detector = peak
+
+    target_gain = np.ones_like(peak_detector, dtype=np.float32)
+
+    transition = max(ceiling_lin - threshold_lin, 1e-9)
+
+    pre_zone = (peak_detector > threshold_lin) & (peak_detector <= ceiling_lin)
+    if np.any(pre_zone):
+        t = (peak_detector[pre_zone] - threshold_lin) / transition
+        # Мягкий pre-catch: почти не двигает материал ниже потолка.
+        target_gain[pre_zone] = 1.0 - (0.035 * np.square(t))
+
+    over_zone = peak_detector > ceiling_lin
+    if np.any(over_zone):
+        hard_gain = ceiling_lin / np.maximum(peak_detector[over_zone], 1e-12)
+        target_gain[over_zone] = np.minimum(target_gain[over_zone], hard_gain)
+
+    target_gain = np.clip(target_gain, 0.0, 1.0).astype(np.float32)
+
+    gain_env = _smooth_limiter_gain_samples(
+        target_gain,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+        sr=sr_os,
+    )
+
+    min_gain = float(np.min(gain_env)) if gain_env.size else 1.0
+    max_reduction_db = -_lin_to_db(min_gain) if min_gain < 1.0 else 0.0
+    active_ratio = float(np.mean(gain_env < 0.999)) if gain_env.size else 0.0
+
+    debug = {
+        "ceiling_db": round(ceiling_db, 4),
+        "threshold_db": round(threshold_db, 4),
+        "lookahead_ms": round(lookahead_ms, 4),
+        "max_gain_reduction_db": round(max_reduction_db, 4),
+        "active_gain_reduction_ratio": round(active_ratio, 6),
+        "peak_detector_dbfs": round(_lin_to_db(float(np.max(peak_detector))) if peak_detector.size else -120.0, 4),
+    }
+
+    return gain_env.astype(np.float32), debug
 
 
 def _apply_true_peak_limiter_audio(
@@ -751,103 +1019,92 @@ def _apply_true_peak_limiter_audio(
     ceiling_db: float,
     threshold_db: float | None = None,
     attack_ms: float = 0.25,
-    release_ms: float = 45.0,
+    release_ms: float = 65.0,
     mix: float = 1.0,
     *,
     oversample: int = 2,
     safety_margin_db: float = 0.10,
-    max_passes: int = 2,
-) -> np.ndarray:
+    max_passes: int = 3,
+) -> tuple[np.ndarray, dict[str, Any]]:
     dry = _ensure_2d_audio(audio)
     mix = float(np.clip(mix, 0.0, 1.0))
 
     ceiling_db = float(ceiling_db)
-    ceiling_lin = _db_to_lin(ceiling_db)
+    if threshold_db is None:
+        threshold_db = ceiling_db - 0.45
+    threshold_db = float(threshold_db)
 
     before_rms_db = _rms_dbfs(dry)
+    before_peak_db = _sample_peak_dbfs(dry)
+    before_tp_db = _estimate_approx_true_peak_dbtp(dry, sr, oversample=max(int(oversample), 1))
 
-    target_sr = int(sr * max(int(oversample), 1))
-    if target_sr != sr:
-        os_channels = []
-        for ch in range(dry.shape[1]):
-            os_channels.append(
-                librosa.resample(
-                    dry[:, ch],
-                    orig_sr=sr,
-                    target_sr=target_sr,
-                    res_type="soxr_hq",
-                ).astype(np.float32)
-            )
-        min_len = min(len(x) for x in os_channels)
-        wet_os = np.stack([x[:min_len] for x in os_channels], axis=1).astype(np.float32)
-    else:
-        wet_os = dry.copy()
+    audio_os, sr_os = _oversample_audio(dry, sr, oversample=max(int(oversample), 1))
 
-    limited_os = _soft_ceiling_clip(wet_os, ceiling_lin, knee_db=0.90)
+    gain_env, limiter_debug = _build_transparent_limiter_gain(
+        audio_os=audio_os,
+        sr_os=sr_os,
+        ceiling_db=ceiling_db,
+        threshold_db=threshold_db,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+    )
 
-    if target_sr != sr:
-        channels = []
-        for ch in range(limited_os.shape[1]):
-            channels.append(
-                librosa.resample(
-                    limited_os[:, ch],
-                    orig_sr=target_sr,
-                    target_sr=sr,
-                    res_type="soxr_hq",
-                ).astype(np.float32)
-            )
-        min_len = min(len(x) for x in channels)
-        wet = np.stack([x[:min_len] for x in channels], axis=1).astype(np.float32)
-        wet = _match_length(wet, len(dry))
-    else:
-        wet = limited_os
+    limited_os = audio_os * gain_env[:, None]
 
-    wet = np.clip(wet, -ceiling_lin, ceiling_lin)
-
-    after_rms_db = _rms_dbfs(wet)
-    rms_loss_db = before_rms_db - after_rms_db
-
-    if rms_loss_db > 0.35:
-        makeup_db = _clamp(rms_loss_db - 0.20, 0.0, 0.90)
-
-        driven_os = wet_os * _db_to_lin(makeup_db)
-        limited_os = _soft_ceiling_clip(driven_os, ceiling_lin, knee_db=1.05)
-
-        if target_sr != sr:
-            channels = []
-            for ch in range(limited_os.shape[1]):
-                channels.append(
-                    librosa.resample(
-                        limited_os[:, ch],
-                        orig_sr=target_sr,
-                        target_sr=sr,
-                        res_type="soxr_hq",
-                    ).astype(np.float32)
-                )
-            min_len = min(len(x) for x in channels)
-            wet = np.stack([x[:min_len] for x in channels], axis=1).astype(np.float32)
-            wet = _match_length(wet, len(dry))
-        else:
-            wet = limited_os
-
-        wet = np.clip(wet, -ceiling_lin, ceiling_lin)
+    wet = _downsample_audio(
+        audio_os=limited_os,
+        target_sr=sr_os,
+        original_sr=sr,
+        original_len=len(dry),
+    )
 
     if mix < 0.999:
         wet = dry * (1.0 - mix) + wet * mix
 
     effective_ceiling_db = ceiling_db - abs(float(safety_margin_db))
+    final_safety_trim_db = 0.0
 
     for _ in range(max_passes):
-        current_tp_db = _estimate_approx_true_peak_dbtp(wet, sr, oversample=max(int(oversample), 1))
+        current_tp_db = _estimate_approx_true_peak_dbtp(
+            wet,
+            sr,
+            oversample=max(int(oversample), 1),
+        )
         needed_trim_db = effective_ceiling_db - current_tp_db
+
         if needed_trim_db >= -0.01:
             break
+
         wet *= _db_to_lin(needed_trim_db)
+        final_safety_trim_db += needed_trim_db
 
-    return np.clip(wet, -1.0, 1.0).astype(np.float32)
+    after_rms_db = _rms_dbfs(wet)
+    after_peak_db = _sample_peak_dbfs(wet)
+    after_tp_db = _estimate_approx_true_peak_dbtp(wet, sr, oversample=max(int(oversample), 1))
+
+    debug = {
+        "limiter_mode": "transparent_peak_catch",
+        "no_rms_makeup": True,
+        "no_creative_compression": True,
+        "before_sample_peak_dbfs": round(before_peak_db, 4),
+        "after_sample_peak_dbfs": round(after_peak_db, 4),
+        "before_true_peak_dbtp": round(before_tp_db, 4),
+        "after_true_peak_dbtp": round(after_tp_db, 4),
+        "before_rms_dbfs": round(before_rms_db, 4),
+        "after_rms_dbfs": round(after_rms_db, 4),
+        "rms_delta_db": round(after_rms_db - before_rms_db, 4),
+        "final_safety_trim_db": round(final_safety_trim_db, 4),
+        **limiter_debug,
+    }
+
+    return np.nan_to_num(wet, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32), debug
 
 
-def _execute_static_eq_file(input_path: str, output_path: str, op: Any) -> None:
+# ============================================================
+# FILE EXECUTORS
+# ============================================================
+
+def _execute_static_eq_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
 
@@ -859,9 +1116,10 @@ def _execute_static_eq_file(input_path: str, output_path: str, op: Any) -> None:
         gain_db=float(params.get("gain_db", 0.0)),
     )
     _write_wav(output_path, processed, sr)
+    return {}
 
 
-def _execute_high_shelf_file(input_path: str, output_path: str, op: Any) -> None:
+def _execute_high_shelf_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
 
@@ -872,21 +1130,24 @@ def _execute_high_shelf_file(input_path: str, output_path: str, op: Any) -> None
         gain_db=float(params.get("gain_db", 0.0)),
     )
     _write_wav(output_path, processed, sr)
+    return {}
 
 
-def _execute_dynamic_eq_file(input_path: str, output_path: str, op: Any) -> None:
+def _execute_dynamic_eq_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     processed = _apply_dynamic_eq_audio(audio=audio, sr=sr, op=op)
     _write_wav(output_path, processed, sr)
+    return {}
 
 
-def _execute_dynamic_tilt_file(input_path: str, output_path: str, op: Any) -> None:
+def _execute_dynamic_tilt_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     processed = _apply_dynamic_tilt_audio(audio=audio, sr=sr, op=op)
     _write_wav(output_path, processed, sr)
+    return {}
 
 
-def _execute_parallel_eq_fill_file(input_path: str, output_path: str, op: Any) -> None:
+def _execute_parallel_eq_fill_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
 
@@ -898,28 +1159,55 @@ def _execute_parallel_eq_fill_file(input_path: str, output_path: str, op: Any) -
         gain_db=float(params.get("gain_db", 0.0)),
     )
 
-    mix = float(params.get("mix", 0.1))
+    mix = _clamp(float(params.get("mix", 0.1)), 0.0, 0.40)
+
+    # Parallel EQ должен возвращать только wet/delta слой.
     wet = (boosted - audio) * mix
+
     _write_wav(output_path, wet, sr)
 
+    return {
+        "parallel_contract": "wet_delta_only",
+        "mix": round(mix, 6),
+    }
 
-def _execute_parallel_compressor_file(input_path: str, output_path: str, op: Any) -> None:
+
+def _execute_parallel_compressor_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
 
     threshold_db = float(params.get("threshold_db", -18.0))
     ratio = float(params.get("ratio", 1.5))
-    attack_ms = float(params.get("attack_ms", 20.0))
-    release_ms = float(params.get("release_ms", 120.0))
-    mix = float(params.get("mix", 0.15))
+    attack_ms = float(params.get("attack_ms", 28.0))
+    release_ms = float(params.get("release_ms", 150.0))
+    mix = _clamp(float(params.get("mix", 0.15)), 0.0, 0.30)
     channel_mode = str(_read(op, "channel_mode", "stereo") or "stereo").lower()
 
-    if audio.shape[1] == 1:
-        detector = audio[:, 0]
-    elif channel_mode == "mid":
-        detector = 0.5 * (audio[:, 0] + audio[:, 1])
+    primitive_name = str(_read(op, "primitive_name", "") or "").lower()
+
+    # Главное исправление:
+    # Support compression больше не добавляет fullband compressed duplicate.
+    # Она работает как band-limited body/bridge support layer.
+    if primitive_name == "transient_safe_support_compression":
+        low_hz = float(params.get("low_cut_hz", 85.0) or 85.0)
+        high_hz = float(params.get("high_cut_hz", 340.0) or 340.0)
     else:
-        detector = 0.5 * (audio[:, 0] + audio[:, 1])
+        low_hz = float(params.get("low_cut_hz", 110.0) or 110.0)
+        high_hz = float(params.get("high_cut_hz", 420.0) or 420.0)
+
+    band = _apply_band_component_audio(
+        audio=audio,
+        sr=sr,
+        low_hz=low_hz,
+        high_hz=high_hz,
+    )
+
+    if band.shape[1] == 1:
+        detector = band[:, 0]
+    elif channel_mode == "mid":
+        detector = 0.5 * (band[:, 0] + band[:, 1])
+    else:
+        detector = 0.5 * (band[:, 0] + band[:, 1])
 
     gain_lin = _build_parallel_compressor_gain(
         detector_signal=detector,
@@ -930,19 +1218,38 @@ def _execute_parallel_compressor_file(input_path: str, output_path: str, op: Any
         release_ms=release_ms,
     )
 
-    compressed = audio * gain_lin[:, None]
-    wet = compressed * mix
+    compressed_band = band * gain_lin[:, None]
+
+    # Wet-only support layer.
+    # Это добавляет контролируемую low/body continuity, а не копию всего мастера.
+    wet = compressed_band * mix
+
     _write_wav(output_path, wet, sr)
 
+    return {
+        "parallel_contract": "band_limited_wet_support_only",
+        "band_low_hz": round(low_hz, 4),
+        "band_high_hz": round(high_hz, 4),
+        "mix": round(mix, 6),
+        "avg_gain_reduction_db": round(
+            -_lin_to_db(float(np.mean(gain_lin))) if float(np.mean(gain_lin)) < 1.0 else 0.0,
+            4,
+        ),
+        "max_gain_reduction_db": round(
+            -_lin_to_db(float(np.min(gain_lin))) if float(np.min(gain_lin)) < 1.0 else 0.0,
+            4,
+        ),
+    }
 
-def _execute_band_limited_saturation_file(input_path: str, output_path: str, op: Any) -> None:
+
+def _execute_band_limited_saturation_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
 
     low_cut_hz = float(params.get("low_cut_hz", 1900.0))
     high_cut_hz = float(params.get("high_cut_hz", 5200.0))
     drive_db = float(params.get("drive_db", 1.0))
-    mix = float(params.get("mix", 0.05))
+    mix = _clamp(float(params.get("mix", 0.05)), 0.0, 0.30)
 
     band = _apply_band_component_audio(
         audio=audio,
@@ -954,11 +1261,21 @@ def _execute_band_limited_saturation_file(input_path: str, output_path: str, op:
     drive_lin = _db_to_lin(drive_db)
     saturated = np.tanh(band * drive_lin) / max(drive_lin, 1.0)
 
+    # Wet-only harmonic delta.
     wet = (saturated - band) * mix
+
     _write_wav(output_path, wet, sr)
 
+    return {
+        "parallel_contract": "wet_harmonic_delta_only",
+        "low_cut_hz": round(low_cut_hz, 4),
+        "high_cut_hz": round(high_cut_hz, 4),
+        "drive_db": round(drive_db, 4),
+        "mix": round(mix, 6),
+    }
 
-def _execute_high_side_polish_file(input_path: str, output_path: str, op: Any) -> None:
+
+def _execute_high_side_polish_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
 
@@ -984,10 +1301,16 @@ def _execute_high_side_polish_file(input_path: str, output_path: str, op: Any) -
     side_out = side_ch + high_side * effective
     processed = _from_mid_side(mid, side_out)
 
-    _write_wav(output_path, np.clip(processed, -1.0, 1.0), sr)
+    _write_wav(output_path, processed, sr)
+
+    return {
+        "width_contract": "high_side_only_center_preserved",
+        "freq_hz": round(freq_hz, 4),
+        "effective": round(effective, 6),
+    }
 
 
-def _execute_high_only_width_file(input_path: str, output_path: str, op: Any) -> None:
+def _execute_high_only_width_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
 
@@ -1008,10 +1331,17 @@ def _execute_high_only_width_file(input_path: str, output_path: str, op: Any) ->
     side_out = side_ch + high_side_band * effective_width
     processed = _from_mid_side(mid, side_out)
 
-    _write_wav(output_path, np.clip(processed, -1.0, 1.0), sr)
+    _write_wav(output_path, processed, sr)
+
+    return {
+        "width_contract": "high_only_width_center_preserved",
+        "low_cut_hz": round(low_cut_hz, 4),
+        "high_cut_hz": round(high_cut_hz, 4),
+        "effective_width": round(effective_width, 6),
+    }
 
 
-def _execute_output_trim_file(input_path: str, output_path: str, op: Any) -> None:
+def _execute_output_trim_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
     gain_db = float(params.get("gain_db", 0.0))
@@ -1019,25 +1349,43 @@ def _execute_output_trim_file(input_path: str, output_path: str, op: Any) -> Non
     processed = _apply_output_trim_audio(audio=audio, gain_db=gain_db)
     _write_wav(output_path, processed, sr)
 
+    return {
+        "delivery_contract": "gain_stage_only_no_tone_no_normalization",
+        "gain_db": round(gain_db, 4),
+    }
 
-def _execute_true_peak_limiter_file(input_path: str, output_path: str, op: Any) -> None:
+
+def _execute_true_peak_limiter_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
 
-    processed = _apply_true_peak_limiter_audio(
+    ceiling_db = float(params.get("gain_db", -1.05))
+    threshold_raw = params.get("threshold_db", None)
+    threshold_db = float(threshold_raw) if threshold_raw is not None else ceiling_db - 0.45
+
+    processed, limiter_debug = _apply_true_peak_limiter_audio(
         audio=audio,
         sr=sr,
-        ceiling_db=float(params.get("gain_db", -1.0)),
-        threshold_db=params.get("threshold_db"),
+        ceiling_db=ceiling_db,
+        threshold_db=threshold_db,
         attack_ms=float(params.get("attack_ms", 0.25)),
-        release_ms=float(params.get("release_ms", 45.0)),
+        release_ms=float(params.get("release_ms", 65.0)),
         mix=float(params.get("mix", 1.0)),
         oversample=2,
         safety_margin_db=0.10,
-        max_passes=2,
+        max_passes=3,
     )
     _write_wav(output_path, processed, sr)
 
+    return {
+        "delivery_contract": "terminal_true_peak_protection_only",
+        **limiter_debug,
+    }
+
+
+# ============================================================
+# OP ROUTING
+# ============================================================
 
 def _execute_op_file(
     input_path: str,
@@ -1060,6 +1408,13 @@ def _execute_op_file(
         "pending_reason": None,
         "params": dict(_read(op, "params", {}) or {}),
         "output_path": input_path,
+        "debug": {
+            "executor_contract": "transparent_sm_render_engine",
+            "pre": None,
+            "post": None,
+            "delta": None,
+            "op_extra": {},
+        },
     }
 
     supported = {
@@ -1089,38 +1444,49 @@ def _execute_op_file(
     if dry_run:
         op_report["executed"] = True
         op_report["output_path"] = input_path
+        op_report["debug"]["dry_run"] = True
         return op_report
 
+    pre_stats = _audio_file_stats(input_path)
     output_path = _make_tmp_wav(td, stage_name, stack_name, instance_name)
 
+    op_extra: dict[str, Any] = {}
+
     if op_kind in {"static_eq", "broad_eq"}:
-        _execute_static_eq_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_static_eq_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind == "high_shelf":
-        _execute_high_shelf_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_high_shelf_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind in {"dynamic_eq", "dynamic_eq_boost"}:
-        _execute_dynamic_eq_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_dynamic_eq_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind == "dynamic_tilt":
-        _execute_dynamic_tilt_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_dynamic_tilt_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind in {"parallel_eq_fill", "parallel_eq_boost"}:
-        _execute_parallel_eq_fill_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_parallel_eq_fill_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind == "parallel_compressor":
-        _execute_parallel_compressor_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_parallel_compressor_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind in {"band_limited_saturation", "band_limited_texture"}:
-        _execute_band_limited_saturation_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_band_limited_saturation_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind == "high_side_polish":
-        _execute_high_side_polish_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_high_side_polish_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind == "high_only_width":
-        _execute_high_only_width_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_high_only_width_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind in {"output_trim", "ceiling_trim", "final_balance_guard"}:
-        _execute_output_trim_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_output_trim_file(input_path=input_path, output_path=output_path, op=op)
     elif op_kind == "true_peak_limiter":
-        _execute_true_peak_limiter_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_true_peak_limiter_file(input_path=input_path, output_path=output_path, op=op)
     else:
         op_report["pending_reason"] = "unsupported_op_kind"
         return op_report
 
+    post_stats = _audio_file_stats(output_path)
+
     op_report["executed"] = True
     op_report["output_path"] = output_path
+    op_report["debug"]["pre"] = pre_stats
+    op_report["debug"]["post"] = post_stats
+    op_report["debug"]["delta"] = _stats_delta(pre_stats, post_stats)
+    op_report["debug"]["op_extra"] = op_extra or {}
+
     return op_report
 
 
@@ -1153,6 +1519,9 @@ def _mix_audio_files(
         out += audio * float(w)
 
     out *= _db_to_lin(gain_db)
+
+    # Внутри SM не нормализуем и не клипуем.
+    # Delivery последним отвечает за peak safety.
     _write_wav(output_path, out, sr)
     return output_path
 
@@ -1210,6 +1579,7 @@ def _record_op_result(
             "executed": op_result["executed"],
             "pending_reason": op_result["pending_reason"],
             "params": op_result["params"],
+            "debug": op_result.get("debug", {}),
         }
     )
 
@@ -1386,6 +1756,7 @@ def _execute_finish_micro_stack(
 
     current_path = spark_bus_path
 
+    # De-ess применяется только к spark bus, не ко всему мастеру.
     for op in deess_ops:
         op_result = _execute_op_file(
             input_path=current_path,
@@ -1431,9 +1802,16 @@ def _execute_recombine(
         "target_node": target_node,
         "blend": blend,
         "gain_db": gain_db,
+        "debug": {
+            "recombine_contract": "no_hidden_normalization",
+            "source_paths": [],
+            "output_stats": None,
+        },
     }
 
     source_paths = [node_paths.get(node) for node in source_nodes]
+    rec_report["debug"]["source_paths"] = source_paths
+
     if not source_paths or any(p is None for p in source_paths):
         return rec_report, None
 
@@ -1449,6 +1827,7 @@ def _execute_recombine(
             gain_db=gain_db,
             weights=[1.0, blend],
         )
+        rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
         return rec_report, target_path
 
     if kind == "finish_blend_sum" and len(source_paths) == 2:
@@ -1458,6 +1837,7 @@ def _execute_recombine(
             gain_db=gain_db,
             weights=[1.0, blend],
         )
+        rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
         return rec_report, target_path
 
     if kind == "guarded_parallel_sum":
@@ -1468,6 +1848,7 @@ def _execute_recombine(
                 gain_db=0.0,
                 weights=[1.0, _db_to_lin(gain_db) * blend],
             )
+            rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
             return rec_report, target_path
 
         target_path = _mix_audio_files(
@@ -1476,6 +1857,7 @@ def _execute_recombine(
             gain_db=gain_db,
             weights=[1.0] * len(source_paths),
         )
+        rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
         return rec_report, target_path
 
     if kind == "passthrough_or_sum":
@@ -1485,6 +1867,7 @@ def _execute_recombine(
             gain_db=gain_db,
             weights=[1.0] * len(source_paths),
         )
+        rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
         return rec_report, target_path
 
     target_path = _mix_audio_files(
@@ -1493,8 +1876,13 @@ def _execute_recombine(
         gain_db=gain_db,
         weights=[1.0] * len(source_paths),
     )
+    rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
     return rec_report, target_path
 
+
+# ============================================================
+# PLAN EXECUTION
+# ============================================================
 
 def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool = False) -> dict:
     node_order = list(_read(render_plan, "node_order", []) or [])
@@ -1521,17 +1909,31 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
         "executed_op_count": 0,
         "pending_custom_op_count": 0,
         "safety_notes": list(_read(render_plan, "safety_notes", []) or []),
+        "executor_contract": {
+            "internal_wav_subtype": INTERNAL_WAV_SUBTYPE,
+            "no_stage_normalization": NO_STAGE_NORMALIZATION,
+            "parallel_stacks_are_wet_only": PARALLEL_STACKS_ARE_WET_ONLY,
+            "delivery_is_terminal_only": DELIVERY_IS_TERMINAL_ONLY,
+            "limiter_no_rms_makeup": LIMITER_NO_RMS_MAKEUP,
+            "limiter_no_creative_compression": LIMITER_NO_CREATIVE_COMPRESSION,
+        },
         "notes": list(_read(render_plan, "notes", []) or [])
         + [
-            "executor_active_v3",
+            "executor_active_v4",
+            "transparent_sm_render_engine",
+            "internal_float_pipeline_enabled",
+            "no_hidden_stage_normalization",
             "parallel_stack_semantics_fixed",
             "parallel_ops_run_from_same_tap_point",
             "parallel_outputs_are_wet_layers",
+            "bridge_compressor_band_limited_support_only",
             "finish_spark_is_wet_micro_bus",
-            "finish_deess_runs_on_spark_bus",
+            "finish_deess_runs_on_spark_bus_only",
             "native_finish_width_ops_supported",
             "delivery_loudness_preserve_peak_safety_enabled",
-            "recombine_blend_weights_fixed",
+            "delivery_no_rms_makeup",
+            "limiter_transparent_peak_catch",
+            "recombine_weights_no_hidden_normalization",
         ],
     }
 
@@ -1559,6 +1961,10 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
             "recombine_reports": [],
             "resolved_input_path": stage_input_path,
             "resolved_output_path": None,
+            "debug": {
+                "input_stats": _audio_file_stats(stage_input_path) if stage_input_path else None,
+                "output_stats": None,
+            },
         }
 
         for stack in stacks:
@@ -1576,6 +1982,13 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
                 "render_mode": render_mode,
                 "requires_custom_dsp": bool(_read(stack, "requires_custom_dsp", False)),
                 "ops": [],
+                "debug": {
+                    "tap_point": tap_point,
+                    "input_path": stack_input_path,
+                    "input_stats": _audio_file_stats(stack_input_path) if stack_input_path else None,
+                    "output_path": None,
+                    "output_stats": None,
+                },
             }
 
             if not stack_input_path:
@@ -1648,6 +2061,8 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
 
                 stage_current_path = stack_output_path
 
+            stack_report["debug"]["output_path"] = stack_output_path
+            stack_report["debug"]["output_stats"] = _audio_file_stats(stack_output_path) if stack_output_path else None
             stage_report["stack_reports"].append(stack_report)
 
         if recombine:
@@ -1676,13 +2091,17 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
                 node_paths[output_node] = stage_current_path
 
         stage_report["resolved_output_path"] = node_paths.get(output_node)
+        stage_report["debug"]["output_stats"] = _audio_file_stats(stage_report["resolved_output_path"])
         report["stage_reports"].append(stage_report)
+
         current_path = node_paths.get(output_node) or current_path
 
     if report["pending_custom_op_count"] > 0:
         report["status"] = "partial_custom_dsp_pending"
 
     report["final_output_path"] = node_paths.get(final_output_node)
+    report["final_output_stats"] = _audio_file_stats(report["final_output_path"])
+
     return report
 
 
