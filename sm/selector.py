@@ -1,4 +1,4 @@
-# sm/selector.py
+from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -33,6 +33,7 @@ class SelectorContext:
     top_safe: bool
     top_guarded: bool
     top_fragile: bool
+    hard_emergency: bool
 
     body_fragile: bool
     body_weak: bool
@@ -54,6 +55,15 @@ class SelectorContext:
     dirty_dense_candidate: bool
     thin_candidate: bool
 
+    studio_density_score: float
+    dirt_buildup_score: float
+    body_restore_score: float
+    bridge_restore_score: float
+    projection_need_score: float
+    top_emergency_score: float
+    quiet_lift_score: float
+    punch_preserve_score: float
+
     primary_correction_lane: str = "none"
     secondary_support_lane: str = "none"
     primary_benefit_lane: str = "none"
@@ -64,7 +74,16 @@ def _has(v) -> bool:
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, x))
+    return max(lo, min(hi, float(x)))
+
+
+def _safe(v, fallback: float) -> float:
+    if v is None:
+        return fallback
+    try:
+        return float(v)
+    except Exception:
+        return fallback
 
 
 def _risk_ge(risk: RiskLevel, level: RiskLevel) -> bool:
@@ -73,7 +92,7 @@ def _risk_ge(risk: RiskLevel, level: RiskLevel) -> bool:
         RiskLevel.MEDIUM: 1,
         RiskLevel.HIGH: 2,
     }
-    return order[risk] >= order[level]
+    return order.get(risk, 0) >= order.get(level, 0)
 
 
 def _intensity_scale(intensity: str) -> float:
@@ -125,52 +144,322 @@ def _make_profile(
     )
 
 
-def _quiet_room_score(ctx: SelectorContext) -> float:
-    m = ctx.schema.metrics
+def _quiet_lift_score(schema: SmartMasterAnalysis) -> float:
+    m = schema.metrics
 
-    integrated_lufs = getattr(m, "integrated_lufs", -10.0)
-    true_peak_dbtp = getattr(m, "true_peak_dbtp", -1.0)
-    limiter_stress_proxy = getattr(m, "limiter_stress_proxy", 0.0)
-    near_clip_ratio = getattr(m, "near_clip_ratio", 0.0)
+    integrated_lufs = _safe(getattr(m, "integrated_lufs", None), -12.0)
+    true_peak_dbtp = _safe(getattr(m, "true_peak_dbtp", None), -1.0)
+    limiter_stress_proxy = _safe(getattr(m, "limiter_stress_proxy", None), 0.0)
+    near_clip_ratio = _safe(getattr(m, "near_clip_ratio", None), 0.0)
+    crest_db = _safe(getattr(m, "crest_db", None), 10.0)
+    punch_proxy = _safe(getattr(m, "punch_proxy", None), 10.0)
 
-    lufs_room = _clamp((-9.8 - integrated_lufs) / 4.5, 0.0, 1.0)
-    peak_room = _clamp((-0.6 - true_peak_dbtp) / 2.4, 0.0, 1.0)
-    stress_room = _clamp((0.96 - limiter_stress_proxy) / 0.28, 0.0, 1.0)
-    clip_room = _clamp((0.006 - near_clip_ratio) / 0.006, 0.0, 1.0)
+    lufs_room = _clamp((-10.2 - integrated_lufs) / 4.8, 0.0, 1.0)
+    peak_room = _clamp((-1.15 - true_peak_dbtp) / 2.8, 0.0, 1.0)
+    stress_room = _clamp((0.94 - limiter_stress_proxy) / 0.26, 0.0, 1.0)
+    clip_room = _clamp((0.0045 - near_clip_ratio) / 0.0045, 0.0, 1.0)
+
+    punch_room = _clamp((min(crest_db, punch_proxy) - 8.8) / 4.0, 0.0, 1.0)
 
     return _clamp(
         (lufs_room * 0.42)
-        + (peak_room * 0.24)
-        + (stress_room * 0.22)
-        + (clip_room * 0.12),
+        + (peak_room * 0.22)
+        + (stress_room * 0.17)
+        + (clip_room * 0.09)
+        + (punch_room * 0.10),
         0.0,
         1.0,
     )
 
 
-def _hard_emergency(ctx: SelectorContext) -> bool:
-    m = ctx.schema.metrics
-    d = ctx.schema.derived
-    p = ctx.schema.projection
+def _punch_preserve_score(schema: SmartMasterAnalysis) -> float:
+    m = schema.metrics
 
-    true_peak_dbtp = getattr(m, "true_peak_dbtp", -1.0)
-    near_clip_ratio = getattr(m, "near_clip_ratio", 0.0)
-    crest_db = getattr(m, "crest_db", 10.0)
-    punch_proxy = getattr(m, "punch_proxy", 10.0)
+    crest_db = _safe(getattr(m, "crest_db", None), 10.0)
+    punch_proxy = _safe(getattr(m, "punch_proxy", None), 10.0)
+    plr_proxy_db = _safe(getattr(m, "plr_proxy_db", None), 10.0)
+    lra_ebu = _safe(getattr(m, "lra_ebu", None), 3.0)
+
+    crest_score = _clamp((crest_db - 8.5) / 5.0, 0.0, 1.0)
+    punch_score = _clamp((punch_proxy - 9.0) / 5.0, 0.0, 1.0)
+    plr_score = _clamp((plr_proxy_db - 8.5) / 5.0, 0.0, 1.0)
+    lra_score = _clamp((lra_ebu - 1.8) / 3.5, 0.0, 1.0)
+
+    return _clamp(
+        (crest_score * 0.34)
+        + (punch_score * 0.34)
+        + (plr_score * 0.22)
+        + (lra_score * 0.10),
+        0.0,
+        1.0,
+    )
+
+
+def _dirt_buildup_score(schema: SmartMasterAnalysis) -> float:
+    m = schema.metrics
+    c = schema.cleanup
+    g = schema.guard
+    b = schema.bridge
+
+    lowmid_buildup_ratio_db = _safe(getattr(m, "lowmid_buildup_ratio_db", None), 12.0)
+    mud_to_body_db = _safe(getattr(m, "mud_to_body_db", None), -1.0)
+    mud_200_500_db = _safe(getattr(m, "mud_200_500_db", None), 33.5)
+    lowmid_buildup_200_400_db = _safe(getattr(m, "lowmid_buildup_200_400_db", None), 33.5)
+    body_150_400_db = _safe(getattr(m, "body_150_400_db", None), 33.5)
+
+    ratio_score = _clamp((lowmid_buildup_ratio_db - 14.2) / 6.8, 0.0, 1.0)
+    mud_relation_score = _clamp((mud_to_body_db + 0.45) / 1.65, 0.0, 1.0)
+    absolute_mud_score = _clamp((mud_200_500_db - 35.2) / 4.2, 0.0, 1.0)
+    cluster_score = _clamp((lowmid_buildup_200_400_db - body_150_400_db + 0.35) / 2.1, 0.0, 1.0)
+
+    cleanup_bonus = 0.18 if c.buildup_risk == RiskLevel.HIGH else 0.08 if c.buildup_risk == RiskLevel.MEDIUM else 0.0
+    boxy_bonus = 0.16 if g.shape == UpperBodyShape.BOXY else 0.0
+    glue_bonus = 0.10 if b.state == BridgeState.OVERGLUED or _risk_ge(b.glue_risk, RiskLevel.MEDIUM) else 0.0
+
+    return _clamp(
+        (ratio_score * 0.25)
+        + (mud_relation_score * 0.30)
+        + (absolute_mud_score * 0.18)
+        + (cluster_score * 0.15)
+        + cleanup_bonus
+        + boxy_bonus
+        + glue_bonus,
+        0.0,
+        1.0,
+    )
+
+
+def _body_restore_score(schema: SmartMasterAnalysis) -> float:
+    m = schema.metrics
+    d = schema.derived
+    a = schema.anchor
+
+    center_body_support_proxy = getattr(d, "center_body_support_proxy", None)
+    body_to_mid_handoff_proxy = getattr(d, "body_to_mid_handoff_proxy", None)
+
+    body_150_400_db = _safe(getattr(m, "body_150_400_db", None), 33.5)
+    low_body_150_300_db = _safe(getattr(m, "low_body_150_300_db", None), 33.0)
+    lowmid_120_300_db = _safe(getattr(m, "lowmid_120_300_db", None), 33.0)
+    crest_db = _safe(getattr(m, "crest_db", None), 10.0)
+    punch_proxy = _safe(getattr(m, "punch_proxy", None), 10.0)
+
+    center_weak = 0.0
+    if center_body_support_proxy is not None:
+        center_weak = _clamp((0.54 - float(center_body_support_proxy)) / 0.34, 0.0, 1.0)
+
+    handoff_weak = 0.0
+    if body_to_mid_handoff_proxy is not None:
+        handoff_weak = _clamp((0.50 - float(body_to_mid_handoff_proxy)) / 0.30, 0.0, 1.0)
+
+    body_abs_weak = _clamp((32.0 - body_150_400_db) / 4.0, 0.0, 1.0)
+    low_body_weak = _clamp((31.8 - low_body_150_300_db) / 4.0, 0.0, 1.0)
+    lowmid_weak = _clamp((31.6 - lowmid_120_300_db) / 4.0, 0.0, 1.0)
+    punch_fragile = _clamp((9.2 - min(crest_db, punch_proxy)) / 2.8, 0.0, 1.0)
+
+    anchor_bonus = 0.20 if a.state == AnchorState.DEFICIENT else 0.0
+    foundation_bonus = 0.18 if not a.foundation_present else 0.0
+    fragility_bonus = 0.12 if a.fragility == RiskLevel.MEDIUM else 0.20 if a.fragility == RiskLevel.HIGH else 0.0
+
+    return _clamp(
+        (center_weak * 0.28)
+        + (handoff_weak * 0.12)
+        + (body_abs_weak * 0.18)
+        + (low_body_weak * 0.16)
+        + (lowmid_weak * 0.08)
+        + (punch_fragile * 0.08)
+        + anchor_bonus
+        + foundation_bonus
+        + fragility_bonus,
+        0.0,
+        1.0,
+    )
+
+
+def _bridge_restore_score(schema: SmartMasterAnalysis) -> float:
+    m = schema.metrics
+    d = schema.derived
+    b = schema.bridge
+
+    body_to_mid_handoff_proxy = getattr(d, "body_to_mid_handoff_proxy", None)
+
+    bass_to_body_db = _safe(getattr(m, "bass_to_body_db", None), 5.0)
+    sub_to_body_db = _safe(getattr(m, "sub_to_body_db", None), 5.0)
+    low_foundation_ratio_db = _safe(getattr(m, "low_foundation_ratio_db", None), 5.0)
+
+    handoff_weak = 0.0
+    if body_to_mid_handoff_proxy is not None:
+        handoff_weak = _clamp((0.52 - float(body_to_mid_handoff_proxy)) / 0.34, 0.0, 1.0)
+
+    detached_bass = _clamp((bass_to_body_db - 7.4) / 4.8, 0.0, 1.0)
+    sub_gap = _clamp((2.8 - sub_to_body_db) / 3.2, 0.0, 1.0)
+    foundation_gap = _clamp((3.2 - low_foundation_ratio_db) / 3.8, 0.0, 1.0)
+
+    broken_bonus = 0.26 if b.state == BridgeState.BROKEN else 0.0
+    gap_bonus = 0.16 if _risk_ge(b.gap_risk, RiskLevel.MEDIUM) else 0.0
+
+    return _clamp(
+        (handoff_weak * 0.30)
+        + (detached_bass * 0.24)
+        + (sub_gap * 0.12)
+        + (foundation_gap * 0.08)
+        + broken_bonus
+        + gap_bonus,
+        0.0,
+        1.0,
+    )
+
+
+def _studio_density_score(schema: SmartMasterAnalysis, dirt_score: float) -> float:
+    m = schema.metrics
+    d = schema.derived
+
+    center_body_support_proxy = getattr(d, "center_body_support_proxy", None)
+    body_to_mid_handoff_proxy = getattr(d, "body_to_mid_handoff_proxy", None)
+
+    body_150_400_db = _safe(getattr(m, "body_150_400_db", None), 33.0)
+    low_body_150_300_db = _safe(getattr(m, "low_body_150_300_db", None), 33.0)
+    lowmid_120_300_db = _safe(getattr(m, "lowmid_120_300_db", None), 33.0)
+    mud_to_body_db = _safe(getattr(m, "mud_to_body_db", None), -1.0)
+    crest_db = _safe(getattr(m, "crest_db", None), 10.0)
+    punch_proxy = _safe(getattr(m, "punch_proxy", None), 10.0)
+    plr_proxy_db = _safe(getattr(m, "plr_proxy_db", None), 10.0)
+
+    body_present = _clamp((body_150_400_db - 29.8) / 5.2, 0.0, 1.0)
+    low_body_present = _clamp((low_body_150_300_db - 29.8) / 5.0, 0.0, 1.0)
+    lowmid_present = _clamp((lowmid_120_300_db - 30.2) / 5.0, 0.0, 1.0)
+
+    center_score = 0.62
+    if center_body_support_proxy is not None:
+        center_score = _clamp(float(center_body_support_proxy), 0.0, 1.0)
+
+    handoff_score = 0.62
+    if body_to_mid_handoff_proxy is not None:
+        handoff_score = _clamp(float(body_to_mid_handoff_proxy), 0.0, 1.0)
+
+    mud_is_not_dominant = _clamp((-0.05 - mud_to_body_db) / 1.45, 0.0, 1.0)
+    punch_ok = _clamp((min(crest_db, punch_proxy, plr_proxy_db) - 9.0) / 4.5, 0.0, 1.0)
+
+    return _clamp(
+        (body_present * 0.18)
+        + (low_body_present * 0.14)
+        + (lowmid_present * 0.10)
+        + (center_score * 0.20)
+        + (handoff_score * 0.14)
+        + (mud_is_not_dominant * 0.14)
+        + (punch_ok * 0.10)
+        - (dirt_score * 0.22),
+        0.0,
+        1.0,
+    )
+
+
+def _projection_need_score(schema: SmartMasterAnalysis) -> float:
+    m = schema.metrics
+    d = schema.derived
+    p = schema.projection
+
+    presence_to_body_db = _safe(getattr(m, "presence_to_body_db", None), -15.0)
+    mid_1k_2k_db = _safe(getattr(m, "mid_1k_2k_db", None), 24.0)
+    air_ratio_db = _safe(getattr(m, "air_ratio_db", None), -19.0)
+
+    body_to_mid_handoff_proxy = getattr(d, "body_to_mid_handoff_proxy", None)
+
+    presence_gap = _clamp((-12.5 - presence_to_body_db) / 8.5, 0.0, 1.0)
+    mid_weak = _clamp((24.0 - mid_1k_2k_db) / 5.0, 0.0, 1.0)
+    air_gap = _clamp((-18.0 - air_ratio_db) / 8.0, 0.0, 1.0)
+
+    handoff_ready = 0.55
+    if body_to_mid_handoff_proxy is not None:
+        handoff_ready = _clamp(float(body_to_mid_handoff_proxy), 0.0, 1.0)
+
+    state_bonus = 0.18 if p.state == ProjectionState.UNDERPROJECTED else 0.0
+
+    return _clamp(
+        (presence_gap * 0.40)
+        + (mid_weak * 0.16)
+        + (air_gap * 0.10)
+        + (handoff_ready * 0.16)
+        + state_bonus,
+        0.0,
+        1.0,
+    )
+
+
+def _top_emergency_score(schema: SmartMasterAnalysis) -> float:
+    m = schema.metrics
+    d = schema.derived
+    p = schema.projection
+
+    true_peak_dbtp = _safe(getattr(m, "true_peak_dbtp", None), -1.0)
+    near_clip_ratio = _safe(getattr(m, "near_clip_ratio", None), 0.0)
+    crest_db = _safe(getattr(m, "crest_db", None), 10.0)
+    punch_proxy = _safe(getattr(m, "punch_proxy", None), 10.0)
+
+    harshness_index = _safe(getattr(m, "harshness_index", None), -10.0)
+    sibilance_index = _safe(getattr(m, "sibilance_index", None), -4.0)
+    harsh_to_mid_db = _safe(getattr(m, "harsh_to_mid_db", None), -7.0)
+    sibilance_5k_9k_db = _safe(getattr(m, "sibilance_5k_9k_db", None), 15.0)
 
     top_push = getattr(d, "top_push_safety_proxy", None)
 
-    hard_clip = true_peak_dbtp >= 2.20 or near_clip_ratio >= 0.018
-    punch_collapse = crest_db < 8.2 and punch_proxy < 9.2
+    hard_clip_score = _clamp((true_peak_dbtp - 0.85) / 1.35, 0.0, 1.0)
+    near_clip_score = _clamp((near_clip_ratio - 0.006) / 0.014, 0.0, 1.0)
+    punch_collapse_score = _clamp((8.5 - min(crest_db, punch_proxy)) / 2.4, 0.0, 1.0)
 
-    top_collapse = (
-        p.harshness_risk == RiskLevel.HIGH
-        and p.sibilance_risk == RiskLevel.HIGH
-        and top_push is not None
-        and top_push < 0.34
+    top_push_collapse = 0.0
+    if top_push is not None:
+        top_push_collapse = _clamp((0.32 - float(top_push)) / 0.22, 0.0, 1.0)
+
+    harsh_score = _clamp((harshness_index + 6.0) / 4.0, 0.0, 1.0)
+    sib_index_score = _clamp((sibilance_index - 4.8) / 3.2, 0.0, 1.0)
+    harsh_relation_score = _clamp((harsh_to_mid_db + 2.4) / 2.8, 0.0, 1.0)
+    sib_band_score = _clamp((sibilance_5k_9k_db - 18.4) / 3.2, 0.0, 1.0)
+
+    risk_pair_bonus = 0.0
+    if p.harshness_risk == RiskLevel.HIGH and p.sibilance_risk == RiskLevel.HIGH:
+        risk_pair_bonus = 0.08
+
+    top_danger = _clamp(
+        (top_push_collapse * 0.18)
+        + (harsh_score * 0.20)
+        + (sib_index_score * 0.20)
+        + (harsh_relation_score * 0.16)
+        + (sib_band_score * 0.14)
+        + risk_pair_bonus,
+        0.0,
+        1.0,
     )
 
-    return bool(hard_clip or punch_collapse or top_collapse)
+    return _clamp(
+        (hard_clip_score * 0.22)
+        + (near_clip_score * 0.16)
+        + (punch_collapse_score * 0.18)
+        + (top_danger * 0.44),
+        0.0,
+        1.0,
+    )
+
+
+def _hard_emergency_from_score(schema: SmartMasterAnalysis, top_emergency_score: float) -> bool:
+    m = schema.metrics
+
+    true_peak_dbtp = _safe(getattr(m, "true_peak_dbtp", None), -1.0)
+    near_clip_ratio = _safe(getattr(m, "near_clip_ratio", None), 0.0)
+    crest_db = _safe(getattr(m, "crest_db", None), 10.0)
+    punch_proxy = _safe(getattr(m, "punch_proxy", None), 10.0)
+
+    hard_clip = true_peak_dbtp >= 2.20 or near_clip_ratio >= 0.018
+    punch_collapse = crest_db < 7.8 and punch_proxy < 8.8
+
+    return bool(hard_clip or punch_collapse or top_emergency_score >= 0.72)
+
+
+def _quiet_room_score(ctx: SelectorContext) -> float:
+    return ctx.quiet_lift_score
+
+
+def _hard_emergency(ctx: SelectorContext) -> bool:
+    return ctx.hard_emergency
 
 
 def build_selector_context(schema: SmartMasterAnalysis, tone: str, intensity: str) -> SelectorContext:
@@ -186,66 +475,113 @@ def build_selector_context(schema: SmartMasterAnalysis, tone: str, intensity: st
     tone_projection_scale = _tone_projection_scale(tone)
     tone_cleanup_scale = _tone_cleanup_scale(tone)
 
+    dirt_buildup_score = _dirt_buildup_score(schema)
+    body_restore_score = _body_restore_score(schema)
+    bridge_restore_score = _bridge_restore_score(schema)
+    studio_density_score = _studio_density_score(schema, dirt_buildup_score)
+    projection_need_score = _projection_need_score(schema)
+    top_emergency_score = _top_emergency_score(schema)
+    quiet_lift_score = _quiet_lift_score(schema)
+    punch_preserve_score = _punch_preserve_score(schema)
+
+    hard_emergency = _hard_emergency_from_score(schema, top_emergency_score)
+
     top_safe = (
-        p.harshness_risk == RiskLevel.LOW
+        not hard_emergency
+        and top_emergency_score < 0.24
+        and p.harshness_risk == RiskLevel.LOW
         and p.sibilance_risk == RiskLevel.LOW
-        and (d.top_push_safety_proxy is None or d.top_push_safety_proxy >= 0.60)
+        and (d.top_push_safety_proxy is None or d.top_push_safety_proxy >= 0.56)
     )
+
     top_guarded = (
         not top_safe
-        and (d.top_push_safety_proxy is None or d.top_push_safety_proxy >= 0.42)
+        and not hard_emergency
+        and top_emergency_score < 0.66
     )
 
-    # ВАЖНО:
-    # Старый баг был: top_fragile = not top_guarded.
-    # Это делало top_fragile=True даже при top_safe=True.
-    top_fragile = (not top_safe) and (not top_guarded)
+    top_fragile = (
+        not top_safe
+        and not top_guarded
+    )
 
     foundation_missing = not a.foundation_present
-    body_fragile = a.fragility in (RiskLevel.MEDIUM, RiskLevel.HIGH)
+
+    body_fragile = (
+        a.fragility in (RiskLevel.MEDIUM, RiskLevel.HIGH)
+        or body_restore_score >= 0.52
+    )
+
     body_weak = (
         a.state == AnchorState.DEFICIENT
         or foundation_missing
-        or (_has(d.center_body_support_proxy) and d.center_body_support_proxy < 0.44)
-        or (_has(m.low_body_150_300_db) and m.low_body_150_300_db < 31.0)
+        or body_restore_score >= 0.58
+        or (_has(d.center_body_support_proxy) and d.center_body_support_proxy < 0.40)
+        or (_has(m.low_body_150_300_db) and m.low_body_150_300_db < 30.6)
     )
 
-    bridge_broken = b.state == BridgeState.BROKEN
-    bridge_gluey = b.state == BridgeState.OVERGLUED or _risk_ge(b.glue_risk, RiskLevel.MEDIUM)
-    bridge_gap_risky = _risk_ge(b.gap_risk, RiskLevel.MEDIUM)
+    bridge_broken = (
+        b.state == BridgeState.BROKEN
+        or bridge_restore_score >= 0.70
+    )
+
+    bridge_gluey = (
+        b.state == BridgeState.OVERGLUED
+        or _risk_ge(b.glue_risk, RiskLevel.MEDIUM)
+    )
+
+    bridge_gap_risky = (
+        _risk_ge(b.gap_risk, RiskLevel.MEDIUM)
+        or bridge_restore_score >= 0.48
+    )
 
     cleanup_heavy_needed = (
         c.readiness == CleanupReadiness.SAFE
         and c.buildup_risk == RiskLevel.HIGH
+        and dirt_buildup_score >= 0.58
+        and studio_density_score < 0.62
     )
-    cleanup_guarded = c.readiness == CleanupReadiness.GUARDED
+
+    cleanup_guarded = (
+        c.readiness == CleanupReadiness.GUARDED
+        or (
+            c.buildup_risk in (RiskLevel.MEDIUM, RiskLevel.HIGH)
+            and dirt_buildup_score >= 0.38
+        )
+    )
 
     boxy_active = g.shape == UpperBodyShape.BOXY
     transition_fragile = g.transition_state in (TransitionState.WEAK, TransitionState.THINNING)
 
-    underprojected = p.state == ProjectionState.UNDERPROJECTED
+    underprojected = (
+        p.state == ProjectionState.UNDERPROJECTED
+        or projection_need_score >= 0.58
+        or quiet_lift_score >= 0.56
+    )
+
     overpushed = p.state == ProjectionState.OVERPUSHED
 
+    dirty_dense_candidate = (
+        dirt_buildup_score >= 0.60
+        and c.buildup_risk == RiskLevel.HIGH
+        and studio_density_score < 0.62
+    )
+
     dense_good_candidate = (
-        not body_fragile
-        and not body_weak
+        studio_density_score >= 0.58
+        and dirt_buildup_score <= 0.54
         and not bridge_broken
-        and c.readiness != CleanupReadiness.DENIED
-        and c.buildup_risk in (RiskLevel.MEDIUM, RiskLevel.HIGH)
         and not boxy_active
         and not transition_fragile
-        and (_has(d.center_body_support_proxy) is False or d.center_body_support_proxy >= 0.54)
-        and (_has(d.body_to_mid_handoff_proxy) is False or d.body_to_mid_handoff_proxy >= 0.54)
-        and (_has(m.mud_to_body_db) is False or m.mud_to_body_db < 0.10)
     )
 
-    dirty_dense_candidate = (
-        c.buildup_risk == RiskLevel.HIGH
-        and (boxy_active or (_has(m.mud_to_body_db) and m.mud_to_body_db >= -0.05))
-        and (bridge_gluey or (_has(m.lowmid_buildup_ratio_db) and m.lowmid_buildup_ratio_db >= 17.2))
+    thin_candidate = (
+        body_weak
+        or bridge_broken
+        or transition_fragile
+        or body_restore_score >= 0.62
+        or bridge_restore_score >= 0.62
     )
-
-    thin_candidate = body_weak or bridge_broken or transition_fragile
 
     ctx = SelectorContext(
         schema=schema,
@@ -257,6 +593,7 @@ def build_selector_context(schema: SmartMasterAnalysis, tone: str, intensity: st
         top_safe=top_safe,
         top_guarded=top_guarded,
         top_fragile=top_fragile,
+        hard_emergency=hard_emergency,
         body_fragile=body_fragile,
         body_weak=body_weak,
         foundation_missing=foundation_missing,
@@ -272,6 +609,14 @@ def build_selector_context(schema: SmartMasterAnalysis, tone: str, intensity: st
         dense_good_candidate=dense_good_candidate,
         dirty_dense_candidate=dirty_dense_candidate,
         thin_candidate=thin_candidate,
+        studio_density_score=studio_density_score,
+        dirt_buildup_score=dirt_buildup_score,
+        body_restore_score=body_restore_score,
+        bridge_restore_score=bridge_restore_score,
+        projection_need_score=projection_need_score,
+        top_emergency_score=top_emergency_score,
+        quiet_lift_score=quiet_lift_score,
+        punch_preserve_score=punch_preserve_score,
     )
 
     ctx.primary_correction_lane = choose_primary_correction_lane(ctx)
@@ -290,7 +635,7 @@ def choose_primary_correction_lane(ctx: SelectorContext) -> str:
     if ctx.boxy_active or ctx.transition_fragile:
         return "guard"
 
-    if ctx.underprojected:
+    if ctx.underprojected or ctx.quiet_lift_score >= 0.50:
         return "projection"
 
     return "stability_hold"
@@ -315,11 +660,16 @@ def choose_secondary_support_lane(ctx: SelectorContext) -> str:
         return "projection_support"
 
     if ctx.primary_correction_lane == "projection":
+        if ctx.body_restore_score >= 0.44 or ctx.bridge_restore_score >= 0.44:
+            return "body_support"
         if ctx.boxy_active or ctx.transition_fragile:
             return "guard_support"
-        if ctx.cleanup_heavy_needed and not ctx.body_fragile:
+        if ctx.cleanup_guarded and not ctx.dense_good_candidate:
             return "cleanup_support"
         return "none"
+
+    if ctx.body_restore_score >= 0.40 or ctx.bridge_restore_score >= 0.40:
+        return "body_support"
 
     if ctx.boxy_active:
         return "guard_support"
@@ -328,32 +678,41 @@ def choose_secondary_support_lane(ctx: SelectorContext) -> str:
 
 
 def choose_primary_benefit_lane(ctx: SelectorContext) -> str:
-    # В polish-ветке cleanup не является главным benefit.
-    # Cleanup подготавливает место. Главная магия - body/bridge + projection + finish.
     if ctx.thin_candidate:
         return "body_gain"
 
-    if ctx.underprojected:
+    if ctx.underprojected or ctx.quiet_lift_score >= 0.42:
         return "forward_gain"
 
-    if ctx.top_safe or ctx.top_guarded:
+    if ctx.dense_good_candidate:
         return "forward_gain"
 
     return "forward_gain"
 
 
-def select_anchor_profile(ctx: SelectorContext) -> SelectedRoleProfile:
-    a = ctx.schema.anchor
-    d = ctx.schema.derived
-    room = _quiet_room_score(ctx)
-
-    notes = [
+def _base_notes(ctx: SelectorContext) -> list[str]:
+    return [
         f"correction={ctx.primary_correction_lane}",
         f"support={ctx.secondary_support_lane}",
         f"benefit={ctx.primary_benefit_lane}",
+        f"studio_density_score={round(ctx.studio_density_score, 4)}",
+        f"dirt_buildup_score={round(ctx.dirt_buildup_score, 4)}",
+        f"body_restore_score={round(ctx.body_restore_score, 4)}",
+        f"bridge_restore_score={round(ctx.bridge_restore_score, 4)}",
+        f"projection_need_score={round(ctx.projection_need_score, 4)}",
+        f"top_emergency_score={round(ctx.top_emergency_score, 4)}",
+        f"quiet_lift_score={round(ctx.quiet_lift_score, 4)}",
+        f"punch_preserve_score={round(ctx.punch_preserve_score, 4)}",
     ]
 
-    if a.stop:
+
+def select_anchor_profile(ctx: SelectorContext) -> SelectedRoleProfile:
+    a = ctx.schema.anchor
+    room = _quiet_room_score(ctx)
+
+    notes = _base_notes(ctx)
+
+    if a.stop and ctx.body_restore_score < 0.52:
         return _make_profile(
             RoleName.ANCHOR,
             "anchor_restrain_upper_body",
@@ -364,13 +723,13 @@ def select_anchor_profile(ctx: SelectorContext) -> SelectedRoleProfile:
             notes=notes + ["anchor stop but body floor retained"],
         )
 
-    if a.state == AnchorState.EXCESSIVE:
+    if a.state == AnchorState.EXCESSIVE and ctx.body_restore_score < 0.48:
         return _make_profile(
             RoleName.ANCHOR,
             "anchor_restrain_upper_body",
             "anchor excessive",
-            0.20,
-            0.32,
+            0.18,
+            0.30,
             notes=notes + ["excessive anchor mass shaped, not killed"],
         )
 
@@ -379,26 +738,28 @@ def select_anchor_profile(ctx: SelectorContext) -> SelectedRoleProfile:
         or ctx.foundation_missing
         or ctx.primary_correction_lane == "anchor_bridge"
         or ctx.primary_benefit_lane == "body_gain"
+        or ctx.body_restore_score >= 0.42
     )
 
     if restore_needed:
-        amount = 0.28 * ctx.intensity_scale
+        amount = 0.24 * ctx.intensity_scale
+        amount += 0.08 * ctx.body_restore_score
         amount += 0.03 * room
 
-        if a.state == AnchorState.DEFICIENT or ctx.foundation_missing:
-            amount += 0.05
         if ctx.primary_benefit_lane == "body_gain":
             amount += 0.04
-        if _has(d.center_body_support_proxy) and d.center_body_support_proxy < 0.40:
-            amount += 0.03
-        if ctx.body_fragile:
-            amount -= 0.02
+
+        if ctx.dense_good_candidate:
+            amount += 0.02
+
+        if ctx.dirt_buildup_score >= 0.62:
+            amount -= 0.03
 
         return _make_profile(
             RoleName.ANCHOR,
             "anchor_restore_controlled",
             "anchor restore path",
-            _clamp(amount, 0.24, 0.44),
+            _clamp(amount, 0.22, 0.44),
             0.50,
             notes=notes + ["body support prioritized"],
         )
@@ -424,11 +785,15 @@ def select_anchor_profile(ctx: SelectorContext) -> SelectedRoleProfile:
             notes=notes + ["medium fragility"],
         )
 
+    amount = 0.18 + (0.04 * room)
+    if ctx.dense_good_candidate:
+        amount += 0.02
+
     return _make_profile(
         RoleName.ANCHOR,
         "anchor_hold_safe",
         "anchor balanced",
-        0.20 + (0.02 * room),
+        _clamp(amount, 0.18, 0.24),
         0.32,
         notes=notes + ["default body floor"],
     )
@@ -436,16 +801,11 @@ def select_anchor_profile(ctx: SelectorContext) -> SelectedRoleProfile:
 
 def select_bridge_profile(ctx: SelectorContext) -> SelectedRoleProfile:
     b = ctx.schema.bridge
-    d = ctx.schema.derived
     room = _quiet_room_score(ctx)
 
-    notes = [
-        f"correction={ctx.primary_correction_lane}",
-        f"support={ctx.secondary_support_lane}",
-        f"benefit={ctx.primary_benefit_lane}",
-    ]
+    notes = _base_notes(ctx)
 
-    if b.stop:
+    if b.stop and ctx.bridge_restore_score < 0.52:
         return _make_profile(
             RoleName.BRIDGE,
             "bridge_restrain_glue",
@@ -457,11 +817,12 @@ def select_bridge_profile(ctx: SelectorContext) -> SelectedRoleProfile:
         )
 
     if b.state == BridgeState.OVERGLUED or b.glue_risk == RiskLevel.HIGH:
+        amount = 0.15 + (0.05 * (1.0 - ctx.dirt_buildup_score))
         return _make_profile(
             RoleName.BRIDGE,
             "bridge_restrain_glue",
             "bridge glue excess",
-            0.18,
+            _clamp(amount, 0.14, 0.22),
             0.30,
             notes=notes + ["glue shaped, bridge not killed"],
         )
@@ -471,18 +832,17 @@ def select_bridge_profile(ctx: SelectorContext) -> SelectedRoleProfile:
         or ctx.primary_correction_lane == "anchor_bridge"
         or ctx.primary_benefit_lane == "body_gain"
         or ctx.bridge_gap_risky
+        or ctx.bridge_restore_score >= 0.42
     )
 
     if restore_needed:
-        amount = 0.22 * ctx.intensity_scale
+        amount = 0.18 * ctx.intensity_scale
+        amount += 0.08 * ctx.bridge_restore_score
         amount += 0.02 * room
 
-        if b.state == BridgeState.BROKEN:
-            amount += 0.06
         if ctx.primary_benefit_lane == "body_gain":
-            amount += 0.04
-        if _has(d.body_to_mid_handoff_proxy) and d.body_to_mid_handoff_proxy < 0.42:
             amount += 0.03
+
         if ctx.bridge_gluey:
             amount -= 0.03
 
@@ -490,7 +850,7 @@ def select_bridge_profile(ctx: SelectorContext) -> SelectedRoleProfile:
             RoleName.BRIDGE,
             "bridge_restore_controlled",
             "bridge restore path",
-            _clamp(amount, 0.20, 0.42),
+            _clamp(amount, 0.18, 0.40),
             0.46,
             notes=notes + ["bridge support prioritized"],
         )
@@ -505,11 +865,15 @@ def select_bridge_profile(ctx: SelectorContext) -> SelectedRoleProfile:
             notes=notes + ["conservative bridge hold"],
         )
 
+    amount = 0.16 + (0.03 * room)
+    if ctx.dense_good_candidate:
+        amount += 0.01
+
     return _make_profile(
         RoleName.BRIDGE,
         "bridge_hold_safe",
         "bridge balanced",
-        0.17 + (0.02 * room),
+        _clamp(amount, 0.16, 0.22),
         0.30,
         notes=notes + ["default bridge floor"],
     )
@@ -517,14 +881,9 @@ def select_bridge_profile(ctx: SelectorContext) -> SelectedRoleProfile:
 
 def select_cleanup_profile(ctx: SelectorContext) -> SelectedRoleProfile:
     c = ctx.schema.cleanup
-    d = ctx.schema.derived
 
-    notes = [
-        f"correction={ctx.primary_correction_lane}",
-        f"support={ctx.secondary_support_lane}",
-        f"benefit={ctx.primary_benefit_lane}",
-        "cleanup is preparation, not main polish benefit",
-    ]
+    notes = _base_notes(ctx)
+    notes.append("cleanup is preparation, not main polish benefit")
 
     if c.stop or c.readiness == CleanupReadiness.DENIED:
         return _make_profile(
@@ -537,45 +896,56 @@ def select_cleanup_profile(ctx: SelectorContext) -> SelectedRoleProfile:
             notes=notes + ["cleanup denied -> micro only"],
         )
 
+    if ctx.dense_good_candidate and ctx.dirt_buildup_score < 0.46:
+        return _make_profile(
+            RoleName.CLEANUP,
+            "cleanup_micro_corrective",
+            "studio density preserve",
+            0.10,
+            0.18,
+            notes=notes + ["studio density detected: preserve body, only micro prep"],
+        )
+
     if c.readiness == CleanupReadiness.GUARDED:
-        amount = 0.16 * ctx.intensity_scale * ctx.tone_cleanup_scale
-        if c.buildup_risk == RiskLevel.HIGH:
-            amount += 0.03
+        amount = 0.14 * ctx.intensity_scale * ctx.tone_cleanup_scale
+        amount += 0.06 * ctx.dirt_buildup_score
 
         return _make_profile(
             RoleName.CLEANUP,
             "cleanup_guarded_safe",
             "cleanup guarded",
-            _clamp(amount, 0.15, 0.28),
+            _clamp(amount, 0.14, 0.28),
             0.34,
             notes=notes + ["guarded cleanup separates mud without drying body"],
         )
 
     dense_allowed = True
+
     if ctx.body_fragile:
         dense_allowed = False
         notes.append("body fragility blocks dense cleanup")
     if ctx.bridge_broken:
         dense_allowed = False
         notes.append("broken bridge blocks dense cleanup")
-    if _has(d.center_body_support_proxy) and d.center_body_support_proxy < 0.50:
+    if ctx.body_restore_score >= 0.50:
         dense_allowed = False
-        notes.append("center-body support too weak")
-    if _has(d.body_to_mid_handoff_proxy) and d.body_to_mid_handoff_proxy < 0.48:
+        notes.append("body restore score blocks dense cleanup")
+    if ctx.bridge_restore_score >= 0.50:
         dense_allowed = False
-        notes.append("handoff too weak")
+        notes.append("bridge restore score blocks dense cleanup")
+    if ctx.studio_density_score >= 0.62 and ctx.dirt_buildup_score < 0.62:
+        dense_allowed = False
+        notes.append("studio density is not mud")
 
-    if (
-        dense_allowed
-        and ctx.primary_correction_lane == "cleanup"
-        and c.buildup_risk == RiskLevel.HIGH
-    ):
-        amount = 0.30 * ctx.intensity_scale * ctx.tone_cleanup_scale
+    if dense_allowed and ctx.cleanup_heavy_needed and ctx.dirty_dense_candidate:
+        amount = 0.24 * ctx.intensity_scale * ctx.tone_cleanup_scale
+        amount += 0.12 * ctx.dirt_buildup_score
+
         return _make_profile(
             RoleName.CLEANUP,
             "cleanup_focused_dense",
             "cleanup primary preparation",
-            _clamp(amount, 0.26, 0.42),
+            _clamp(amount, 0.24, 0.42),
             0.50,
             notes=notes + ["dirty track cleanup, but projection remains mandatory"],
         )
@@ -583,16 +953,19 @@ def select_cleanup_profile(ctx: SelectorContext) -> SelectedRoleProfile:
     if (
         ctx.secondary_support_lane == "cleanup_support"
         or c.buildup_risk in (RiskLevel.MEDIUM, RiskLevel.HIGH)
+        or ctx.dirt_buildup_score >= 0.36
     ):
-        amount = 0.18 * ctx.intensity_scale * ctx.tone_cleanup_scale
-        if c.buildup_risk == RiskLevel.HIGH:
-            amount += 0.03
+        amount = 0.14 * ctx.intensity_scale * ctx.tone_cleanup_scale
+        amount += 0.08 * ctx.dirt_buildup_score
+
+        if ctx.dense_good_candidate:
+            amount -= 0.03
 
         return _make_profile(
             RoleName.CLEANUP,
             "cleanup_guarded_safe",
             "cleanup controlled",
-            _clamp(amount, 0.17, 0.30),
+            _clamp(amount, 0.14, 0.28),
             0.36,
             notes=notes + ["cleanup retained as preparation lane"],
         )
@@ -614,11 +987,7 @@ def select_guard_profile(
     g = ctx.schema.guard
     d = ctx.schema.derived
 
-    notes = [
-        f"correction={ctx.primary_correction_lane}",
-        f"support={ctx.secondary_support_lane}",
-        f"benefit={ctx.primary_benefit_lane}",
-    ]
+    notes = _base_notes(ctx)
 
     if g.stop:
         return _make_profile(
@@ -632,11 +1001,12 @@ def select_guard_profile(
         )
 
     if g.transition_state in (TransitionState.THINNING, TransitionState.WEAK):
+        amount = 0.18 + (0.04 * ctx.bridge_restore_score)
         return _make_profile(
             RoleName.GUARD,
             "guard_transition_support_safe",
             "guard transition support",
-            0.20,
+            _clamp(amount, 0.18, 0.28),
             0.32,
             notes=notes + ["transition support priority"],
         )
@@ -652,9 +1022,11 @@ def select_guard_profile(
                 notes=notes + ["prefer support over subtractive guard"],
             )
 
-        amount = 0.18
+        amount = 0.16
+        amount += 0.08 * ctx.dirt_buildup_score
+
         if ctx.primary_correction_lane == "guard":
-            amount += 0.04
+            amount += 0.03
         elif ctx.secondary_support_lane == "guard_support":
             amount += 0.02
 
@@ -665,16 +1037,20 @@ def select_guard_profile(
             RoleName.GUARD,
             "guard_boxiness_controlled",
             "guard boxiness control",
-            _clamp(amount, 0.18, 0.32),
+            _clamp(amount, 0.16, 0.30),
             0.34,
             notes=notes + ["boxiness managed without blocking projection"],
         )
+
+    amount = 0.14
+    if ctx.dense_good_candidate:
+        amount += 0.01
 
     return _make_profile(
         RoleName.GUARD,
         "guard_hold_safe",
         "guard stable",
-        0.15,
+        _clamp(amount, 0.14, 0.18),
         0.26,
         notes=notes + ["guard hold"],
     )
@@ -689,38 +1065,51 @@ def select_projection_profile(
     d = ctx.schema.derived
     room = _quiet_room_score(ctx)
 
-    notes = [
-        f"correction={ctx.primary_correction_lane}",
-        f"support={ctx.secondary_support_lane}",
-        f"benefit={ctx.primary_benefit_lane}",
-        "projection is mandatory polish magic",
-    ]
+    notes = _base_notes(ctx)
+    notes.append("projection is mandatory polish magic")
 
-    if p.stop or p.readiness == ProjectionReadiness.DENIED:
+    if ctx.hard_emergency:
         return _make_profile(
             RoleName.PROJECTION,
             "projection_clamp_safe",
-            "projection denied/stop",
-            0.18,
-            0.28,
+            "hard emergency projection clamp",
+            0.16,
+            0.26,
             forced_clamp=True,
-            notes=notes + ["projection denied -> clamp, not off"],
+            notes=notes + ["hard emergency -> clamp, not off"],
+        )
+
+    if p.stop or p.readiness == ProjectionReadiness.DENIED:
+        amount = 0.18 + (0.06 * ctx.projection_need_score) + (0.04 * room)
+        return _make_profile(
+            RoleName.PROJECTION,
+            "projection_mild_safe",
+            "projection denied/stop but musical floor",
+            _clamp(amount, 0.18, 0.30),
+            0.36,
+            forced_clamp=True,
+            notes=notes + ["projection denied -> guarded musical floor, not silence"],
         )
 
     if p.state == ProjectionState.OVERPUSHED:
+        amount = 0.14
+        amount += 0.05 * ctx.projection_need_score
+        amount += 0.03 * room
+
         return _make_profile(
             RoleName.PROJECTION,
-            "projection_clamp_safe",
-            "projection overpushed",
-            0.18,
-            0.28,
-            forced_clamp=True,
-            notes=notes + ["already forward -> shape only"],
+            "projection_mild_safe",
+            "projection overpushed preserve",
+            _clamp(amount, 0.14, 0.26),
+            0.34,
+            notes=notes + ["already forward -> preserve/shape, not emergency clamp"],
         )
 
     if p.readiness == ProjectionReadiness.GUARDED or ctx.top_fragile:
-        amount = 0.24 * ctx.intensity_scale * ctx.tone_projection_scale
+        amount = 0.20 * ctx.intensity_scale * ctx.tone_projection_scale
+        amount += 0.06 * ctx.projection_need_score
         amount += 0.04 * room
+
         if ctx.underprojected:
             amount += 0.03
 
@@ -728,20 +1117,22 @@ def select_projection_profile(
             RoleName.PROJECTION,
             "projection_mild_safe",
             "projection guarded",
-            _clamp(amount, 0.22, 0.34),
+            _clamp(amount, 0.20, 0.34),
             0.40,
             notes=notes + ["guarded projection still audible"],
         )
 
     dense_allowed = True
 
-    if not ctx.top_safe:
+    if not (ctx.top_safe or (ctx.top_guarded and ctx.top_emergency_score < 0.42)):
         dense_allowed = False
         notes.append("top not safe enough for dense")
-    if _has(d.top_push_safety_proxy) and d.top_push_safety_proxy < 0.66:
+
+    if _has(d.top_push_safety_proxy) and d.top_push_safety_proxy < 0.52:
         dense_allowed = False
         notes.append("top push safety below dense threshold")
-    if _has(d.body_to_mid_handoff_proxy) and d.body_to_mid_handoff_proxy < 0.55:
+
+    if _has(d.body_to_mid_handoff_proxy) and d.body_to_mid_handoff_proxy < 0.50:
         dense_allowed = False
         notes.append("handoff not strong enough for dense")
 
@@ -758,27 +1149,32 @@ def select_projection_profile(
         notes.append("transition fragility blocks dense projection")
 
     if dense_allowed:
-        amount = 0.30 * ctx.intensity_scale * ctx.tone_projection_scale
-        amount += 0.04 * room
+        amount = 0.26 * ctx.intensity_scale * ctx.tone_projection_scale
+        amount += 0.08 * ctx.projection_need_score
+        amount += 0.05 * room
+
         if ctx.primary_correction_lane == "projection":
-            amount += 0.04
+            amount += 0.03
         if ctx.underprojected:
             amount += 0.03
+        if ctx.dense_good_candidate:
+            amount += 0.02
 
         return _make_profile(
             RoleName.PROJECTION,
             "projection_controlled_dense",
             "projection primary musical reveal",
-            _clamp(amount, 0.28, 0.46),
+            _clamp(amount, 0.26, 0.46),
             0.54,
             notes=notes + ["forward reveal active"],
         )
 
-    amount = 0.24 * ctx.intensity_scale * ctx.tone_projection_scale
+    amount = 0.22 * ctx.intensity_scale * ctx.tone_projection_scale
+    amount += 0.07 * ctx.projection_need_score
     amount += 0.04 * room
 
     if ctx.primary_benefit_lane == "forward_gain" or ctx.secondary_support_lane == "projection_support":
-        amount += 0.03
+        amount += 0.02
     if ctx.underprojected:
         amount += 0.03
 
@@ -786,7 +1182,7 @@ def select_projection_profile(
         RoleName.PROJECTION,
         "projection_mild_safe",
         "projection controlled floor",
-        _clamp(amount, 0.22, 0.36),
+        _clamp(amount, 0.20, 0.36),
         0.42,
         notes=notes + ["mandatory forward floor"],
     )
@@ -802,12 +1198,8 @@ def select_spark_profile(
     d = ctx.schema.derived
     room = _quiet_room_score(ctx)
 
-    notes = [
-        f"correction={ctx.primary_correction_lane}",
-        f"support={ctx.secondary_support_lane}",
-        f"benefit={ctx.primary_benefit_lane}",
-        "spark is mandatory finish floor except hard emergency",
-    ]
+    notes = _base_notes(ctx)
+    notes.append("spark is mandatory finish floor except hard emergency")
 
     if _hard_emergency(ctx):
         return _make_profile(
@@ -826,31 +1218,31 @@ def select_spark_profile(
             RoleName.SPARK,
             "finish_spark_micro_safe",
             "projection denied but finish floor retained",
-            0.10 + (0.02 * room),
+            _clamp(0.10 + (0.03 * room), 0.10, 0.18),
             0.20,
             notes=notes + ["micro finish only"],
         )
 
-    if p.harshness_risk == RiskLevel.HIGH or p.sibilance_risk == RiskLevel.HIGH:
+    if p.harshness_risk == RiskLevel.HIGH or p.sibilance_risk == RiskLevel.HIGH or ctx.top_emergency_score >= 0.50:
         return _make_profile(
             RoleName.SPARK,
             "finish_spark_micro_safe",
             "top risk guarded",
-            0.12 + (0.02 * room),
+            _clamp(0.10 + (0.03 * room), 0.10, 0.20),
             0.22,
             notes=notes + ["spark guarded by top risk"],
         )
 
     if projection_profile.profile_name == "projection_controlled_dense" and ctx.top_safe:
-        amount = 0.18 * ctx.intensity_scale
-        amount += 0.03 * room
+        amount = 0.16 * ctx.intensity_scale
+        amount += 0.04 * room
 
-        if _has(d.top_push_safety_proxy) and d.top_push_safety_proxy < 0.72:
+        if _has(d.top_push_safety_proxy) and d.top_push_safety_proxy < 0.70:
             return _make_profile(
                 RoleName.SPARK,
                 "finish_spark_micro_safe",
                 "top push safety moderate",
-                0.14 + (0.02 * room),
+                _clamp(0.13 + (0.03 * room), 0.13, 0.22),
                 0.24,
                 notes=notes + ["spark kept micro by top push safety"],
             )
@@ -859,13 +1251,13 @@ def select_spark_profile(
             RoleName.SPARK,
             "finish_spark_controlled_excited",
             "spark allowed",
-            _clamp(amount, 0.17, 0.30),
+            _clamp(amount, 0.16, 0.30),
             0.34,
             notes=notes + ["finish lane safely established"],
         )
 
-    amount = 0.14 * ctx.intensity_scale
-    amount += 0.03 * room
+    amount = 0.12 * ctx.intensity_scale
+    amount += 0.04 * room
 
     if guard_profile.profile_name == "guard_boxiness_controlled":
         amount -= 0.01
@@ -879,7 +1271,7 @@ def select_spark_profile(
         RoleName.SPARK,
         "finish_spark_micro_safe",
         "mandatory spark micro floor",
-        _clamp(amount, 0.12, 0.24),
+        _clamp(amount, 0.11, 0.24),
         0.28,
         notes=notes + ["mandatory finish floor"],
     )
@@ -896,7 +1288,6 @@ def apply_stack_rules(
     projection = selection.projection
     spark = selection.spark
 
-    # 1. Never run aggressive triple-stack, but do not kill magic.
     if (
         cleanup.profile_name == "cleanup_focused_dense"
         and projection.profile_name == "projection_controlled_dense"
@@ -919,7 +1310,6 @@ def apply_stack_rules(
             notes=spark.notes + ["spark micro by no-overstack rule"],
         )
 
-    # 2. Cleanup-primary cannot force projection off.
     if (
         ctx.primary_correction_lane == "cleanup"
         and projection.profile_name == "projection_controlled_dense"
@@ -933,7 +1323,6 @@ def apply_stack_rules(
             notes=projection.notes + ["cleanup-primary controls projection density, not projection existence"],
         )
 
-    # 3. Guard-active keeps spark micro, not off.
     if (
         guard.profile_name == "guard_boxiness_controlled"
         and spark.profile_name == "finish_spark_controlled_excited"
@@ -947,7 +1336,6 @@ def apply_stack_rules(
             notes=spark.notes + ["downgraded by active-guard rule, not disabled"],
         )
 
-    # 4. Thin material cannot take subtractive double-hit.
     if ctx.thin_candidate:
         if cleanup.profile_name == "cleanup_focused_dense":
             cleanup = _make_profile(
@@ -968,7 +1356,6 @@ def apply_stack_rules(
                 notes=guard.notes + ["thin-track support bias"],
             )
 
-    # 5. Broken bridge + dense cleanup is not allowed.
     if ctx.bridge_broken and cleanup.profile_name == "cleanup_focused_dense":
         cleanup = _make_profile(
             RoleName.CLEANUP,
@@ -979,7 +1366,6 @@ def apply_stack_rules(
             notes=cleanup.notes + ["broken bridge blocks dense cleanup"],
         )
 
-    # 6. Body fragility blocks dense cleanup.
     if ctx.body_fragile and cleanup.profile_name == "cleanup_focused_dense":
         cleanup = _make_profile(
             RoleName.CLEANUP,
@@ -990,10 +1376,10 @@ def apply_stack_rules(
             notes=cleanup.notes + ["body fragility clamp"],
         )
 
-    # 7. Overglued bridge limits anchor+bridge simultaneous restore, but does not kill support.
     if (
         bridge.profile_name == "bridge_restrain_glue"
         and anchor.profile_name == "anchor_restore_controlled"
+        and ctx.body_restore_score < 0.58
     ):
         anchor = _make_profile(
             RoleName.ANCHOR,
@@ -1003,6 +1389,17 @@ def apply_stack_rules(
             0.30,
             notes=anchor.notes + ["anchor moderated by glue restraint"],
         )
+
+    if ctx.dense_good_candidate and not ctx.dirty_dense_candidate:
+        if cleanup.profile_name == "cleanup_focused_dense":
+            cleanup = _make_profile(
+                RoleName.CLEANUP,
+                "cleanup_guarded_safe",
+                "studio-density cleanup moderation",
+                0.16,
+                0.28,
+                notes=cleanup.notes + ["studio density protected from dense cleanup"],
+            )
 
     return RoleProfileSelection(
         anchor=anchor,
@@ -1025,7 +1422,6 @@ def enforce_benefit_floor(
     projection = selection.projection
     spark = selection.spark
 
-    # Body/bridge floor.
     if anchor.amount < 0.16 and bridge.amount < 0.14:
         if ctx.bridge_broken or ctx.bridge_gap_risky:
             bridge = _make_profile(
@@ -1046,7 +1442,6 @@ def enforce_benefit_floor(
                 notes=anchor.notes + ["mandatory body floor"],
             )
 
-    # Cleanup floor remains preparation only.
     if cleanup.amount < 0.08 or not cleanup.enabled:
         cleanup = _make_profile(
             RoleName.CLEANUP,
@@ -1057,35 +1452,33 @@ def enforce_benefit_floor(
             notes=cleanup.notes + ["mandatory prep floor"],
         )
 
-    # Projection floor is mandatory in polish branch.
-    if projection.amount < 0.22 or not projection.enabled:
-        if ctx.top_fragile or projection.profile_name == "projection_clamp_safe":
+    if projection.amount < 0.20 or not projection.enabled:
+        if ctx.hard_emergency:
             projection = _make_profile(
                 RoleName.PROJECTION,
                 "projection_clamp_safe",
-                "mandatory projection clamp floor",
-                0.18,
-                0.28,
-                notes=projection.notes + ["mandatory projection clamp floor"],
+                "mandatory hard-emergency projection clamp floor",
+                0.16,
+                0.26,
+                notes=projection.notes + ["mandatory hard-emergency projection clamp floor"],
             )
         else:
             projection = _make_profile(
                 RoleName.PROJECTION,
                 "projection_mild_safe",
                 "mandatory projection floor",
-                0.24,
-                0.40,
+                0.22,
+                0.38,
                 notes=projection.notes + ["mandatory projection floor"],
             )
 
-    # Spark floor is mandatory except hard emergency.
-    if (not spark.enabled or spark.amount < 0.12) and not _hard_emergency(ctx):
+    if (not spark.enabled or spark.amount < 0.11) and not _hard_emergency(ctx):
         spark = _make_profile(
             RoleName.SPARK,
             "finish_spark_micro_safe",
             "mandatory spark floor",
-            0.14,
-            0.26,
+            0.12,
+            0.24,
             notes=spark.notes + ["mandatory spark floor"],
         )
 
