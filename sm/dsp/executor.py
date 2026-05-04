@@ -28,8 +28,10 @@ from scipy.ndimage import maximum_filter1d
 # 3. Parallel stacks return wet/delta only.
 # 4. Bridge/support compression is band-limited, not fullband duplicate.
 # 5. Delivery is terminal only.
-# 6. Limiter is transparent peak protection, not loudness compressor.
-# 7. No RMS makeup inside limiter.
+# 6. Delivery does NOT buy loudness.
+# 7. Positive delivery gain is blocked by default.
+# 8. Limiter is transparent peak protection, not loudness compressor.
+# 9. No RMS makeup inside limiter.
 # ============================================================
 
 INTERNAL_WAV_SUBTYPE = "FLOAT"
@@ -37,6 +39,7 @@ INTERNAL_WAV_SUBTYPE = "FLOAT"
 NO_STAGE_NORMALIZATION = True
 PARALLEL_STACKS_ARE_WET_ONLY = True
 DELIVERY_IS_TERMINAL_ONLY = True
+DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT = True
 LIMITER_NO_RMS_MAKEUP = True
 LIMITER_NO_CREATIVE_COMPRESSION = True
 
@@ -295,8 +298,6 @@ def _smooth_limiter_gain_samples(
 
     for i, g in enumerate(target_gain):
         g = float(g)
-
-        # gain падает - attack, gain восстанавливается - release
         coeff = attack_coeff if g < prev else release_coeff
         prev = coeff * prev + (1.0 - coeff) * g
         out[i] = prev
@@ -980,8 +981,7 @@ def _build_transparent_limiter_gain(
     pre_zone = (peak_detector > threshold_lin) & (peak_detector <= ceiling_lin)
     if np.any(pre_zone):
         t = (peak_detector[pre_zone] - threshold_lin) / transition
-        # Мягкий pre-catch: почти не двигает материал ниже потолка.
-        target_gain[pre_zone] = 1.0 - (0.035 * np.square(t))
+        target_gain[pre_zone] = 1.0 - (0.018 * np.square(t))
 
     over_zone = peak_detector > ceiling_lin
     if np.any(over_zone):
@@ -1007,7 +1007,10 @@ def _build_transparent_limiter_gain(
         "lookahead_ms": round(lookahead_ms, 4),
         "max_gain_reduction_db": round(max_reduction_db, 4),
         "active_gain_reduction_ratio": round(active_ratio, 6),
-        "peak_detector_dbfs": round(_lin_to_db(float(np.max(peak_detector))) if peak_detector.size else -120.0, 4),
+        "peak_detector_dbfs": round(
+            _lin_to_db(float(np.max(peak_detector))) if peak_detector.size else -120.0,
+            4,
+        ),
     }
 
     return gain_env.astype(np.float32), debug
@@ -1161,7 +1164,6 @@ def _execute_parallel_eq_fill_file(input_path: str, output_path: str, op: Any) -
 
     mix = _clamp(float(params.get("mix", 0.1)), 0.0, 0.40)
 
-    # Parallel EQ должен возвращать только wet/delta слой.
     wet = (boosted - audio) * mix
 
     _write_wav(output_path, wet, sr)
@@ -1185,9 +1187,6 @@ def _execute_parallel_compressor_file(input_path: str, output_path: str, op: Any
 
     primitive_name = str(_read(op, "primitive_name", "") or "").lower()
 
-    # Главное исправление:
-    # Support compression больше не добавляет fullband compressed duplicate.
-    # Она работает как band-limited body/bridge support layer.
     if primitive_name == "transient_safe_support_compression":
         low_hz = float(params.get("low_cut_hz", 85.0) or 85.0)
         high_hz = float(params.get("high_cut_hz", 340.0) or 340.0)
@@ -1219,12 +1218,12 @@ def _execute_parallel_compressor_file(input_path: str, output_path: str, op: Any
     )
 
     compressed_band = band * gain_lin[:, None]
-
-    # Wet-only support layer.
-    # Это добавляет контролируемую low/body continuity, а не копию всего мастера.
     wet = compressed_band * mix
 
     _write_wav(output_path, wet, sr)
+
+    mean_gain = float(np.mean(gain_lin)) if gain_lin.size else 1.0
+    min_gain = float(np.min(gain_lin)) if gain_lin.size else 1.0
 
     return {
         "parallel_contract": "band_limited_wet_support_only",
@@ -1232,11 +1231,11 @@ def _execute_parallel_compressor_file(input_path: str, output_path: str, op: Any
         "band_high_hz": round(high_hz, 4),
         "mix": round(mix, 6),
         "avg_gain_reduction_db": round(
-            -_lin_to_db(float(np.mean(gain_lin))) if float(np.mean(gain_lin)) < 1.0 else 0.0,
+            -_lin_to_db(mean_gain) if mean_gain < 1.0 else 0.0,
             4,
         ),
         "max_gain_reduction_db": round(
-            -_lin_to_db(float(np.min(gain_lin))) if float(np.min(gain_lin)) < 1.0 else 0.0,
+            -_lin_to_db(min_gain) if min_gain < 1.0 else 0.0,
             4,
         ),
     }
@@ -1261,7 +1260,6 @@ def _execute_band_limited_saturation_file(input_path: str, output_path: str, op:
     drive_lin = _db_to_lin(drive_db)
     saturated = np.tanh(band * drive_lin) / max(drive_lin, 1.0)
 
-    # Wet-only harmonic delta.
     wet = (saturated - band) * mix
 
     _write_wav(output_path, wet, sr)
@@ -1341,18 +1339,53 @@ def _execute_high_only_width_file(input_path: str, output_path: str, op: Any) ->
     }
 
 
+def _delivery_positive_gain_allowed(op: Any, params: dict[str, Any]) -> bool:
+    direct = bool(params.get("allow_delivery_positive_gain", False))
+    direct = direct or bool(params.get("allow_positive_gain", False))
+    direct = direct or bool(params.get("allow_delivery_loudness_lift", False))
+
+    op_direct = bool(_read(op, "allow_delivery_positive_gain", False))
+    op_direct = op_direct or bool(_read(op, "allow_positive_gain", False))
+    op_direct = op_direct or bool(_read(op, "allow_delivery_loudness_lift", False))
+
+    return bool(direct or op_direct)
+
+
+def _resolve_delivery_output_gain(op: Any, params: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+    requested_gain_db = float(params.get("gain_db", 0.0))
+    allow_positive = _delivery_positive_gain_allowed(op, params)
+
+    applied_gain_db = requested_gain_db
+    positive_gain_blocked = False
+
+    if DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT and requested_gain_db > 0.0 and not allow_positive:
+        applied_gain_db = 0.0
+        positive_gain_blocked = True
+
+    applied_gain_db = _clamp(applied_gain_db, -3.0, 0.0 if not allow_positive else 2.0)
+
+    debug = {
+        "delivery_contract": "gain_stage_safety_only_no_loudness_purchase",
+        "requested_gain_db": round(requested_gain_db, 4),
+        "applied_gain_db": round(applied_gain_db, 4),
+        "positive_gain_blocked": positive_gain_blocked,
+        "positive_gain_allowed": allow_positive,
+        "delivery_blocks_positive_gain_by_default": DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT,
+    }
+
+    return applied_gain_db, debug
+
+
 def _execute_output_trim_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
-    gain_db = float(params.get("gain_db", 0.0))
+
+    gain_db, debug = _resolve_delivery_output_gain(op, params)
 
     processed = _apply_output_trim_audio(audio=audio, gain_db=gain_db)
     _write_wav(output_path, processed, sr)
 
-    return {
-        "delivery_contract": "gain_stage_only_no_tone_no_normalization",
-        "gain_db": round(gain_db, 4),
-    }
+    return debug
 
 
 def _execute_true_peak_limiter_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
@@ -1520,8 +1553,6 @@ def _mix_audio_files(
 
     out *= _db_to_lin(gain_db)
 
-    # Внутри SM не нормализуем и не клипуем.
-    # Delivery последним отвечает за peak safety.
     _write_wav(output_path, out, sr)
     return output_path
 
@@ -1756,7 +1787,6 @@ def _execute_finish_micro_stack(
 
     current_path = spark_bus_path
 
-    # De-ess применяется только к spark bus, не ко всему мастеру.
     for op in deess_ops:
         op_result = _execute_op_file(
             input_path=current_path,
@@ -1914,12 +1944,13 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
             "no_stage_normalization": NO_STAGE_NORMALIZATION,
             "parallel_stacks_are_wet_only": PARALLEL_STACKS_ARE_WET_ONLY,
             "delivery_is_terminal_only": DELIVERY_IS_TERMINAL_ONLY,
+            "delivery_blocks_positive_gain_by_default": DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT,
             "limiter_no_rms_makeup": LIMITER_NO_RMS_MAKEUP,
             "limiter_no_creative_compression": LIMITER_NO_CREATIVE_COMPRESSION,
         },
         "notes": list(_read(render_plan, "notes", []) or [])
         + [
-            "executor_active_v4",
+            "executor_active_v5",
             "transparent_sm_render_engine",
             "internal_float_pipeline_enabled",
             "no_hidden_stage_normalization",
@@ -1930,7 +1961,9 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
             "finish_spark_is_wet_micro_bus",
             "finish_deess_runs_on_spark_bus_only",
             "native_finish_width_ops_supported",
-            "delivery_loudness_preserve_peak_safety_enabled",
+            "delivery_terminal_only",
+            "delivery_positive_gain_blocked_by_default",
+            "delivery_cannot_buy_loudness",
             "delivery_no_rms_makeup",
             "limiter_transparent_peak_catch",
             "recombine_weights_no_hidden_normalization",
