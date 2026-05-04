@@ -30,8 +30,10 @@ from scipy.ndimage import maximum_filter1d
 # 5. Delivery is terminal only.
 # 6. Delivery does NOT buy loudness.
 # 7. Positive delivery gain is blocked by default.
-# 8. Limiter is transparent peak protection, not loudness compressor.
-# 9. No RMS makeup inside limiter.
+# 8. Limiter catches only real oversampled peak excess above ceiling.
+# 9. Limiter does NOT smooth/pre-catch material below ceiling by default.
+# 10. No RMS makeup inside limiter.
+# 11. Delivery may report upstream retry need, but executor never retries itself.
 # ============================================================
 
 INTERNAL_WAV_SUBTYPE = "FLOAT"
@@ -40,14 +42,31 @@ NO_STAGE_NORMALIZATION = True
 PARALLEL_STACKS_ARE_WET_ONLY = True
 DELIVERY_IS_TERMINAL_ONLY = True
 DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT = True
+DELIVERY_LIMITER_TOUCHES_ONLY_REAL_OVERS = True
+LIMITER_NO_PRE_CEILING_SMOOTHING = True
 LIMITER_NO_RMS_MAKEUP = True
 LIMITER_NO_CREATIVE_COMPRESSION = True
 
+
+# ============================================================
+# BASIC HELPERS
+# ============================================================
 
 def _read(obj: Any, key: str, default=None):
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+def _truthy(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    if isinstance(v, (int, float)):
+        return bool(v)
+    s = str(v).strip().lower()
+    return s in {"1", "true", "yes", "y", "on", "allow", "allowed"}
 
 
 def _safe_name(x: str | None) -> str:
@@ -298,6 +317,8 @@ def _smooth_limiter_gain_samples(
 
     for i, g in enumerate(target_gain):
         g = float(g)
+
+        # Gain падает - attack. Gain восстанавливается - release.
         coeff = attack_coeff if g < prev else release_coeff
         prev = coeff * prev + (1.0 - coeff) * g
         out[i] = prev
@@ -920,7 +941,12 @@ def _oversample_audio(audio: np.ndarray, sr: int, oversample: int) -> tuple[np.n
     return out, target_sr
 
 
-def _downsample_audio(audio_os: np.ndarray, target_sr: int, original_sr: int, original_len: int) -> np.ndarray:
+def _downsample_audio(
+    audio_os: np.ndarray,
+    target_sr: int,
+    original_sr: int,
+    original_len: int,
+) -> np.ndarray:
     audio_os = _ensure_2d_audio(audio_os)
 
     if target_sr == original_sr:
@@ -960,7 +986,6 @@ def _build_transparent_limiter_gain(
         threshold_db = ceiling_db - 0.45
 
     ceiling_lin = _db_to_lin(ceiling_db)
-    threshold_lin = min(_db_to_lin(threshold_db), ceiling_lin * 0.995)
 
     peak = np.max(np.abs(audio_os), axis=1).astype(np.float32)
 
@@ -976,13 +1001,9 @@ def _build_transparent_limiter_gain(
 
     target_gain = np.ones_like(peak_detector, dtype=np.float32)
 
-    transition = max(ceiling_lin - threshold_lin, 1e-9)
-
-    pre_zone = (peak_detector > threshold_lin) & (peak_detector <= ceiling_lin)
-    if np.any(pre_zone):
-        t = (peak_detector[pre_zone] - threshold_lin) / transition
-        target_gain[pre_zone] = 1.0 - (0.018 * np.square(t))
-
+    # Premium delivery rule:
+    # Не трогаем материал ниже ceiling.
+    # Нет pre-zone attenuation. Нет smoothing ниже потолка.
     over_zone = peak_detector > ceiling_lin
     if np.any(over_zone):
         hard_gain = ceiling_lin / np.maximum(peak_detector[over_zone], 1e-12)
@@ -1000,20 +1021,93 @@ def _build_transparent_limiter_gain(
     min_gain = float(np.min(gain_env)) if gain_env.size else 1.0
     max_reduction_db = -_lin_to_db(min_gain) if min_gain < 1.0 else 0.0
     active_ratio = float(np.mean(gain_env < 0.999)) if gain_env.size else 0.0
+    over_ratio = float(np.mean(over_zone)) if peak_detector.size else 0.0
 
     debug = {
         "ceiling_db": round(ceiling_db, 4),
         "threshold_db": round(threshold_db, 4),
+        "threshold_is_metadata_only": True,
         "lookahead_ms": round(lookahead_ms, 4),
         "max_gain_reduction_db": round(max_reduction_db, 4),
         "active_gain_reduction_ratio": round(active_ratio, 6),
+        "real_over_ceiling_ratio": round(over_ratio, 6),
         "peak_detector_dbfs": round(
             _lin_to_db(float(np.max(peak_detector))) if peak_detector.size else -120.0,
             4,
         ),
+        "touches_only_real_overs_above_ceiling": True,
+        "pre_ceiling_smoothing": False,
     }
 
     return gain_env.astype(np.float32), debug
+
+
+def _evaluate_delivery_damage_budget(debug: dict[str, Any]) -> dict[str, Any]:
+    max_gr = abs(float(debug.get("max_gain_reduction_db", 0.0) or 0.0))
+    active_ratio = abs(float(debug.get("active_gain_reduction_ratio", 0.0) or 0.0))
+    final_trim = float(debug.get("final_safety_trim_db", 0.0) or 0.0)
+    rms_delta = float(debug.get("rms_delta_db", 0.0) or 0.0)
+
+    final_trim_abs = abs(min(final_trim, 0.0))
+    rms_loss_abs = abs(min(rms_delta, 0.0))
+
+    warnings: list[str] = []
+    failures: list[str] = []
+
+    if max_gr > 1.20:
+        failures.append("delivery_max_gain_reduction_over_budget")
+    elif max_gr > 0.80:
+        warnings.append("delivery_max_gain_reduction_warning")
+
+    if active_ratio > 0.070:
+        failures.append("delivery_active_ratio_over_budget")
+    elif active_ratio > 0.030:
+        warnings.append("delivery_active_ratio_warning")
+
+    if final_trim_abs > 0.45:
+        failures.append("delivery_final_safety_trim_over_budget")
+    elif final_trim_abs > 0.20:
+        warnings.append("delivery_final_safety_trim_warning")
+
+    if rms_loss_abs > 0.25:
+        failures.append("delivery_rms_loss_over_budget")
+    elif rms_loss_abs > 0.10:
+        warnings.append("delivery_rms_loss_warning")
+
+    delivery_over_budget = bool(failures)
+
+    retry_hints: list[str] = []
+    if delivery_over_budget:
+        retry_hints.extend(
+            [
+                "do_not_make_limiter_stronger",
+                "do_not_add_delivery_makeup",
+                "reduce_upstream_peak_pressure",
+                "consider_lower_projection_assist_blend",
+                "consider_lower_spark_blend",
+                "consider_lower_support_recombine_gain",
+                "rerender_musical_graph_before_delivery",
+            ]
+        )
+
+    return {
+        "delivery_damage_budget": {
+            "max_gain_reduction_db": round(max_gr, 4),
+            "active_gain_reduction_ratio": round(active_ratio, 6),
+            "final_safety_trim_abs_db": round(final_trim_abs, 4),
+            "rms_loss_abs_db": round(rms_loss_abs, 4),
+            "warnings": warnings,
+            "failures": failures,
+            "delivery_over_budget": delivery_over_budget,
+            "should_retry_upstream": delivery_over_budget,
+            "retry_hints": retry_hints,
+        },
+        "delivery_over_budget": delivery_over_budget,
+        "should_retry_upstream": delivery_over_budget,
+        "delivery_budget_warnings": warnings,
+        "delivery_budget_failures": failures,
+        "delivery_retry_hints": retry_hints,
+    }
 
 
 def _apply_true_peak_limiter_audio(
@@ -1039,7 +1133,11 @@ def _apply_true_peak_limiter_audio(
 
     before_rms_db = _rms_dbfs(dry)
     before_peak_db = _sample_peak_dbfs(dry)
-    before_tp_db = _estimate_approx_true_peak_dbtp(dry, sr, oversample=max(int(oversample), 1))
+    before_tp_db = _estimate_approx_true_peak_dbtp(
+        dry,
+        sr,
+        oversample=max(int(oversample), 1),
+    )
 
     audio_os, sr_os = _oversample_audio(dry, sr, oversample=max(int(oversample), 1))
 
@@ -1064,6 +1162,8 @@ def _apply_true_peak_limiter_audio(
     if mix < 0.999:
         wet = dry * (1.0 - mix) + wet * mix
 
+    # Final safety trim is emergency only.
+    # It is counted as damage budget. It is not loudness or tone shaping.
     effective_ceiling_db = ceiling_db - abs(float(safety_margin_db))
     final_safety_trim_db = 0.0
 
@@ -1083,12 +1183,18 @@ def _apply_true_peak_limiter_audio(
 
     after_rms_db = _rms_dbfs(wet)
     after_peak_db = _sample_peak_dbfs(wet)
-    after_tp_db = _estimate_approx_true_peak_dbtp(wet, sr, oversample=max(int(oversample), 1))
+    after_tp_db = _estimate_approx_true_peak_dbtp(
+        wet,
+        sr,
+        oversample=max(int(oversample), 1),
+    )
 
     debug = {
-        "limiter_mode": "transparent_peak_catch",
+        "limiter_mode": "transparent_true_peak_catch_only",
         "no_rms_makeup": True,
         "no_creative_compression": True,
+        "no_pre_ceiling_smoothing": True,
+        "touches_only_real_overs_above_ceiling": True,
         "before_sample_peak_dbfs": round(before_peak_db, 4),
         "after_sample_peak_dbfs": round(after_peak_db, 4),
         "before_true_peak_dbtp": round(before_tp_db, 4),
@@ -1097,8 +1203,11 @@ def _apply_true_peak_limiter_audio(
         "after_rms_dbfs": round(after_rms_db, 4),
         "rms_delta_db": round(after_rms_db - before_rms_db, 4),
         "final_safety_trim_db": round(final_safety_trim_db, 4),
+        "safety_margin_db": round(abs(float(safety_margin_db)), 4),
         **limiter_debug,
     }
+
+    debug.update(_evaluate_delivery_damage_budget(debug))
 
     return np.nan_to_num(wet, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32), debug
 
@@ -1339,14 +1448,18 @@ def _execute_high_only_width_file(input_path: str, output_path: str, op: Any) ->
     }
 
 
-def _delivery_positive_gain_allowed(op: Any, params: dict[str, Any]) -> bool:
-    direct = bool(params.get("allow_delivery_positive_gain", False))
-    direct = direct or bool(params.get("allow_positive_gain", False))
-    direct = direct or bool(params.get("allow_delivery_loudness_lift", False))
+# ============================================================
+# DELIVERY EXECUTION
+# ============================================================
 
-    op_direct = bool(_read(op, "allow_delivery_positive_gain", False))
-    op_direct = op_direct or bool(_read(op, "allow_positive_gain", False))
-    op_direct = op_direct or bool(_read(op, "allow_delivery_loudness_lift", False))
+def _delivery_positive_gain_allowed(op: Any, params: dict[str, Any]) -> bool:
+    direct = _truthy(params.get("allow_delivery_positive_gain", False))
+    direct = direct or _truthy(params.get("allow_positive_gain", False))
+    direct = direct or _truthy(params.get("allow_delivery_loudness_lift", False))
+
+    op_direct = _truthy(_read(op, "allow_delivery_positive_gain", False))
+    op_direct = op_direct or _truthy(_read(op, "allow_positive_gain", False))
+    op_direct = op_direct or _truthy(_read(op, "allow_delivery_loudness_lift", False))
 
     return bool(direct or op_direct)
 
@@ -1364,6 +1477,16 @@ def _resolve_delivery_output_gain(op: Any, params: dict[str, Any]) -> tuple[floa
 
     applied_gain_db = _clamp(applied_gain_db, -3.0, 0.0 if not allow_positive else 2.0)
 
+    retry_hints: list[str] = []
+    if positive_gain_blocked:
+        retry_hints.extend(
+            [
+                "delivery_requested_positive_gain",
+                "do_not_buy_loudness_in_delivery",
+                "if_loudness_needed_adjust_musical_graph_or_accept_peak_blocked_master",
+            ]
+        )
+
     debug = {
         "delivery_contract": "gain_stage_safety_only_no_loudness_purchase",
         "requested_gain_db": round(requested_gain_db, 4),
@@ -1371,6 +1494,9 @@ def _resolve_delivery_output_gain(op: Any, params: dict[str, Any]) -> tuple[floa
         "positive_gain_blocked": positive_gain_blocked,
         "positive_gain_allowed": allow_positive,
         "delivery_blocks_positive_gain_by_default": DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT,
+        "upstream_loudness_purchase_blocked": positive_gain_blocked,
+        "should_retry_upstream": False,
+        "retry_hints": retry_hints,
     }
 
     return applied_gain_db, debug
@@ -1523,6 +1649,10 @@ def _execute_op_file(
     return op_report
 
 
+# ============================================================
+# MIX / DELTA / STACK EXECUTION
+# ============================================================
+
 def _mix_audio_files(
     source_paths: list[str],
     output_path: str,
@@ -1553,6 +1683,8 @@ def _mix_audio_files(
 
     out *= _db_to_lin(gain_db)
 
+    # No normalization and no clipping inside SM graph.
+    # Delivery is the only terminal peak-protection stage.
     _write_wav(output_path, out, sr)
     return output_path
 
@@ -1601,6 +1733,13 @@ def _record_op_result(
     stack_name: str,
     op_result: dict[str, Any],
 ) -> bool:
+    op_extra = (
+        op_result.get("debug", {})
+        .get("op_extra", {})
+        if isinstance(op_result.get("debug", {}), dict)
+        else {}
+    )
+
     stack_report["ops"].append(
         {
             "instance_name": op_result["instance_name"],
@@ -1616,6 +1755,32 @@ def _record_op_result(
 
     if op_result["executed"]:
         report["executed_op_count"] += 1
+
+        if bool(op_extra.get("delivery_over_budget", False)):
+            report["delivery_over_budget"] = True
+
+        if bool(op_extra.get("should_retry_upstream", False)):
+            report["should_retry_upstream"] = True
+
+        if bool(op_extra.get("upstream_loudness_purchase_blocked", False)):
+            report["delivery_positive_gain_blocked"] = True
+
+        for hint in list(op_extra.get("retry_hints", []) or []):
+            if hint not in report["retry_hints"]:
+                report["retry_hints"].append(hint)
+
+        for hint in list(op_extra.get("delivery_retry_hints", []) or []):
+            if hint not in report["retry_hints"]:
+                report["retry_hints"].append(hint)
+
+        for warning in list(op_extra.get("delivery_budget_warnings", []) or []):
+            if warning not in report["delivery_budget_warnings"]:
+                report["delivery_budget_warnings"].append(warning)
+
+        for failure in list(op_extra.get("delivery_budget_failures", []) or []):
+            if failure not in report["delivery_budget_failures"]:
+                report["delivery_budget_failures"].append(failure)
+
         return True
 
     report["pending_custom_op_count"] += 1
@@ -1787,6 +1952,7 @@ def _execute_finish_micro_stack(
 
     current_path = spark_bus_path
 
+    # De-ess applies only to spark bus, not to the whole master.
     for op in deess_ops:
         op_result = _execute_op_file(
             input_path=current_path,
@@ -1938,6 +2104,12 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
         "unsupported_ops": [],
         "executed_op_count": 0,
         "pending_custom_op_count": 0,
+        "delivery_positive_gain_blocked": False,
+        "delivery_over_budget": False,
+        "should_retry_upstream": False,
+        "retry_hints": [],
+        "delivery_budget_warnings": [],
+        "delivery_budget_failures": [],
         "safety_notes": list(_read(render_plan, "safety_notes", []) or []),
         "executor_contract": {
             "internal_wav_subtype": INTERNAL_WAV_SUBTYPE,
@@ -1945,12 +2117,14 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
             "parallel_stacks_are_wet_only": PARALLEL_STACKS_ARE_WET_ONLY,
             "delivery_is_terminal_only": DELIVERY_IS_TERMINAL_ONLY,
             "delivery_blocks_positive_gain_by_default": DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT,
+            "delivery_limiter_touches_only_real_overs": DELIVERY_LIMITER_TOUCHES_ONLY_REAL_OVERS,
+            "limiter_no_pre_ceiling_smoothing": LIMITER_NO_PRE_CEILING_SMOOTHING,
             "limiter_no_rms_makeup": LIMITER_NO_RMS_MAKEUP,
             "limiter_no_creative_compression": LIMITER_NO_CREATIVE_COMPRESSION,
         },
         "notes": list(_read(render_plan, "notes", []) or [])
         + [
-            "executor_active_v5",
+            "executor_active_v6",
             "transparent_sm_render_engine",
             "internal_float_pipeline_enabled",
             "no_hidden_stage_normalization",
@@ -1964,8 +2138,12 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
             "delivery_terminal_only",
             "delivery_positive_gain_blocked_by_default",
             "delivery_cannot_buy_loudness",
+            "delivery_limiter_real_overs_only",
+            "delivery_does_not_touch_below_ceiling",
+            "delivery_damage_budget_enabled",
+            "delivery_reports_upstream_retry_need_without_retrying",
             "delivery_no_rms_makeup",
-            "limiter_transparent_peak_catch",
+            "limiter_transparent_true_peak_catch_only",
             "recombine_weights_no_hidden_normalization",
         ],
     }
