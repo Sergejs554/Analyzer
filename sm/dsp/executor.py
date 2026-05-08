@@ -29,20 +29,25 @@ from scipy.ndimage import maximum_filter1d
 # 4. Bridge/support compression is band-limited, not fullband duplicate.
 # 5. Delivery is terminal only.
 # 6. Delivery does NOT buy loudness.
-# 7. Positive delivery gain is blocked by default.
-# 8. Limiter catches only real oversampled peak excess above ceiling.
-# 9. Limiter does NOT smooth/pre-catch material below ceiling by default.
+# 7. Positive delivery gain is blocked.
+# 8. Limiter catches only real oversampled peak excess above target ceiling.
+# 9. Limiter does NOT smooth/pre-catch material below target ceiling, except local future lookahead for real overs.
 # 10. No RMS makeup inside limiter.
-# 11. Delivery may report upstream retry need, but executor never retries itself.
+# 11. No global final safety trim as a normal tool.
+# 12. If delivery goes over budget, executor reports upstream retry need.
 # ============================================================
 
 INTERNAL_WAV_SUBTYPE = "FLOAT"
 
 NO_STAGE_NORMALIZATION = True
 PARALLEL_STACKS_ARE_WET_ONLY = True
+
 DELIVERY_IS_TERMINAL_ONLY = True
-DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT = True
+DELIVERY_BLOCKS_POSITIVE_GAIN = True
 DELIVERY_LIMITER_TOUCHES_ONLY_REAL_OVERS = True
+DELIVERY_NO_GLOBAL_SAFETY_TRIM = True
+
+LIMITER_OVERSAMPLE = 4
 LIMITER_NO_PRE_CEILING_SMOOTHING = True
 LIMITER_NO_RMS_MAKEUP = True
 LIMITER_NO_CREATIVE_COMPRESSION = True
@@ -114,8 +119,10 @@ def _ensure_2d_audio(audio: np.ndarray) -> np.ndarray:
 
 def _match_length(x: np.ndarray, target_len: int) -> np.ndarray:
     x = np.asarray(x)
+
     if len(x) == target_len:
         return x
+
     if len(x) > target_len:
         return x[:target_len]
 
@@ -126,6 +133,7 @@ def _match_length(x: np.ndarray, target_len: int) -> np.ndarray:
 
 def _write_wav(path: str, audio: np.ndarray, sr: int) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
+
     sf.write(
         path,
         np.asarray(audio, dtype=np.float32),
@@ -198,6 +206,18 @@ def _stats_delta(pre: dict[str, Any], post: dict[str, Any]) -> dict[str, Any]:
 def _make_tmp_wav(td: str, stage_name: str, stack_name: str, instance_name: str) -> str:
     fname = f"{_safe_name(stage_name)}__{_safe_name(stack_name)}__{_safe_name(instance_name)}.wav"
     return os.path.join(td, fname)
+
+
+def _is_delivery_context(stage_name: str | None, op: Any) -> bool:
+    stage_safe = _safe_name(stage_name)
+    primitive_name = str(_read(op, "primitive_name", "") or "").lower()
+    op_kind = str(_read(op, "op_kind", "") or "").lower()
+
+    return (
+        stage_safe.startswith("delivery")
+        or primitive_name in {"output_gain_trim", "true_peak_limiter"}
+        or op_kind in {"true_peak_limiter"}
+    )
 
 
 # ============================================================
@@ -275,6 +295,7 @@ def _smooth_envelope_frames(
     sr: int,
 ) -> np.ndarray:
     x = np.asarray(x, dtype=np.float32)
+
     if x.size == 0:
         return x
 
@@ -303,6 +324,7 @@ def _smooth_limiter_gain_samples(
     sr: int,
 ) -> np.ndarray:
     target_gain = np.asarray(target_gain, dtype=np.float32)
+
     if target_gain.size == 0:
         return target_gain
 
@@ -318,7 +340,6 @@ def _smooth_limiter_gain_samples(
     for i, g in enumerate(target_gain):
         g = float(g)
 
-        # Gain падает - attack. Gain восстанавливается - release.
         coeff = attack_coeff if g < prev else release_coeff
         prev = coeff * prev + (1.0 - coeff) * g
         out[i] = prev
@@ -358,6 +379,7 @@ def _apply_framewise_spectral_gain(
 
     if gain_frames_db.size == 0:
         gain_frames_db = np.zeros(frame_count, dtype=np.float32)
+
     elif len(gain_frames_db) < frame_count:
         pad = np.full(
             frame_count - len(gain_frames_db),
@@ -365,6 +387,7 @@ def _apply_framewise_spectral_gain(
             dtype=np.float32,
         )
         gain_frames_db = np.concatenate([gain_frames_db, pad], axis=0)
+
     elif len(gain_frames_db) > frame_count:
         gain_frames_db = gain_frames_db[:frame_count]
 
@@ -372,6 +395,7 @@ def _apply_framewise_spectral_gain(
     gain_matrix_lin = np.power(10.0, gain_matrix_db / 20.0).astype(np.complex64)
 
     Zp = Z * gain_matrix_lin
+
     y = librosa.istft(
         Zp,
         hop_length=hop,
@@ -403,6 +427,7 @@ def _build_band_activity_frames(
         window="hann",
         center=True,
     )
+
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
 
     if Z.size == 0:
@@ -413,9 +438,11 @@ def _build_band_activity_frames(
         center_hz=center_hz,
         q=max(q * 0.9, 0.35),
     )
+
     band_power = (np.abs(Z) ** 2 * det_weights[:, None]).sum(axis=0) / (
         det_weights.sum() + 1e-12
     )
+
     band_rms = np.sqrt(np.maximum(band_power, 1e-18)).astype(np.float32)
 
     detector_env = _smooth_envelope_frames(
@@ -488,6 +515,7 @@ def _apply_fixed_bell_eq_audio(
 ) -> np.ndarray:
     audio = _ensure_2d_audio(audio)
     n_fft, _ = _stft_params(sr)
+
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     shape_weights = _log_gaussian_band(freqs, center_hz=center_hz, q=q)
 
@@ -514,6 +542,7 @@ def _apply_fixed_high_shelf_audio(
 ) -> np.ndarray:
     audio = _ensure_2d_audio(audio)
     n_fft, _ = _stft_params(sr)
+
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     shape_weights = _high_shelf_weights(freqs, center_hz=center_hz, softness_oct=0.45)
 
@@ -536,6 +565,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
     audio = _ensure_2d_audio(audio)
 
     params = dict(_read(op, "params", {}) or {})
+
     center_hz = float(params.get("freq_hz", 1000.0))
     q = float(params.get("q", 1.0))
     gain_db = float(params.get("gain_db", 0.0))
@@ -545,6 +575,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
 
     if audio.shape[1] == 1:
         detector = audio[:, 0]
+
         activity_frames = _build_band_activity_frames(
             detector_signal=detector,
             sr=sr,
@@ -553,7 +584,9 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
             attack_ms=attack_ms,
             release_ms=release_ms,
         )
+
         n_fft, hop = _stft_params(sr)
+
         frame_count = librosa.stft(
             detector,
             n_fft=n_fft,
@@ -564,6 +597,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
         ).shape[1]
 
         gain_frames_db = (activity_frames[:frame_count] * gain_db).astype(np.float32)
+
         shape_weights = _log_gaussian_band(
             librosa.fft_frequencies(sr=sr, n_fft=n_fft),
             center_hz=center_hz,
@@ -576,6 +610,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
             shape_weights=shape_weights,
             gain_frames_db=gain_frames_db,
         )
+
         return y[:, None].astype(np.float32)
 
     left = audio[:, 0]
@@ -595,6 +630,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
         )
 
         n_fft, hop = _stft_params(sr)
+
         frame_count = librosa.stft(
             mid,
             n_fft=n_fft,
@@ -605,6 +641,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
         ).shape[1]
 
         gain_frames_db = (activity_frames[:frame_count] * gain_db).astype(np.float32)
+
         shape_weights = _log_gaussian_band(
             librosa.fft_frequencies(sr=sr, n_fft=n_fft),
             center_hz=center_hz,
@@ -620,6 +657,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
 
         out_left = mid_processed + side
         out_right = mid_processed - side
+
         return np.stack([out_left, out_right], axis=1).astype(np.float32)
 
     detector = 0.5 * (left + right)
@@ -634,6 +672,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
     )
 
     n_fft, hop = _stft_params(sr)
+
     frame_count = librosa.stft(
         detector,
         n_fft=n_fft,
@@ -644,6 +683,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
     ).shape[1]
 
     gain_frames_db = (activity_frames[:frame_count] * gain_db).astype(np.float32)
+
     shape_weights = _log_gaussian_band(
         librosa.fft_frequencies(sr=sr, n_fft=n_fft),
         center_hz=center_hz,
@@ -656,6 +696,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
         shape_weights=shape_weights,
         gain_frames_db=gain_frames_db,
     )
+
     out_right = _apply_framewise_spectral_gain(
         x=right,
         sr=sr,
@@ -668,6 +709,7 @@ def _apply_dynamic_eq_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
 
 def _apply_dynamic_tilt_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray:
     audio = _ensure_2d_audio(audio)
+
     params = dict(_read(op, "params", {}) or {})
 
     pivot_hz = float(params.get("pivot_hz", 1500.0))
@@ -694,6 +736,7 @@ def _apply_dynamic_tilt_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray
     )
 
     n_fft, hop = _stft_params(sr)
+
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     shape_weights = _upper_tilt_weights(freqs, pivot_hz=pivot_hz, softness_oct=0.35)
 
@@ -716,9 +759,11 @@ def _apply_dynamic_tilt_audio(audio: np.ndarray, sr: int, op: Any) -> np.ndarray
             shape_weights=shape_weights,
             gain_frames_db=gain_frames_db,
         )
+
         return y[:, None].astype(np.float32)
 
     out = []
+
     for ch in range(audio.shape[1]):
         y = _apply_framewise_spectral_gain(
             x=audio[:, ch],
@@ -738,6 +783,7 @@ def _apply_band_component_audio(
     high_hz: float,
 ) -> np.ndarray:
     audio = _ensure_2d_audio(audio)
+
     n_fft, hop = _stft_params(sr)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     band_weights = _soft_band_weights(freqs, low_hz=low_hz, high_hz=high_hz)
@@ -746,6 +792,7 @@ def _apply_band_component_audio(
 
     for ch in range(audio.shape[1]):
         x = audio[:, ch]
+
         Z = librosa.stft(
             x,
             n_fft=n_fft,
@@ -760,6 +807,7 @@ def _apply_band_component_audio(
             continue
 
         Zp = Z * band_weights[:, None]
+
         y = librosa.istft(
             Zp,
             hop_length=hop,
@@ -768,6 +816,7 @@ def _apply_band_component_audio(
             center=True,
             length=len(x),
         )
+
         out.append(_match_length(np.asarray(y, dtype=np.float32), len(x)))
 
     return np.stack(out, axis=1).astype(np.float32)
@@ -781,6 +830,7 @@ def _filter_band_mono(
     high_cut_hz: float | None = None,
 ) -> np.ndarray:
     y = np.asarray(x, dtype=np.float32)
+
     if y.size <= 8:
         return y.copy()
 
@@ -812,19 +862,22 @@ def _to_mid_side(audio: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     left = audio[:, 0]
     right = audio[:, 1]
+
     mid = (left + right) * 0.5
     side = (left - right) * 0.5
+
     return mid.astype(np.float32), side.astype(np.float32)
 
 
 def _from_mid_side(mid: np.ndarray, side: np.ndarray) -> np.ndarray:
     left = mid + side
     right = mid - side
+
     return np.stack([left, right], axis=1).astype(np.float32)
 
 
 # ============================================================
-# COMPRESSOR / LIMITER HELPERS
+# COMPRESSOR / TRUE PEAK HELPERS
 # ============================================================
 
 def _build_parallel_compressor_gain(
@@ -866,6 +919,7 @@ def _build_parallel_compressor_gain(
         sr=sr,
         hop_length=hop_length,
     )
+
     sample_times = np.arange(len(detector_signal), dtype=np.float32) / float(sr)
 
     if len(frame_times) == 0:
@@ -882,10 +936,11 @@ def _build_parallel_compressor_gain(
     return np.power(10.0, -reduction_sample_db / 20.0).astype(np.float32)
 
 
-def _estimate_approx_true_peak_dbtp(audio: np.ndarray, sr: int, oversample: int = 2) -> float:
+def _estimate_approx_true_peak_dbtp(audio: np.ndarray, sr: int, oversample: int = LIMITER_OVERSAMPLE) -> float:
     audio = _ensure_2d_audio(audio)
 
     oversample = max(int(oversample), 1)
+
     if oversample == 1:
         peak = float(np.max(np.abs(audio))) if audio.size else 0.0
         return _lin_to_db(peak) if peak > 1e-12 else -120.0
@@ -895,6 +950,7 @@ def _estimate_approx_true_peak_dbtp(audio: np.ndarray, sr: int, oversample: int 
 
     for ch in range(audio.shape[1]):
         x = np.asarray(audio[:, ch], dtype=np.float32)
+
         if x.size == 0:
             continue
 
@@ -904,6 +960,7 @@ def _estimate_approx_true_peak_dbtp(audio: np.ndarray, sr: int, oversample: int 
             target_sr=target_sr,
             res_type="soxr_hq",
         )
+
         ch_peak = float(np.max(np.abs(y))) if y.size else 0.0
         peak = max(peak, ch_peak)
 
@@ -919,12 +976,14 @@ def _oversample_audio(audio: np.ndarray, sr: int, oversample: int) -> tuple[np.n
     audio = _ensure_2d_audio(audio)
 
     oversample = max(int(oversample), 1)
+
     if oversample == 1:
         return audio.copy(), int(sr)
 
     target_sr = int(sr * oversample)
 
     channels = []
+
     for ch in range(audio.shape[1]):
         channels.append(
             librosa.resample(
@@ -953,6 +1012,7 @@ def _downsample_audio(
         return _match_length(audio_os, original_len).astype(np.float32)
 
     channels = []
+
     for ch in range(audio_os.shape[1]):
         channels.append(
             librosa.resample(
@@ -965,13 +1025,32 @@ def _downsample_audio(
 
     min_len = min(len(x) for x in channels)
     out = np.stack([x[:min_len] for x in channels], axis=1).astype(np.float32)
+
     return _match_length(out, original_len).astype(np.float32)
+
+
+def _future_peak_detector(peak: np.ndarray, lookahead_samples: int) -> np.ndarray:
+    peak = np.asarray(peak, dtype=np.float32)
+    lookahead_samples = max(int(lookahead_samples), 1)
+
+    if peak.size == 0 or lookahead_samples <= 1:
+        return peak.copy()
+
+    origin = -(lookahead_samples // 2)
+
+    return maximum_filter1d(
+        peak,
+        size=lookahead_samples,
+        mode="constant",
+        cval=0.0,
+        origin=origin,
+    ).astype(np.float32)
 
 
 def _build_transparent_limiter_gain(
     audio_os: np.ndarray,
     sr_os: int,
-    ceiling_db: float,
+    target_ceiling_db: float,
     threshold_db: float,
     attack_ms: float,
     release_ms: float,
@@ -979,34 +1058,22 @@ def _build_transparent_limiter_gain(
 ) -> tuple[np.ndarray, dict[str, Any]]:
     audio_os = _ensure_2d_audio(audio_os)
 
-    ceiling_db = float(ceiling_db)
+    target_ceiling_db = float(target_ceiling_db)
     threshold_db = float(threshold_db)
 
-    if threshold_db >= ceiling_db - 0.05:
-        threshold_db = ceiling_db - 0.45
-
-    ceiling_lin = _db_to_lin(ceiling_db)
+    target_ceiling_lin = _db_to_lin(target_ceiling_db)
 
     peak = np.max(np.abs(audio_os), axis=1).astype(np.float32)
 
     lookahead_samples = max(1, int(sr_os * lookahead_ms * 0.001))
-    if lookahead_samples > 1 and peak.size > lookahead_samples:
-        peak_detector = maximum_filter1d(
-            peak,
-            size=lookahead_samples,
-            mode="nearest",
-        ).astype(np.float32)
-    else:
-        peak_detector = peak
+    peak_detector = _future_peak_detector(peak, lookahead_samples=lookahead_samples)
 
     target_gain = np.ones_like(peak_detector, dtype=np.float32)
 
-    # Premium delivery rule:
-    # Не трогаем материал ниже ceiling.
-    # Нет pre-zone attenuation. Нет smoothing ниже потолка.
-    over_zone = peak_detector > ceiling_lin
+    over_zone = peak_detector > target_ceiling_lin
+
     if np.any(over_zone):
-        hard_gain = ceiling_lin / np.maximum(peak_detector[over_zone], 1e-12)
+        hard_gain = target_ceiling_lin / np.maximum(peak_detector[over_zone], 1e-12)
         target_gain[over_zone] = np.minimum(target_gain[over_zone], hard_gain)
 
     target_gain = np.clip(target_gain, 0.0, 1.0).astype(np.float32)
@@ -1021,22 +1088,24 @@ def _build_transparent_limiter_gain(
     min_gain = float(np.min(gain_env)) if gain_env.size else 1.0
     max_reduction_db = -_lin_to_db(min_gain) if min_gain < 1.0 else 0.0
     active_ratio = float(np.mean(gain_env < 0.999)) if gain_env.size else 0.0
-    over_ratio = float(np.mean(over_zone)) if peak_detector.size else 0.0
+    real_over_ratio = float(np.mean(over_zone)) if peak_detector.size else 0.0
 
     debug = {
-        "ceiling_db": round(ceiling_db, 4),
+        "target_ceiling_db": round(target_ceiling_db, 4),
         "threshold_db": round(threshold_db, 4),
         "threshold_is_metadata_only": True,
-        "lookahead_ms": round(lookahead_ms, 4),
+        "lookahead_ms": round(float(lookahead_ms), 4),
+        "lookahead_samples": int(lookahead_samples),
         "max_gain_reduction_db": round(max_reduction_db, 4),
         "active_gain_reduction_ratio": round(active_ratio, 6),
-        "real_over_ceiling_ratio": round(over_ratio, 6),
+        "real_over_ceiling_ratio": round(real_over_ratio, 6),
         "peak_detector_dbfs": round(
             _lin_to_db(float(np.max(peak_detector))) if peak_detector.size else -120.0,
             4,
         ),
-        "touches_only_real_overs_above_ceiling": True,
+        "touches_only_real_overs_above_target_ceiling": True,
         "pre_ceiling_smoothing": False,
+        "future_peak_detector": True,
     }
 
     return gain_env.astype(np.float32), debug
@@ -1045,38 +1114,43 @@ def _build_transparent_limiter_gain(
 def _evaluate_delivery_damage_budget(debug: dict[str, Any]) -> dict[str, Any]:
     max_gr = abs(float(debug.get("max_gain_reduction_db", 0.0) or 0.0))
     active_ratio = abs(float(debug.get("active_gain_reduction_ratio", 0.0) or 0.0))
-    final_trim = float(debug.get("final_safety_trim_db", 0.0) or 0.0)
     rms_delta = float(debug.get("rms_delta_db", 0.0) or 0.0)
-
-    final_trim_abs = abs(min(final_trim, 0.0))
     rms_loss_abs = abs(min(rms_delta, 0.0))
+
+    after_tp = debug.get("after_true_peak_dbtp")
+    target_ceiling = debug.get("target_ceiling_db")
+
+    after_tp_f = float(after_tp) if after_tp is not None else None
+    target_f = float(target_ceiling) if target_ceiling is not None else None
 
     warnings: list[str] = []
     failures: list[str] = []
 
     if max_gr > 1.20:
         failures.append("delivery_max_gain_reduction_over_budget")
-    elif max_gr > 0.80:
+    elif max_gr > 0.60:
         warnings.append("delivery_max_gain_reduction_warning")
 
-    if active_ratio > 0.070:
+    if active_ratio > 0.020:
         failures.append("delivery_active_ratio_over_budget")
-    elif active_ratio > 0.030:
+    elif active_ratio > 0.007:
         warnings.append("delivery_active_ratio_warning")
 
-    if final_trim_abs > 0.45:
-        failures.append("delivery_final_safety_trim_over_budget")
-    elif final_trim_abs > 0.20:
-        warnings.append("delivery_final_safety_trim_warning")
-
-    if rms_loss_abs > 0.25:
+    if rms_loss_abs > 0.20:
         failures.append("delivery_rms_loss_over_budget")
-    elif rms_loss_abs > 0.10:
+    elif rms_loss_abs > 0.08:
         warnings.append("delivery_rms_loss_warning")
+
+    if after_tp_f is not None and target_f is not None:
+        if after_tp_f > target_f + 0.06:
+            failures.append("delivery_residual_true_peak_above_target_after_local_catch")
+        elif after_tp_f > target_f + 0.02:
+            warnings.append("delivery_residual_true_peak_close_to_target")
 
     delivery_over_budget = bool(failures)
 
     retry_hints: list[str] = []
+
     if delivery_over_budget:
         retry_hints.extend(
             [
@@ -1086,6 +1160,7 @@ def _evaluate_delivery_damage_budget(debug: dict[str, Any]) -> dict[str, Any]:
                 "consider_lower_projection_assist_blend",
                 "consider_lower_spark_blend",
                 "consider_lower_support_recombine_gain",
+                "consider_peak_aware_rebuild_before_delivery",
                 "rerender_musical_graph_before_delivery",
             ]
         )
@@ -1094,7 +1169,6 @@ def _evaluate_delivery_damage_budget(debug: dict[str, Any]) -> dict[str, Any]:
         "delivery_damage_budget": {
             "max_gain_reduction_db": round(max_gr, 4),
             "active_gain_reduction_ratio": round(active_ratio, 6),
-            "final_safety_trim_abs_db": round(final_trim_abs, 4),
             "rms_loss_abs_db": round(rms_loss_abs, 4),
             "warnings": warnings,
             "failures": failures,
@@ -1110,44 +1184,32 @@ def _evaluate_delivery_damage_budget(debug: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _apply_true_peak_limiter_audio(
+def _apply_one_true_peak_catch_pass(
     audio: np.ndarray,
     sr: int,
-    ceiling_db: float,
-    threshold_db: float | None = None,
-    attack_ms: float = 0.25,
-    release_ms: float = 65.0,
-    mix: float = 1.0,
-    *,
-    oversample: int = 2,
-    safety_margin_db: float = 0.10,
-    max_passes: int = 3,
+    target_ceiling_db: float,
+    threshold_db: float,
+    attack_ms: float,
+    release_ms: float,
+    lookahead_ms: float,
+    oversample: int,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     dry = _ensure_2d_audio(audio)
-    mix = float(np.clip(mix, 0.0, 1.0))
 
-    ceiling_db = float(ceiling_db)
-    if threshold_db is None:
-        threshold_db = ceiling_db - 0.45
-    threshold_db = float(threshold_db)
-
-    before_rms_db = _rms_dbfs(dry)
-    before_peak_db = _sample_peak_dbfs(dry)
-    before_tp_db = _estimate_approx_true_peak_dbtp(
+    audio_os, sr_os = _oversample_audio(
         dry,
         sr,
         oversample=max(int(oversample), 1),
     )
 
-    audio_os, sr_os = _oversample_audio(dry, sr, oversample=max(int(oversample), 1))
-
     gain_env, limiter_debug = _build_transparent_limiter_gain(
         audio_os=audio_os,
         sr_os=sr_os,
-        ceiling_db=ceiling_db,
+        target_ceiling_db=target_ceiling_db,
         threshold_db=threshold_db,
         attack_ms=attack_ms,
         release_ms=release_ms,
+        lookahead_ms=lookahead_ms,
     )
 
     limited_os = audio_os * gain_env[:, None]
@@ -1159,27 +1221,97 @@ def _apply_true_peak_limiter_audio(
         original_len=len(dry),
     )
 
-    if mix < 0.999:
-        wet = dry * (1.0 - mix) + wet * mix
+    return np.nan_to_num(wet, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32), limiter_debug
 
-    # Final safety trim is emergency only.
-    # It is counted as damage budget. It is not loudness or tone shaping.
-    effective_ceiling_db = ceiling_db - abs(float(safety_margin_db))
-    final_safety_trim_db = 0.0
 
-    for _ in range(max_passes):
-        current_tp_db = _estimate_approx_true_peak_dbtp(
-            wet,
+def _apply_true_peak_limiter_audio(
+    audio: np.ndarray,
+    sr: int,
+    ceiling_db: float,
+    threshold_db: float | None = None,
+    attack_ms: float = 0.20,
+    release_ms: float = 48.0,
+    mix: float = 1.0,
+    *,
+    oversample: int = LIMITER_OVERSAMPLE,
+    safety_margin_db: float = 0.10,
+    max_passes: int = 4,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    dry = _ensure_2d_audio(audio)
+
+    requested_mix = float(np.clip(mix, 0.0, 1.0))
+    applied_mix = 1.0
+
+    ceiling_db = float(ceiling_db)
+    target_ceiling_db = ceiling_db - abs(float(safety_margin_db))
+
+    if threshold_db is None:
+        threshold_db = ceiling_db - 0.45
+
+    threshold_db = float(threshold_db)
+
+    before_rms_db = _rms_dbfs(dry)
+    before_peak_db = _sample_peak_dbfs(dry)
+    before_tp_db = _estimate_approx_true_peak_dbtp(
+        dry,
+        sr,
+        oversample=max(int(oversample), 1),
+    )
+
+    current = dry.copy()
+    pass_reports: list[dict[str, Any]] = []
+
+    for pass_index in range(max(1, int(max_passes))):
+        pass_before_tp = _estimate_approx_true_peak_dbtp(
+            current,
             sr,
             oversample=max(int(oversample), 1),
         )
-        needed_trim_db = effective_ceiling_db - current_tp_db
 
-        if needed_trim_db >= -0.01:
+        if pass_before_tp <= target_ceiling_db + 0.005:
             break
 
-        wet *= _db_to_lin(needed_trim_db)
-        final_safety_trim_db += needed_trim_db
+        processed, pass_debug = _apply_one_true_peak_catch_pass(
+            audio=current,
+            sr=sr,
+            target_ceiling_db=target_ceiling_db,
+            threshold_db=threshold_db,
+            attack_ms=attack_ms,
+            release_ms=release_ms,
+            lookahead_ms=1.25,
+            oversample=max(int(oversample), 1),
+        )
+
+        pass_after_tp = _estimate_approx_true_peak_dbtp(
+            processed,
+            sr,
+            oversample=max(int(oversample), 1),
+        )
+
+        pass_debug.update(
+            {
+                "pass_index": int(pass_index),
+                "pass_before_true_peak_dbtp": round(pass_before_tp, 4),
+                "pass_after_true_peak_dbtp": round(pass_after_tp, 4),
+                "pass_true_peak_delta_db": round(pass_after_tp - pass_before_tp, 4),
+            }
+        )
+
+        pass_reports.append(pass_debug)
+        current = processed
+
+        if pass_after_tp <= target_ceiling_db + 0.005:
+            break
+
+        if abs(pass_after_tp - pass_before_tp) < 0.003:
+            break
+
+    wet = current
+
+    if requested_mix < 0.999:
+        # Terminal protection cannot be safely parallel-mixed.
+        # We force 100% wet and report it.
+        applied_mix = 1.0
 
     after_rms_db = _rms_dbfs(wet)
     after_peak_db = _sample_peak_dbfs(wet)
@@ -1189,12 +1321,32 @@ def _apply_true_peak_limiter_audio(
         oversample=max(int(oversample), 1),
     )
 
+    max_gr = 0.0
+    active_ratio = 0.0
+    real_over_ratio = 0.0
+
+    for p in pass_reports:
+        max_gr = max(max_gr, abs(float(p.get("max_gain_reduction_db", 0.0) or 0.0)))
+        active_ratio = max(active_ratio, abs(float(p.get("active_gain_reduction_ratio", 0.0) or 0.0)))
+        real_over_ratio = max(real_over_ratio, abs(float(p.get("real_over_ceiling_ratio", 0.0) or 0.0)))
+
     debug = {
         "limiter_mode": "transparent_true_peak_catch_only",
         "no_rms_makeup": True,
         "no_creative_compression": True,
         "no_pre_ceiling_smoothing": True,
-        "touches_only_real_overs_above_ceiling": True,
+        "no_global_final_safety_trim": True,
+        "touches_only_real_overs_above_target_ceiling": True,
+        "future_peak_detector": True,
+        "ceiling_db": round(ceiling_db, 4),
+        "target_ceiling_db": round(target_ceiling_db, 4),
+        "safety_margin_db": round(abs(float(safety_margin_db)), 4),
+        "threshold_db": round(threshold_db, 4),
+        "threshold_is_metadata_only": True,
+        "oversample": int(oversample),
+        "requested_mix": round(requested_mix, 4),
+        "applied_mix": round(applied_mix, 4),
+        "mix_forced_to_full_protection": requested_mix < 0.999,
         "before_sample_peak_dbfs": round(before_peak_db, 4),
         "after_sample_peak_dbfs": round(after_peak_db, 4),
         "before_true_peak_dbtp": round(before_tp_db, 4),
@@ -1202,9 +1354,11 @@ def _apply_true_peak_limiter_audio(
         "before_rms_dbfs": round(before_rms_db, 4),
         "after_rms_dbfs": round(after_rms_db, 4),
         "rms_delta_db": round(after_rms_db - before_rms_db, 4),
-        "final_safety_trim_db": round(final_safety_trim_db, 4),
-        "safety_margin_db": round(abs(float(safety_margin_db)), 4),
-        **limiter_debug,
+        "max_gain_reduction_db": round(max_gr, 4),
+        "active_gain_reduction_ratio": round(active_ratio, 6),
+        "real_over_ceiling_ratio": round(real_over_ratio, 6),
+        "passes_executed": len(pass_reports),
+        "pass_reports": pass_reports,
     }
 
     debug.update(_evaluate_delivery_damage_budget(debug))
@@ -1227,6 +1381,7 @@ def _execute_static_eq_file(input_path: str, output_path: str, op: Any) -> dict[
         q=float(params.get("q", 1.0)),
         gain_db=float(params.get("gain_db", 0.0)),
     )
+
     _write_wav(output_path, processed, sr)
     return {}
 
@@ -1241,6 +1396,7 @@ def _execute_high_shelf_file(input_path: str, output_path: str, op: Any) -> dict
         center_hz=float(params.get("freq_hz", 9000.0)),
         gain_db=float(params.get("gain_db", 0.0)),
     )
+
     _write_wav(output_path, processed, sr)
     return {}
 
@@ -1248,6 +1404,7 @@ def _execute_high_shelf_file(input_path: str, output_path: str, op: Any) -> dict
 def _execute_dynamic_eq_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     processed = _apply_dynamic_eq_audio(audio=audio, sr=sr, op=op)
+
     _write_wav(output_path, processed, sr)
     return {}
 
@@ -1255,6 +1412,7 @@ def _execute_dynamic_eq_file(input_path: str, output_path: str, op: Any) -> dict
 def _execute_dynamic_tilt_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     processed = _apply_dynamic_tilt_audio(audio=audio, sr=sr, op=op)
+
     _write_wav(output_path, processed, sr)
     return {}
 
@@ -1327,6 +1485,7 @@ def _execute_parallel_compressor_file(input_path: str, output_path: str, op: Any
     )
 
     compressed_band = band * gain_lin[:, None]
+
     wet = compressed_band * mix
 
     _write_wav(output_path, wet, sr)
@@ -1391,6 +1550,7 @@ def _execute_high_side_polish_file(input_path: str, output_path: str, op: Any) -
     side_gain_db = float(params.get("side_gain_db", 0.25) or 0.25)
 
     mid, side_ch = _to_mid_side(audio)
+
     high_side = _filter_band_mono(
         side_ch,
         sr,
@@ -1399,6 +1559,7 @@ def _execute_high_side_polish_file(input_path: str, output_path: str, op: Any) -
     )
 
     side_gain = _db_to_lin(side_gain_db)
+
     effective = _clamp(
         (mix * 1.35) + (max(side_gain - 1.0, 0.0) * 0.85),
         0.0,
@@ -1427,6 +1588,7 @@ def _execute_high_only_width_file(input_path: str, output_path: str, op: Any) ->
     mix = _clamp(float(params.get("mix", 0.05) or 0.05), 0.0, 0.22)
 
     mid, side_ch = _to_mid_side(audio)
+
     high_side_band = _filter_band_mono(
         side_ch,
         sr,
@@ -1435,6 +1597,7 @@ def _execute_high_only_width_file(input_path: str, output_path: str, op: Any) ->
     )
 
     effective_width = _clamp(width_amount * (0.80 + mix * 4.0), 0.0, 0.24)
+
     side_out = side_ch + high_side_band * effective_width
     processed = _from_mid_side(mid, side_out)
 
@@ -1452,36 +1615,41 @@ def _execute_high_only_width_file(input_path: str, output_path: str, op: Any) ->
 # DELIVERY EXECUTION
 # ============================================================
 
-def _delivery_positive_gain_allowed(op: Any, params: dict[str, Any]) -> bool:
-    direct = _truthy(params.get("allow_delivery_positive_gain", False))
-    direct = direct or _truthy(params.get("allow_positive_gain", False))
-    direct = direct or _truthy(params.get("allow_delivery_loudness_lift", False))
-
-    op_direct = _truthy(_read(op, "allow_delivery_positive_gain", False))
-    op_direct = op_direct or _truthy(_read(op, "allow_positive_gain", False))
-    op_direct = op_direct or _truthy(_read(op, "allow_delivery_loudness_lift", False))
-
-    return bool(direct or op_direct)
-
-
-def _resolve_delivery_output_gain(op: Any, params: dict[str, Any]) -> tuple[float, dict[str, Any]]:
+def _resolve_delivery_output_gain(
+    op: Any,
+    params: dict[str, Any],
+    *,
+    stage_name: str | None,
+) -> tuple[float, dict[str, Any]]:
     requested_gain_db = float(params.get("gain_db", 0.0))
-    allow_positive = _delivery_positive_gain_allowed(op, params)
+    is_delivery = _is_delivery_context(stage_name, op)
+
+    if not is_delivery:
+        applied_gain_db = _clamp(requested_gain_db, -12.0, 12.0)
+
+        return applied_gain_db, {
+            "gain_contract": "non_delivery_gain_operation",
+            "requested_gain_db": round(requested_gain_db, 4),
+            "applied_gain_db": round(applied_gain_db, 4),
+            "delivery_context": False,
+        }
 
     applied_gain_db = requested_gain_db
     positive_gain_blocked = False
 
-    if DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT and requested_gain_db > 0.0 and not allow_positive:
+    if DELIVERY_BLOCKS_POSITIVE_GAIN and requested_gain_db > 0.0:
         applied_gain_db = 0.0
         positive_gain_blocked = True
 
-    applied_gain_db = _clamp(applied_gain_db, -3.0, 0.0 if not allow_positive else 2.0)
+    applied_gain_db = _clamp(applied_gain_db, -3.0, 0.0)
 
     retry_hints: list[str] = []
+
     if positive_gain_blocked:
         retry_hints.extend(
             [
                 "delivery_requested_positive_gain",
+                "delivery_positive_gain_blocked",
                 "do_not_buy_loudness_in_delivery",
                 "if_loudness_needed_adjust_musical_graph_or_accept_peak_blocked_master",
             ]
@@ -1489,11 +1657,11 @@ def _resolve_delivery_output_gain(op: Any, params: dict[str, Any]) -> tuple[floa
 
     debug = {
         "delivery_contract": "gain_stage_safety_only_no_loudness_purchase",
+        "delivery_context": True,
         "requested_gain_db": round(requested_gain_db, 4),
         "applied_gain_db": round(applied_gain_db, 4),
         "positive_gain_blocked": positive_gain_blocked,
-        "positive_gain_allowed": allow_positive,
-        "delivery_blocks_positive_gain_by_default": DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT,
+        "delivery_blocks_positive_gain": DELIVERY_BLOCKS_POSITIVE_GAIN,
         "upstream_loudness_purchase_blocked": positive_gain_blocked,
         "should_retry_upstream": False,
         "retry_hints": retry_hints,
@@ -1502,13 +1670,24 @@ def _resolve_delivery_output_gain(op: Any, params: dict[str, Any]) -> tuple[floa
     return applied_gain_db, debug
 
 
-def _execute_output_trim_file(input_path: str, output_path: str, op: Any) -> dict[str, Any]:
+def _execute_output_trim_file(
+    input_path: str,
+    output_path: str,
+    op: Any,
+    *,
+    stage_name: str | None,
+) -> dict[str, Any]:
     audio, sr = _load_audio(input_path)
     params = dict(_read(op, "params", {}) or {})
 
-    gain_db, debug = _resolve_delivery_output_gain(op, params)
+    gain_db, debug = _resolve_delivery_output_gain(
+        op,
+        params,
+        stage_name=stage_name,
+    )
 
     processed = _apply_output_trim_audio(audio=audio, gain_db=gain_db)
+
     _write_wav(output_path, processed, sr)
 
     return debug
@@ -1519,6 +1698,7 @@ def _execute_true_peak_limiter_file(input_path: str, output_path: str, op: Any) 
     params = dict(_read(op, "params", {}) or {})
 
     ceiling_db = float(params.get("gain_db", -1.05))
+
     threshold_raw = params.get("threshold_db", None)
     threshold_db = float(threshold_raw) if threshold_raw is not None else ceiling_db - 0.45
 
@@ -1527,13 +1707,14 @@ def _execute_true_peak_limiter_file(input_path: str, output_path: str, op: Any) 
         sr=sr,
         ceiling_db=ceiling_db,
         threshold_db=threshold_db,
-        attack_ms=float(params.get("attack_ms", 0.25)),
-        release_ms=float(params.get("release_ms", 65.0)),
+        attack_ms=float(params.get("attack_ms", 0.20)),
+        release_ms=float(params.get("release_ms", 48.0)),
         mix=float(params.get("mix", 1.0)),
-        oversample=2,
+        oversample=LIMITER_OVERSAMPLE,
         safety_margin_db=0.10,
-        max_passes=3,
+        max_passes=4,
     )
+
     _write_wav(output_path, processed, sr)
 
     return {
@@ -1612,27 +1793,83 @@ def _execute_op_file(
     op_extra: dict[str, Any] = {}
 
     if op_kind in {"static_eq", "broad_eq"}:
-        op_extra = _execute_static_eq_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_static_eq_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     elif op_kind == "high_shelf":
-        op_extra = _execute_high_shelf_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_high_shelf_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     elif op_kind in {"dynamic_eq", "dynamic_eq_boost"}:
-        op_extra = _execute_dynamic_eq_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_dynamic_eq_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     elif op_kind == "dynamic_tilt":
-        op_extra = _execute_dynamic_tilt_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_dynamic_tilt_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     elif op_kind in {"parallel_eq_fill", "parallel_eq_boost"}:
-        op_extra = _execute_parallel_eq_fill_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_parallel_eq_fill_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     elif op_kind == "parallel_compressor":
-        op_extra = _execute_parallel_compressor_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_parallel_compressor_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     elif op_kind in {"band_limited_saturation", "band_limited_texture"}:
-        op_extra = _execute_band_limited_saturation_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_band_limited_saturation_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     elif op_kind == "high_side_polish":
-        op_extra = _execute_high_side_polish_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_high_side_polish_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     elif op_kind == "high_only_width":
-        op_extra = _execute_high_only_width_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_high_only_width_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     elif op_kind in {"output_trim", "ceiling_trim", "final_balance_guard"}:
-        op_extra = _execute_output_trim_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_output_trim_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+            stage_name=stage_name,
+        )
+
     elif op_kind == "true_peak_limiter":
-        op_extra = _execute_true_peak_limiter_file(input_path=input_path, output_path=output_path, op=op)
+        op_extra = _execute_true_peak_limiter_file(
+            input_path=input_path,
+            output_path=output_path,
+            op=op,
+        )
+
     else:
         op_report["pending_reason"] = "unsupported_op_kind"
         return op_report
@@ -1676,6 +1913,7 @@ def _mix_audio_files(
 
         if audio.shape != out.shape:
             audio = _match_length(audio, len(out))
+
             if audio.shape[1] != out.shape[1]:
                 raise RuntimeError("Channel mismatch inside recombine.")
 
@@ -1683,8 +1921,6 @@ def _mix_audio_files(
 
     out *= _db_to_lin(gain_db)
 
-    # No normalization and no clipping inside SM graph.
-    # Delivery is the only terminal peak-protection stage.
     _write_wav(output_path, out, sr)
     return output_path
 
@@ -1706,6 +1942,7 @@ def _make_delta_file(
         raise RuntimeError("Channel mismatch inside delta.")
 
     delta = processed - dry
+
     _write_wav(output_path, delta, sr)
     return output_path
 
@@ -1723,7 +1960,13 @@ def _op_outputs_wet_only(op_kind: str) -> bool:
 def _op_is_finish_deess(op: Any) -> bool:
     primitive_name = str(_read(op, "primitive_name", "") or "").lower()
     op_kind = str(_read(op, "op_kind", "") or "").lower()
+
     return primitive_name == "local_desibilance_control" and op_kind == "dynamic_eq"
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
 
 
 def _record_op_result(
@@ -1733,12 +1976,10 @@ def _record_op_result(
     stack_name: str,
     op_result: dict[str, Any],
 ) -> bool:
-    op_extra = (
-        op_result.get("debug", {})
-        .get("op_extra", {})
-        if isinstance(op_result.get("debug", {}), dict)
-        else {}
-    )
+    op_extra = {}
+
+    if isinstance(op_result.get("debug"), dict):
+        op_extra = op_result["debug"].get("op_extra", {}) or {}
 
     stack_report["ops"].append(
         {
@@ -1766,24 +2007,21 @@ def _record_op_result(
             report["delivery_positive_gain_blocked"] = True
 
         for hint in list(op_extra.get("retry_hints", []) or []):
-            if hint not in report["retry_hints"]:
-                report["retry_hints"].append(hint)
+            _append_unique(report["retry_hints"], str(hint))
 
         for hint in list(op_extra.get("delivery_retry_hints", []) or []):
-            if hint not in report["retry_hints"]:
-                report["retry_hints"].append(hint)
+            _append_unique(report["retry_hints"], str(hint))
 
         for warning in list(op_extra.get("delivery_budget_warnings", []) or []):
-            if warning not in report["delivery_budget_warnings"]:
-                report["delivery_budget_warnings"].append(warning)
+            _append_unique(report["delivery_budget_warnings"], str(warning))
 
         for failure in list(op_extra.get("delivery_budget_failures", []) or []):
-            if failure not in report["delivery_budget_failures"]:
-                report["delivery_budget_failures"].append(failure)
+            _append_unique(report["delivery_budget_failures"], str(failure))
 
         return True
 
     report["pending_custom_op_count"] += 1
+
     report["unsupported_ops"].append(
         {
             "stage_name": stage_name,
@@ -1794,6 +2032,7 @@ def _record_op_result(
             "backend_hint": op_result["backend_hint"],
         }
     )
+
     return False
 
 
@@ -1877,6 +2116,7 @@ def _execute_parallel_wet_stack(
 
         if _op_outputs_wet_only(op_kind):
             wet_paths.append(op_result["output_path"])
+
         else:
             delta_path = _make_tmp_wav(
                 td,
@@ -1884,6 +2124,7 @@ def _execute_parallel_wet_stack(
                 stack_name,
                 f"{op_result['instance_name']}__delta",
             )
+
             wet_paths.append(
                 _make_delta_file(
                     dry_path=stack_input_path,
@@ -1952,7 +2193,6 @@ def _execute_finish_micro_stack(
 
     current_path = spark_bus_path
 
-    # De-ess applies only to spark bus, not to the whole master.
     for op in deess_ops:
         op_result = _execute_op_file(
             input_path=current_path,
@@ -1986,8 +2226,10 @@ def _execute_recombine(
 ) -> tuple[dict[str, Any], str | None]:
     rec_name = str(_read(rec, "recombine_name", "recombine") or "recombine")
     kind = str(_read(rec, "render_recombine_kind", "passthrough_or_sum") or "passthrough_or_sum")
+
     source_nodes = list(_read(rec, "source_nodes", []) or [])
     target_node = _read(rec, "target_node")
+
     blend = float(_read(rec, "blend", 1.0) or 1.0)
     gain_db = float(_read(rec, "gain_db", 0.0) or 0.0)
 
@@ -2023,6 +2265,7 @@ def _execute_recombine(
             gain_db=gain_db,
             weights=[1.0, blend],
         )
+
         rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
         return rec_report, target_path
 
@@ -2033,6 +2276,7 @@ def _execute_recombine(
             gain_db=gain_db,
             weights=[1.0, blend],
         )
+
         rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
         return rec_report, target_path
 
@@ -2044,6 +2288,7 @@ def _execute_recombine(
                 gain_db=0.0,
                 weights=[1.0, _db_to_lin(gain_db) * blend],
             )
+
             rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
             return rec_report, target_path
 
@@ -2053,6 +2298,7 @@ def _execute_recombine(
             gain_db=gain_db,
             weights=[1.0] * len(source_paths),
         )
+
         rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
         return rec_report, target_path
 
@@ -2063,6 +2309,7 @@ def _execute_recombine(
             gain_db=gain_db,
             weights=[1.0] * len(source_paths),
         )
+
         rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
         return rec_report, target_path
 
@@ -2072,6 +2319,7 @@ def _execute_recombine(
         gain_db=gain_db,
         weights=[1.0] * len(source_paths),
     )
+
     rec_report["debug"]["output_stats"] = _audio_file_stats(target_path)
     return rec_report, target_path
 
@@ -2083,6 +2331,7 @@ def _execute_recombine(
 def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool = False) -> dict:
     node_order = list(_read(render_plan, "node_order", []) or [])
     stages = list(_read(render_plan, "stages", []) or [])
+
     prepared_input_node = _read(render_plan, "prepared_input_node", "prepared_input")
     final_output_node = _read(render_plan, "final_output_node", "final_output")
 
@@ -2090,6 +2339,7 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
     td = td or tempfile.mkdtemp(prefix="sm_executor_")
 
     node_paths: dict[str, str | None] = {name: None for name in node_order}
+
     if input_path:
         node_paths[prepared_input_node] = input_path
 
@@ -2104,27 +2354,33 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
         "unsupported_ops": [],
         "executed_op_count": 0,
         "pending_custom_op_count": 0,
+
         "delivery_positive_gain_blocked": False,
         "delivery_over_budget": False,
         "should_retry_upstream": False,
         "retry_hints": [],
         "delivery_budget_warnings": [],
         "delivery_budget_failures": [],
+
         "safety_notes": list(_read(render_plan, "safety_notes", []) or []),
+
         "executor_contract": {
             "internal_wav_subtype": INTERNAL_WAV_SUBTYPE,
             "no_stage_normalization": NO_STAGE_NORMALIZATION,
             "parallel_stacks_are_wet_only": PARALLEL_STACKS_ARE_WET_ONLY,
             "delivery_is_terminal_only": DELIVERY_IS_TERMINAL_ONLY,
-            "delivery_blocks_positive_gain_by_default": DELIVERY_BLOCKS_POSITIVE_GAIN_BY_DEFAULT,
+            "delivery_blocks_positive_gain": DELIVERY_BLOCKS_POSITIVE_GAIN,
             "delivery_limiter_touches_only_real_overs": DELIVERY_LIMITER_TOUCHES_ONLY_REAL_OVERS,
+            "delivery_no_global_safety_trim": DELIVERY_NO_GLOBAL_SAFETY_TRIM,
+            "limiter_oversample": LIMITER_OVERSAMPLE,
             "limiter_no_pre_ceiling_smoothing": LIMITER_NO_PRE_CEILING_SMOOTHING,
             "limiter_no_rms_makeup": LIMITER_NO_RMS_MAKEUP,
             "limiter_no_creative_compression": LIMITER_NO_CREATIVE_COMPRESSION,
         },
+
         "notes": list(_read(render_plan, "notes", []) or [])
         + [
-            "executor_active_v6",
+            "executor_active_v7",
             "transparent_sm_render_engine",
             "internal_float_pipeline_enabled",
             "no_hidden_stage_normalization",
@@ -2136,14 +2392,17 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
             "finish_deess_runs_on_spark_bus_only",
             "native_finish_width_ops_supported",
             "delivery_terminal_only",
-            "delivery_positive_gain_blocked_by_default",
+            "delivery_positive_gain_blocked",
             "delivery_cannot_buy_loudness",
             "delivery_limiter_real_overs_only",
-            "delivery_does_not_touch_below_ceiling",
+            "delivery_does_not_touch_below_target_ceiling",
+            "delivery_no_global_safety_trim",
             "delivery_damage_budget_enabled",
             "delivery_reports_upstream_retry_need_without_retrying",
             "delivery_no_rms_makeup",
             "limiter_transparent_true_peak_catch_only",
+            "limiter_oversample_4x",
+            "future_peak_detector_enabled",
             "recombine_weights_no_hidden_normalization",
         ],
     }
@@ -2154,6 +2413,7 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
         stage_name = _read(stage, "stage_name", "unknown_stage")
         input_node = _read(stage, "input_node")
         output_node = _read(stage, "output_node")
+
         stacks = list(_read(stage, "stacks", []) or [])
         recombine = list(_read(stage, "recombine", []) or [])
 
@@ -2274,6 +2534,7 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
 
             stack_report["debug"]["output_path"] = stack_output_path
             stack_report["debug"]["output_stats"] = _audio_file_stats(stack_output_path) if stack_output_path else None
+
             stage_report["stack_reports"].append(stack_report)
 
         if recombine:
@@ -2287,9 +2548,11 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
                     stage_name=stage_name,
                     dry_run=dry_run,
                 )
+
                 stage_report["recombine_reports"].append(rec_report)
 
                 target_node = rec_report["target_node"]
+
                 if target_node and target_path:
                     node_paths[target_node] = target_path
                     last_target_path = target_path
@@ -2303,6 +2566,7 @@ def _execute_plan(render_plan: Any, input_path: str | None = None, dry_run: bool
 
         stage_report["resolved_output_path"] = node_paths.get(output_node)
         stage_report["debug"]["output_stats"] = _audio_file_stats(stage_report["resolved_output_path"])
+
         report["stage_reports"].append(stage_report)
 
         current_path = node_paths.get(output_node) or current_path
